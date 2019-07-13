@@ -71,7 +71,7 @@ main = do
       ((Pool.destroyAllResources appPool) >> (Pool.destroyAllResources jobPool))
 
 -- tests dbpool = testGroup "All tests" $ (\t -> t dbpool) <$> [simpleJobCreation]
-tests appPool jobPool = testGroup "All tests" $ (\t -> t appPool) <$> [testJobCreation, testJobScheduling, testJobFailure]
+tests appPool jobPool = testGroup "All tests" $ (\t -> t appPool) <$> [testJobFailure, testJobCreation, testJobScheduling]
 
 myTestCase
   :: TestName
@@ -134,6 +134,11 @@ assertJobIdStatus conn msg st jid = Job.findJobById conn jid >>= \case
   Nothing -> assertFailure $ "Not expecting job to be deleted. JobId=" <> show jid
   Just (Job{jobStatus}) -> assertEqual msg st jobStatus
 
+ensureJobId :: (HasCallStack) => Connection -> JobId -> IO Job
+ensureJobId conn jid = Job.findJobById conn jid >>= \case
+  Nothing -> error $ "Not expecting job to be deleted. JobId=" <> show jid
+  Just j -> pure j
+
 -- simpleJobCreation appPool jobPool = testCase "simple job creation" $ do
 --   jobs <- (forConcurrently [1..10000] (const $ Pool.withResource appPool $ \conn -> Job.createJob conn testPayload))
 --   threadDelay (oneSec * 280)
@@ -155,5 +160,8 @@ testJobScheduling = myTestCase "job scheduling" $ \conn -> do
 
 testJobFailure = myTestCase "job failure" $ \conn -> do
   Job{jobId} <- Job.createJob conn (PayloadFail 0)
-  threadDelay (oneSec * 2)
-  assertJobIdStatus conn "Job should be retry status" Job.Retry jobId
+  threadDelay (oneSec * 10)
+  Job{jobAttempts, jobStatus} <- ensureJobId conn jobId
+  assertEqual "Exepcting job to be in Retry status" Job.Retry jobStatus
+  assertBool ("Expecting job attempts to be 3 or 4. Found " <> show jobAttempts) (jobAttempts == 3 || jobAttempts == 4)
+

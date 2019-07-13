@@ -268,7 +268,7 @@ jobMonitor jobRunner = jobMonitor_ Nothing Nothing
 
 
 jobPollingSql :: (IsString s) => s
-jobPollingSql = "update jobs set locked_at = ?, locked_by = ?, attempts=attempts+1 WHERE id in (select id from jobs where (run_at<=? AND ((locked_at is null AND locked_by is null AND status=?) OR (locked_at<?))) ORDER BY run_at ASC LIMIT 1 FOR UPDATE) RETURNING id"
+jobPollingSql = "update jobs set locked_at = ?, locked_by = ?, attempts=attempts+1 WHERE id in (select id from jobs where (run_at<=? AND ((locked_at is null AND locked_by is null AND status in ?) OR (locked_at<?))) ORDER BY run_at ASC LIMIT 1 FOR UPDATE) RETURNING id"
 
 
 jobPoller :: (HasJobMonitor m) => JobRunner -> m ()
@@ -279,7 +279,7 @@ jobPoller jobRunner = do
   withResource pool $ \pollerDbConn -> forever $ do
     logInfoN $ toS $ "[" <> show processName <> "] Polling the job queue.."
     t <- liftIO getCurrentTime
-    (liftIO $ PGS.query pollerDbConn jobPollingSql (t, processName, t, Job.Queued, (addUTCTime (fromIntegral (-lockTimeout)) t))) >>= \case
+    (liftIO $ PGS.query pollerDbConn jobPollingSql (t, processName, t, (In [Job.Queued, Job.Retry]), (addUTCTime (fromIntegral (-lockTimeout)) t))) >>= \case
       -- When we don't have any jobs to run, we can relax a bit...
       [] -> threadDelay defaultPollingInterval
 
