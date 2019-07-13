@@ -1,4 +1,4 @@
-{-# LANGUAGE TypeSynonymInstances, FlexibleInstances, NamedFieldPuns #-}
+{-# LANGUAGE TypeSynonymInstances, FlexibleInstances, NamedFieldPuns, DeriveGeneric #-}
 module Test where
 
 import Test.Tasty as Tasty
@@ -19,6 +19,7 @@ import Job (Job(..), JobId)
 import System.Log.FastLogger (fromLogStr, withFastLogger, LogType(..), defaultBufSize, FastLogger, FileLogSpec(..))
 import Data.String.Conv (toS)
 import Data.Time
+import GHC.Generics
 
 setupDatabase :: ConnectInfo -> IO ()
 setupDatabase cinfo = do
@@ -70,7 +71,7 @@ main = do
       ((Pool.destroyAllResources appPool) >> (Pool.destroyAllResources jobPool))
 
 -- tests dbpool = testGroup "All tests" $ (\t -> t dbpool) <$> [simpleJobCreation]
-tests appPool jobPool = testGroup "All tests" $ (\t -> t appPool) <$> [testJobCreation, testJobScheduling]
+tests appPool jobPool = testGroup "All tests" $ (\t -> t appPool) <$> [testJobCreation, testJobScheduling, testJobFailure]
 
 myTestCase
   :: TestName
@@ -108,7 +109,22 @@ testPayload :: Value
 testPayload = toJSON (10 :: Int)
 
 jobRunner :: Job.Job -> IO ()
-jobRunner _ = pure ()
+jobRunner Job{jobPayload} = case (fromJSON jobPayload) of
+  Aeson.Error e -> error e
+  Success (j :: JobPayload) -> case j of
+    PayloadSucceed delay -> (threadDelay delay) >> pure ()
+    PayloadFail delay -> (threadDelay delay) >> (error $ "Forced error after " <> show delay <> " seconds")
+
+data JobPayload = PayloadSucceed Int
+                | PayloadFail Int
+                deriving (Eq, Show, Generic)
+
+instance ToJSON JobPayload where
+  toJSON = genericToJSON Aeson.defaultOptions
+
+instance FromJSON JobPayload where
+  parseJSON = genericParseJSON Aeson.defaultOptions
+
 
 oneSec :: Int
 oneSec = 1000000
@@ -124,16 +140,20 @@ assertJobIdStatus conn msg st jid = Job.findJobById conn jid >>= \case
 --   forConcurrently_ jobs $ \Job{jobId} -> Pool.withResource appPool $ \conn -> assertJobIdStatus conn "Expecting job to be completed by now" Job.Success jid
 
 testJobCreation = myTestCase "job creation" $ \ conn -> do
-  Job{jobId} <- Job.createJob conn testPayload
+  Job{jobId} <- Job.createJob conn (PayloadSucceed 0)
   threadDelay (oneSec * 2)
   assertJobIdStatus conn "Expecting job to tbe successful by now" Job.Success jobId
 
 testJobScheduling = myTestCase "job scheduling" $ \conn -> do
   t <- getCurrentTime
-  job@Job{jobId} <- Job.scheduleJob conn testPayload (addUTCTime (fromIntegral 3600) t)
+  job@Job{jobId} <- Job.scheduleJob conn (PayloadSucceed 0) (addUTCTime (fromIntegral 3600) t)
   threadDelay (oneSec * 2)
   assertJobIdStatus conn "Job is scheduled in the future. It should NOT have been successful by now" Job.Queued jobId
   j <- Job.saveJob conn job{jobRunAt = (addUTCTime (fromIntegral (-1)) t)}
   threadDelay (Job.defaultPollingInterval + (oneSec * 2))
   assertJobIdStatus conn "Job had a runAt date in the past. It should have been successful by now" Job.Success jobId
 
+testJobFailure = myTestCase "job failure" $ \conn -> do
+  Job{jobId} <- Job.createJob conn (PayloadFail 0)
+  threadDelay (oneSec * 2)
+  assertJobIdStatus conn "Job should be retry status" Job.Retry jobId

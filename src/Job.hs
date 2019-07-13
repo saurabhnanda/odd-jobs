@@ -351,14 +351,14 @@ jobEventListener jobRunner = do
 createJobQuery :: PGS.Query
 createJobQuery = "INSERT INTO jobs (run_at, status, payload, last_error, attempts, locked_at, locked_by) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING " <> concatJobDbColumns
 
-createJob :: Connection -> Value -> IO Job
+createJob :: ToJSON p => Connection -> p -> IO Job
 createJob conn payload = do
   t <- getCurrentTime
   scheduleJob conn payload t
 
-scheduleJob :: Connection -> Value -> UTCTime -> IO Job
+scheduleJob :: ToJSON p => Connection -> p -> UTCTime -> IO Job
 scheduleJob conn payload runAt = do
-  let args = ( runAt, Queued, payload, Nothing :: Maybe Value, 0 :: Int, Nothing :: Maybe Text, Nothing :: Maybe Text )
+  let args = ( runAt, Queued, toJSON payload, Nothing :: Maybe Value, 0 :: Int, Nothing :: Maybe Text, Nothing :: Maybe Text )
       queryFormatter = toS <$> (PGS.formatQuery conn createJobQuery args)
   rs <- PGS.query conn createJobQuery args
   case rs of
