@@ -1,0 +1,76 @@
+name:                haskell-pg-queue
+version:             0.1.0.0
+#synopsis:
+#description:
+homepage:            https://github.com/githubuser/haskell-pg-queue#readme
+license:             BSD3
+author:              Saurabh Nanda
+maintainer:          saurabhnanda@gmail.com
+copyright:           2019 Saurabh Nanda
+category:            Web
+extra-source-files:
+- README.md
+
+ghc-options: -Wall -fno-warn-orphans -fno-warn-unused-imports -fno-warn-dodgy-exports -O0 -threaded
+
+
+default-extensions:
+  - NamedFieldPuns
+  - LambdaCase
+  - TemplateHaskell
+  - ScopedTypeVariables
+  - GeneralizedNewtypeDeriving
+  - QuasiQuotes
+  - OverloadedStrings
+
+dependencies:
+  - base >= 4.7 && < 5
+  - text
+  - postgresql-simple
+  - bytestring
+  - safe
+  - text-conversions
+  - process
+  - aeson
+  - resource-pool
+  - timeit
+  - unliftio
+  - unliftio-core
+  - mtl
+  - template-haskell
+  - monad-logger
+  - fast-logger
+  - either
+  - time
+  - exceptions
+  - unix
+  - monad-control
+  - string-conv
+  - hostname
+
+library:
+  source-dirs:
+    - src
+  exposed-modules:
+    - Job
+    - Migrations
+
+# executables:
+#   haskell-pg-queue:
+#     source-dirs:      src
+#     main:             Main.hs
+
+
+tests:
+  jobrunner:
+    main: Test
+    source-dirs: test
+    dependencies:
+      - tasty
+      - tasty-discover
+      - hedgehog
+      - tasty-hedgehog
+      - haskell-pg-queue
+      - tasty-hunit
+      - fast-logger
+
