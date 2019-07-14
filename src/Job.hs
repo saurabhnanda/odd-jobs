@@ -1,4 +1,4 @@
-{-# LANGUAGE RankNTypes, FlexibleInstances, FlexibleContexts, PartialTypeSignatures #-}
+{-# LANGUAGE RankNTypes, FlexibleInstances, FlexibleContexts, PartialTypeSignatures, TupleSections #-}
 module Job
   ( jobMonitor
   , jobEventListener
@@ -16,9 +16,11 @@ module Job
   , JobMonitor(..)
   , defaultJobMonitor
   , runJobMonitor
+  , TableName
   )
 where
 
+import Types
 import Data.Pool
 import Data.Text as T
 import Database.PostgreSQL.Simple as PGS
@@ -54,7 +56,6 @@ import System.Log.FastLogger (fromLogStr, newTimedFastLogger, LogType(..), defau
 import System.Log.FastLogger.Date (newTimeCache, simpleTimeFormat')
 import Control.Monad.Reader
 
-
 class (MonadUnliftIO m, MonadBaseControl IO m, MonadLogger m) => HasJobMonitor m where
   getPollingInterval :: m Int
   onJobRetry :: Job -> m ()
@@ -63,6 +64,7 @@ class (MonadUnliftIO m, MonadBaseControl IO m, MonadLogger m) => HasJobMonitor m
   getJobRunner :: m (Job -> IO ())
   getMaxAttempts :: m Int
   getDbPool :: m (Pool Connection)
+  getTableName :: m TableName
 
 data JobMonitor = JobMonitor
   { monitorPollingInterval :: Int
@@ -73,6 +75,7 @@ data JobMonitor = JobMonitor
   , monitorMaxAttempts :: Int
   , monitorLogger :: (forall msg . ToLogStr msg => Loc -> LogSource -> LogLevel -> msg -> IO ())
   , monitorDbPool :: Pool Connection
+  , monitorTableName :: TableName
   }
 
 type JobMonitorM = ReaderT JobMonitor IO
@@ -96,20 +99,21 @@ instance HasJobMonitor JobMonitorM where
   getJobRunner = monitorJobRunner <$> ask
   getMaxAttempts = monitorMaxAttempts <$> ask
   getDbPool = monitorDbPool <$> ask
+  getTableName = monitorTableName <$> ask
 
 
 runJobMonitor :: JobMonitor -> IO ()
 runJobMonitor jm = runReaderT jobMonitor jm
 
-defaultLogger :: IO TimedFastLogger
+defaultLogger :: IO (TimedFastLogger, IO ())
 defaultLogger = do
   tcache <- newTimeCache simpleTimeFormat'
-  fst <$> newTimedFastLogger tcache (LogStdout defaultBufSize)
+  newTimedFastLogger tcache (LogStdout defaultBufSize)
 
-defaultJobMonitor :: Pool Connection -> IO JobMonitor
+defaultJobMonitor :: Pool Connection -> IO (JobMonitor, IO ())
 defaultJobMonitor dbpool = do
-  logger <- defaultLogger
-  pure JobMonitor
+  (logger, cleanup) <- defaultLogger
+  pure $ (, cleanup) JobMonitor
     { monitorPollingInterval = defaultPollingInterval
     , monitorOnJobSuccess = (const $ pure ())
     , monitorOnJobRetry = (const $ pure ())
@@ -224,22 +228,22 @@ concatJobDbColumns = concatJobDbColumns_ jobDbColumns ""
     concatJobDbColumns_ (col:cols) x = concatJobDbColumns_ cols (x <> col <> ", ")
 
 
-findJobByIdQuery :: PGS.Query
-findJobByIdQuery = "SELECT " <> concatJobDbColumns <> " FROM jobs WHERE id = ?"
+findJobByIdQuery :: TableName -> PGS.Query
+findJobByIdQuery tname = "SELECT " <> concatJobDbColumns <> " FROM " <> tname <> " WHERE id = ?"
 
-findJobById :: Connection -> JobId -> IO (Maybe Job)
-findJobById conn jid = PGS.query conn findJobByIdQuery (Only jid) >>= \case
+findJobById :: Connection -> TableName -> JobId -> IO (Maybe Job)
+findJobById conn tname jid = PGS.query conn (findJobByIdQuery tname) (Only jid) >>= \case
   [] -> pure Nothing
   [j] -> pure (Just j)
   js -> Prelude.error $ "Not expecting to find multiple jobs by id=" <> (show jid)
 
 
-saveJobQuery :: PGS.Query
-saveJobQuery = "UPDATE jobs set run_at = ?, status = ?, payload = ?, last_error = ?, attempts = ?, locked_at = ?, locked_by = ? WHERE id = ? RETURNING " <> concatJobDbColumns
+saveJobQuery :: TableName -> PGS.Query
+saveJobQuery tname = "UPDATE " <> tname <> " set run_at = ?, status = ?, payload = ?, last_error = ?, attempts = ?, locked_at = ?, locked_by = ? WHERE id = ? RETURNING " <> concatJobDbColumns
 
-saveJob :: Connection -> Job -> IO Job
-saveJob conn Job{jobRunAt, jobStatus, jobPayload, jobLastError, jobAttempts, jobLockedBy, jobLockedAt, jobId} = do
-  rs <- PGS.query conn saveJobQuery
+saveJob :: Connection -> TableName -> Job -> IO Job
+saveJob conn tname Job{jobRunAt, jobStatus, jobPayload, jobLastError, jobAttempts, jobLockedBy, jobLockedAt, jobId} = do
+  rs <- PGS.query conn (saveJobQuery tname)
         ( jobRunAt
         , jobStatus
         , jobPayload
@@ -256,32 +260,34 @@ saveJob conn Job{jobRunAt, jobStatus, jobPayload, jobLastError, jobAttempts, job
 
 
 runJob :: (HasJobMonitor m) => Connection -> JobId -> m ()
-runJob conn jid =  (liftIO $ findJobById conn jid) >>= \case
-  Nothing -> Prelude.error $ "Could not find job id=" <> show jid
-  Just job -> do
-    jobRunner_ <- getJobRunner
-    (try $ liftIO $ jobRunner_ job) >>= \case
-      Right () -> do
-        -- TODO: save job result for future
-        newJob <- liftIO $ saveJob conn job{jobStatus=Success, jobLockedBy=Nothing, jobLockedAt=Nothing}
-        onJobSuccess newJob
-        pure ()
+runJob conn jid = do
+  tname <- getTableName
+  (liftIO $ findJobById conn tname jid) >>= \case
+    Nothing -> Prelude.error $ "Could not find job id=" <> show jid
+    Just job -> do
+      jobRunner_ <- getJobRunner
+      (try $ liftIO $ jobRunner_ job) >>= \case
+        Right () -> do
+          -- TODO: save job result for future
+          newJob <- liftIO $ saveJob conn tname job{jobStatus=Success, jobLockedBy=Nothing, jobLockedAt=Nothing}
+          onJobSuccess newJob
+          pure ()
 
-      Left (SomeException e) -> do
-        t <- liftIO getCurrentTime
-        newJob <- liftIO $ saveJob conn job{ jobStatus=Retry
-                                           , jobLockedBy=Nothing
-                                           , jobLockedAt=Nothing
-                                           , jobAttempts=(1 + (jobAttempts job))
-                                           , jobLastError=(Just $ toJSON $ show e) -- TODO: convert errors to json properly
-                                           , jobRunAt=(addUTCTime (fromIntegral $ (2::Int) ^ (jobAttempts job)) t)
-                                           }
-        -- NOTE: Not notifying Airbrake for the first few failures to reduce the
-        -- noise caused by temporary network failures. This can be made more
-        -- precise by catching HTTPException separately and looking at the HTTP
-        -- status code.
-        onJobRetry newJob
-        pure ()
+        Left (SomeException e) -> do
+          t <- liftIO getCurrentTime
+          newJob <- liftIO $ saveJob conn tname job{ jobStatus=Retry
+                                                   , jobLockedBy=Nothing
+                                                   , jobLockedAt=Nothing
+                                                   , jobAttempts=(1 + (jobAttempts job))
+                                                   , jobLastError=(Just $ toJSON $ show e) -- TODO: convert errors to json properly
+                                                   , jobRunAt=(addUTCTime (fromIntegral $ (2::Int) ^ (jobAttempts job)) t)
+                                                   }
+          -- NOTE: Not notifying Airbrake for the first few failures to reduce the
+          -- noise caused by temporary network failures. This can be made more
+          -- precise by catching HTTPException separately and looking at the HTTP
+          -- status code.
+          onJobRetry newJob
+          pure ()
 
 jobMonitor :: forall m . (HasJobMonitor m) => m ()
 jobMonitor = jobMonitor_ Nothing Nothing
@@ -339,19 +345,20 @@ jobMonitor = jobMonitor_ Nothing Nothing
 --     cancel jpAsync
 
 
-jobPollingSql :: (IsString s) => s
-jobPollingSql = "update jobs set locked_at = ?, locked_by = ?, attempts=attempts+1 WHERE id in (select id from jobs where (run_at<=? AND ((locked_at is null AND locked_by is null AND status in ?) OR (locked_at<?))) ORDER BY run_at ASC LIMIT 1 FOR UPDATE) RETURNING id"
+jobPollingSql :: TableName -> Query
+jobPollingSql tname = "update " <> tname <> " set locked_at = ?, locked_by = ?, attempts=attempts+1 WHERE id in (select id from " <> tname <> " where (run_at<=? AND ((locked_at is null AND locked_by is null AND status in ?) OR (locked_at<?))) ORDER BY run_at ASC LIMIT 1 FOR UPDATE) RETURNING id"
 
 
 jobPoller :: (HasJobMonitor m) => m ()
 jobPoller = do
   processName <- liftIO jobWorkerName
   pool <- getDbPool
+  tname <- getTableName
   logInfoN $ toS $ "Starting the job monitor via DB polling with processName=" <> show processName
   withResource pool $ \pollerDbConn -> forever $ do
     logInfoN $ toS $ "[" <> show processName <> "] Polling the job queue.."
     t <- liftIO getCurrentTime
-    (liftIO $ PGS.query pollerDbConn jobPollingSql (t, processName, t, (In [Job.Queued, Job.Retry]), (addUTCTime (fromIntegral (-lockTimeout)) t))) >>= \case
+    (liftIO $ PGS.query pollerDbConn (jobPollingSql tname) (t, processName, t, (In [Job.Queued, Job.Retry]), (addUTCTime (fromIntegral (-lockTimeout)) t))) >>= \case
       -- When we don't have any jobs to run, we can relax a bit...
       [] -> threadDelay defaultPollingInterval
 
@@ -381,9 +388,10 @@ jobEventListener :: (HasJobMonitor m) => m ()
 jobEventListener = do
   logInfoN "Starting the job monitor via LISTEN/NOTIFY..."
   pool <- getDbPool
+  tname <- getTableName
   withResource pool $ \monitorDbConn -> forever $ do
     logInfoN "[LISTEN/NOFIFY] Event loop"
-    _ <- liftIO $ PGS.execute monitorDbConn "LISTEN job_created_event" ()
+    _ <- liftIO $ PGS.execute monitorDbConn ("LISTEN " <> pgEventName tname) ()
     notif <- liftIO $ getNotification monitorDbConn
     let pload = notificationData notif
     logDebugN $ toS $ "NOTIFY | " <> show pload
@@ -404,7 +412,8 @@ jobEventListener = do
                       -- been picked up by the poller by the time we get here.
                       t2 <- liftIO getCurrentTime
                       jwName <- liftIO jobWorkerName
-                      (liftIO $ PGS.query conn "UPDATE jobs SET locked_at=?, locked_by=?, attempts=attempts+1 WHERE id=? AND locked_at IS NULL AND locked_by IS NULL RETURNING id" (t2, jwName, jid)) >>= \case
+                      let q = "UPDATE " <> tname <> " SET locked_at=?, locked_by=?, attempts=attempts+1 WHERE id=? AND locked_at IS NULL AND locked_by IS NULL RETURNING id"
+                      (liftIO $ PGS.query conn q (t2, jwName, jid)) >>= \case
                         [] -> logDebugN $ toS $ "Job was locked by someone else before I could start. Skipping it. JobId=" <> show jid
                         [Only (_ :: JobId)] -> do
                           logDebugN $ "Attempting to run JobId=" <> (toS $ show jid)
@@ -420,19 +429,19 @@ jobEventListener = do
       pure (jid, runAt_, mLockedAt_)
 
 
-createJobQuery :: PGS.Query
-createJobQuery = "INSERT INTO jobs (run_at, status, payload, last_error, attempts, locked_at, locked_by) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING " <> concatJobDbColumns
+createJobQuery :: TableName -> PGS.Query
+createJobQuery tname = "INSERT INTO " <> tname <> "(run_at, status, payload, last_error, attempts, locked_at, locked_by) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING " <> concatJobDbColumns
 
-createJob :: ToJSON p => Connection -> p -> IO Job
-createJob conn payload = do
+createJob :: ToJSON p => Connection -> TableName -> p -> IO Job
+createJob conn tname payload = do
   t <- getCurrentTime
-  scheduleJob conn payload t
+  scheduleJob conn tname payload t
 
-scheduleJob :: ToJSON p => Connection -> p -> UTCTime -> IO Job
-scheduleJob conn payload runAt = do
+scheduleJob :: ToJSON p => Connection -> TableName -> p -> UTCTime -> IO Job
+scheduleJob conn tname payload runAt = do
   let args = ( runAt, Queued, toJSON payload, Nothing :: Maybe Value, 0 :: Int, Nothing :: Maybe Text, Nothing :: Maybe Text )
-      queryFormatter = toS <$> (PGS.formatQuery conn createJobQuery args)
-  rs <- PGS.query conn createJobQuery args
+      queryFormatter = toS <$> (PGS.formatQuery conn (createJobQuery tname) args)
+  rs <- PGS.query conn (createJobQuery tname) args
   case rs of
     [] -> (Prelude.error . (<> "Not expecting a blank result set when creating a job. Query=")) <$> queryFormatter
     [r] -> pure r

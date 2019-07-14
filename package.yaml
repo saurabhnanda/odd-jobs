@@ -73,4 +73,5 @@ tests:
       - haskell-pg-queue
       - tasty-hunit
       - fast-logger
+      - random
 
