@@ -13,6 +13,9 @@ module Job
   , JobId
   , saveJob
   , defaultPollingInterval
+  , JobMonitor(..)
+  , defaultJobMonitor
+  , runJobMonitor
   )
 where
 
@@ -47,6 +50,78 @@ import Data.Functor (void)
 import Control.Monad (forever)
 import Data.Maybe (isNothing)
 import Data.Either (either)
+import System.Log.FastLogger (fromLogStr, newTimedFastLogger, LogType(..), defaultBufSize, FastLogger, FileLogSpec(..), TimedFastLogger)
+import System.Log.FastLogger.Date (newTimeCache, simpleTimeFormat')
+import Control.Monad.Reader
+
+
+class (MonadUnliftIO m, MonadBaseControl IO m, MonadLogger m) => HasJobMonitor m where
+  getPollingInterval :: m Int
+  onJobRetry :: Job -> m ()
+  onJobSuccess :: Job -> m ()
+  onJobPermanentlyFailed :: Job -> m ()
+  getJobRunner :: m (Job -> IO ())
+  getMaxAttempts :: m Int
+  getDbPool :: m (Pool Connection)
+
+data JobMonitor = JobMonitor
+  { monitorPollingInterval :: Int
+  , monitorOnJobSuccess :: Job -> IO ()
+  , monitorOnJobRetry :: Job -> IO ()
+  , monitorOnJobPermanentlyFailed :: Job -> IO ()
+  , monitorJobRunner :: Job -> IO ()
+  , monitorMaxAttempts :: Int
+  , monitorLogger :: (forall msg . ToLogStr msg => Loc -> LogSource -> LogLevel -> msg -> IO ())
+  , monitorDbPool :: Pool Connection
+  }
+
+type JobMonitorM = ReaderT JobMonitor IO
+
+instance {-# OVERLAPS #-} MonadLogger JobMonitorM where
+  monadLoggerLog loc logsource loglevel msg = do
+    fn <- monitorLogger <$> ask
+    liftIO $ fn loc logsource loglevel msg
+
+instance HasJobMonitor JobMonitorM where
+  getPollingInterval = monitorPollingInterval <$> ask
+  onJobRetry job = do
+    fn <- monitorOnJobRetry <$> ask
+    liftIO $ fn job
+  onJobSuccess job = do
+    fn <- monitorOnJobSuccess <$> ask
+    liftIO $ fn job
+  onJobPermanentlyFailed job = do
+    fn <- monitorOnJobPermanentlyFailed <$> ask
+    liftIO $ fn job
+  getJobRunner = monitorJobRunner <$> ask
+  getMaxAttempts = monitorMaxAttempts <$> ask
+  getDbPool = monitorDbPool <$> ask
+
+
+runJobMonitor :: JobMonitor -> IO ()
+runJobMonitor jm = runReaderT jobMonitor jm
+
+defaultLogger :: IO TimedFastLogger
+defaultLogger = do
+  tcache <- newTimeCache simpleTimeFormat'
+  fst <$> newTimedFastLogger tcache (LogStdout defaultBufSize)
+
+defaultJobMonitor :: Pool Connection -> IO JobMonitor
+defaultJobMonitor dbpool = do
+  logger <- defaultLogger
+  pure JobMonitor
+    { monitorPollingInterval = defaultPollingInterval
+    , monitorOnJobSuccess = (const $ pure ())
+    , monitorOnJobRetry = (const $ pure ())
+    , monitorOnJobPermanentlyFailed = (const $ pure ())
+    , monitorJobRunner = (const $ pure ())
+    , monitorMaxAttempts = 25
+    , monitorLogger = \ loc logsource loglevel msg -> logger $ \t ->
+        toLogStr t <> " | " <>
+        defaultLogStr loc logsource loglevel (toLogStr msg)
+    , monitorDbPool = dbpool
+  }
+
 
 oneSec :: Int
 oneSec = 1000000
@@ -116,10 +191,6 @@ instance FromRow Job where
 -- completed failed.
 type JobRunner = Job -> IO ()
 
-class (MonadUnliftIO m, MonadBaseControl IO m, MonadLogger m) => HasJobMonitor m where
-  onJobRetry :: Job -> m ()
-  onJobSuccess :: Job -> m ()
-  getDbPool :: m (Pool Connection)
 
 jobWorkerName :: IO String
 jobWorkerName = do
@@ -184,38 +255,41 @@ saveJob conn Job{jobRunAt, jobStatus, jobPayload, jobLastError, jobAttempts, job
     js -> Prelude.error $ "Not expecting multiple rows to ber returned when updating job id=" <> (show jobId)
 
 
-runJob :: (HasJobMonitor m) => JobRunner -> Connection -> JobId -> m ()
-runJob jobRunner_ conn jid =  (liftIO $ findJobById conn jid) >>= \case
+runJob :: (HasJobMonitor m) => Connection -> JobId -> m ()
+runJob conn jid =  (liftIO $ findJobById conn jid) >>= \case
   Nothing -> Prelude.error $ "Could not find job id=" <> show jid
-  Just job -> (try $ liftIO $ jobRunner_ job) >>= \case
-    Right () -> do
-      -- TODO: save job result for future
-      newJob <- liftIO $ saveJob conn job{jobStatus=Success, jobLockedBy=Nothing, jobLockedAt=Nothing}
-      onJobSuccess newJob
-      pure ()
+  Just job -> do
+    jobRunner_ <- getJobRunner
+    (try $ liftIO $ jobRunner_ job) >>= \case
+      Right () -> do
+        -- TODO: save job result for future
+        newJob <- liftIO $ saveJob conn job{jobStatus=Success, jobLockedBy=Nothing, jobLockedAt=Nothing}
+        onJobSuccess newJob
+        pure ()
 
-    Left (SomeException e) -> do
-      t <- liftIO getCurrentTime
-      newJob <- liftIO $ saveJob conn job{ jobStatus=Retry
-                                         , jobLockedBy=Nothing
-                                         , jobLockedAt=Nothing
-                                         , jobAttempts=(1 + (jobAttempts job))
-                                         , jobLastError=(Just $ toJSON $ show e) -- TODO: convert errors to json properly
-                                         , jobRunAt=(addUTCTime (fromIntegral $ (2::Int) ^ (jobAttempts job)) t)
-                                         }
-      -- NOTE: Not notifying Airbrake for the first few failures to reduce the
-      -- noise caused by temporary network failures. This can be made more
-      -- precise by catching HTTPException separately and looking at the HTTP
-      -- status code.
-      onJobRetry newJob
-      pure ()
+      Left (SomeException e) -> do
+        t <- liftIO getCurrentTime
+        newJob <- liftIO $ saveJob conn job{ jobStatus=Retry
+                                           , jobLockedBy=Nothing
+                                           , jobLockedAt=Nothing
+                                           , jobAttempts=(1 + (jobAttempts job))
+                                           , jobLastError=(Just $ toJSON $ show e) -- TODO: convert errors to json properly
+                                           , jobRunAt=(addUTCTime (fromIntegral $ (2::Int) ^ (jobAttempts job)) t)
+                                           }
+        -- NOTE: Not notifying Airbrake for the first few failures to reduce the
+        -- noise caused by temporary network failures. This can be made more
+        -- precise by catching HTTPException separately and looking at the HTTP
+        -- status code.
+        onJobRetry newJob
+        pure ()
 
-jobMonitor :: (HasJobMonitor m) => JobRunner -> m ()
-jobMonitor jobRunner = jobMonitor_ Nothing Nothing
+jobMonitor :: forall m . (HasJobMonitor m) => m ()
+jobMonitor = jobMonitor_ Nothing Nothing
   where
+    jobMonitor_ :: Maybe (Async ()) -> Maybe (Async ()) -> m ()
     jobMonitor_ mPollerAsync mEventAsync = do
-      pollerAsync <- maybe spawnPoller pure mPollerAsync
-      eventAsync <- maybe spawnEventListener pure mEventAsync
+      pollerAsync <- maybe (async jobPoller) pure mPollerAsync
+      eventAsync <- maybe (async jobEventListener) pure mEventAsync
       waitEitherCatch pollerAsync eventAsync >>= \case
         Left pollerResult -> do
           either
@@ -229,8 +303,6 @@ jobMonitor jobRunner = jobMonitor_ Nothing Nothing
             (\x -> logErrorN $ "Event listener seems to have escaped the `forever` loop. Respawning: " <> toS (show x))
             eventResult
           jobMonitor_ (Just pollerAsync) Nothing
-    spawnPoller = async (jobPoller jobRunner)
-    spawnEventListener = async (jobEventListener jobRunner)
 
 
 -- jobMonitor :: (HasJobMonitor m) => JobRunner -> m ()
@@ -271,8 +343,8 @@ jobPollingSql :: (IsString s) => s
 jobPollingSql = "update jobs set locked_at = ?, locked_by = ?, attempts=attempts+1 WHERE id in (select id from jobs where (run_at<=? AND ((locked_at is null AND locked_by is null AND status in ?) OR (locked_at<?))) ORDER BY run_at ASC LIMIT 1 FOR UPDATE) RETURNING id"
 
 
-jobPoller :: (HasJobMonitor m) => JobRunner -> m ()
-jobPoller jobRunner = do
+jobPoller :: (HasJobMonitor m) => m ()
+jobPoller = do
   processName <- liftIO jobWorkerName
   pool <- getDbPool
   logInfoN $ toS $ "Starting the job monitor via DB polling with processName=" <> show processName
@@ -296,7 +368,7 @@ jobPoller jobRunner = do
         void $ async $ withResource pool $ \jobConn -> do
           logInfoN $ toS $ "DB connection acquired. Signalling the job-poller to continue polling. JobId=" <> show jid
           putMVar jobReadyToRun True
-          runJob jobRunner jobConn jid
+          runJob jobConn jid
 
         -- Block the polling till the job-runner is ready to run....
         void $ readMVar jobReadyToRun
@@ -305,8 +377,8 @@ jobPoller jobRunner = do
 
 
 
-jobEventListener :: (HasJobMonitor m) => JobRunner -> m ()
-jobEventListener jobRunner = do
+jobEventListener :: (HasJobMonitor m) => m ()
+jobEventListener = do
   logInfoN "Starting the job monitor via LISTEN/NOTIFY..."
   pool <- getDbPool
   withResource pool $ \monitorDbConn -> forever $ do
@@ -336,7 +408,7 @@ jobEventListener jobRunner = do
                         [] -> logDebugN $ toS $ "Job was locked by someone else before I could start. Skipping it. JobId=" <> show jid
                         [Only (_ :: JobId)] -> do
                           logDebugN $ "Attempting to run JobId=" <> (toS $ show jid)
-                          runJob jobRunner conn jid
+                          runJob conn jid
                         x -> error $ "WTF just happned? Was expecting a single row to be returned, received " ++ (show x)
             else logDebugN $ toS $ "Job is either for future, or is already locked. Skipping. JobId=" <> show jid
   where

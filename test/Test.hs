@@ -20,6 +20,11 @@ import System.Log.FastLogger (fromLogStr, withFastLogger, LogType(..), defaultBu
 import Data.String.Conv (toS)
 import Data.Time
 import GHC.Generics
+import Hedgehog
+import qualified Hedgehog.Gen as Gen
+import qualified Hedgehog.Range as Range
+import Test.Tasty.Hedgehog
+
 
 setupDatabase :: ConnectInfo -> IO ()
 setupDatabase cinfo = do
@@ -64,15 +69,21 @@ main = do
 
   -- void $ forConcurrently [1..50] (\i -> Pool.withResource dbpool (foo i))
 
+  defaults <- (Job.defaultJobMonitor jobPool)
+  let jobMonitorSettings = defaults{ Job.monitorJobRunner = jobRunner }
+
   withFastLogger (LogFile FileLogSpec{log_file="test.log", log_file_size=1024*1024*10, log_backup_number=5} defaultBufSize) $ \ flogger -> do
     let env = Env { envDbPool = jobPool, envLogger = flogger }
     finally
-      (withAsync (runReaderT (Job.jobMonitor jobRunner) env)  (const $ defaultMain $ tests appPool jobPool))
+      (withAsync (Job.runJobMonitor jobMonitorSettings)  (const $ defaultMain $ tests appPool jobPool))
       ((Pool.destroyAllResources appPool) >> (Pool.destroyAllResources jobPool))
 
 -- tests dbpool = testGroup "All tests" $ (\t -> t dbpool) <$> [simpleJobCreation]
-tests appPool jobPool = testGroup "All tests" $ (\t -> t appPool) <$> [testJobFailure, testJobCreation, testJobScheduling]
-
+tests appPool jobPool = testGroup "All tests"
+  [ testGroup "simple tests" $ (\t -> t appPool) <$> [testJobFailure, testJobCreation, testJobScheduling]
+  , testGroup "property tests" [testPayloadGenerator appPool jobPool] -- [testEverything appPool jobPool]
+  ]
+  
 myTestCase
   :: TestName
   -> (Connection -> Assertion)
@@ -109,14 +120,20 @@ testPayload :: Value
 testPayload = toJSON (10 :: Int)
 
 jobRunner :: Job.Job -> IO ()
-jobRunner Job{jobPayload} = case (fromJSON jobPayload) of
+jobRunner Job{jobPayload, jobAttempts} = case (fromJSON jobPayload) of
   Aeson.Error e -> error e
-  Success (j :: JobPayload) -> case j of
-    PayloadSucceed delay -> (threadDelay delay) >> pure ()
-    PayloadFail delay -> (threadDelay delay) >> (error $ "Forced error after " <> show delay <> " seconds")
+  Success (j :: JobPayload) ->
+    let recur pload idx = case pload of
+          PayloadAlwaysFail delay -> (threadDelay delay) >> (error $ "Forced error after " <> show delay <> " seconds")
+          PayloadSucceed delay -> (threadDelay delay) >> pure ()
+          PayloadFail delay innerpload -> if idx<jobAttempts
+                                          then recur innerpload (idx + 1)
+                                          else (threadDelay delay) >> (error $ "Forced error after " <> show delay <> " seconds. step=" <> show idx)
+    in recur j 0
 
 data JobPayload = PayloadSucceed Int
-                | PayloadFail Int
+                | PayloadFail Int JobPayload
+                | PayloadAlwaysFail Int
                 deriving (Eq, Show, Generic)
 
 instance ToJSON JobPayload where
@@ -144,6 +161,13 @@ ensureJobId conn jid = Job.findJobById conn jid >>= \case
 --   threadDelay (oneSec * 280)
 --   forConcurrently_ jobs $ \Job{jobId} -> Pool.withResource appPool $ \conn -> assertJobIdStatus conn "Expecting job to be completed by now" Job.Success jid
 
+payloadGen :: MonadGen m => m JobPayload
+payloadGen = Gen.recursive  Gen.choice nonRecursive recursive
+  where
+    nonRecursive = [ PayloadAlwaysFail <$> Gen.element [1, 2, 3]
+                   , PayloadSucceed <$> Gen.element [1, 2, 3]]
+    recursive = [ PayloadFail <$> (Gen.element [1, 2, 3]) <*> payloadGen ]
+
 testJobCreation = myTestCase "job creation" $ \ conn -> do
   Job{jobId} <- Job.createJob conn (PayloadSucceed 0)
   threadDelay (oneSec * 2)
@@ -159,9 +183,22 @@ testJobScheduling = myTestCase "job scheduling" $ \conn -> do
   assertJobIdStatus conn "Job had a runAt date in the past. It should have been successful by now" Job.Success jobId
 
 testJobFailure = myTestCase "job failure" $ \conn -> do
-  Job{jobId} <- Job.createJob conn (PayloadFail 0)
+  Job{jobId} <- Job.createJob conn (PayloadAlwaysFail 0)
   threadDelay (oneSec * 10)
   Job{jobAttempts, jobStatus} <- ensureJobId conn jobId
   assertEqual "Exepcting job to be in Retry status" Job.Retry jobStatus
   assertBool ("Expecting job attempts to be 3 or 4. Found " <> show jobAttempts) (jobAttempts == 3 || jobAttempts == 4)
 
+
+testEverything appPool dbPool = testProperty "test everything" $ property $ do
+  failurePattern <- forAll $ Gen.list (Range.linear 0 20) (Gen.element [1, 2, 3])
+  liftIO $ print failurePattern
+  True === True
+  -- xs <- forAll $ Gen.list (Range.linear 0 100) Gen.alpha
+  -- reverse (reverse xs) === xs
+
+testPayloadGenerator appPool dbPool = testProperty "test payload generator" $ property $ do
+  pload <- forAll payloadGen
+  liftIO $ print pload
+  True === True
+  
