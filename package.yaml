@@ -47,7 +47,8 @@ dependencies:
   - monad-control
   - string-conv
   - hostname
-
+  - async
+  
 library:
   source-dirs:
     - src
@@ -74,4 +75,10 @@ tests:
       - tasty-hunit
       - fast-logger
       - random
-
+      - containers
+      - resourcet
+      - monad-control
+      - async
+      - mmorph
+      - lifted-base
+      - lifted-async

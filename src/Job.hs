@@ -29,6 +29,7 @@ import Database.PostgreSQL.Simple.FromField as FromField
 import Database.PostgreSQL.Simple.ToField as ToField
 import Database.PostgreSQL.Simple.FromRow as FromRow
 import UnliftIO.Async
+import Control.Concurrent.Async (AsyncCancelled(..))
 import UnliftIO.Concurrent (threadDelay)
 import Data.String
 import System.Posix.Process (getProcessID)
@@ -37,8 +38,7 @@ import UnliftIO.MVar
 import Debug.Trace
 import Control.Monad.Logger as MLogger
 import UnliftIO.IORef
-import Control.Exception(AsyncException(..))
-import UnliftIO.Exception (SomeException(..), try, catch)
+import UnliftIO.Exception (SomeException(..), try, catch, finally)
 import Data.Proxy
 import Control.Monad.Trans.Control
 import Control.Monad.IO.Unlift (MonadUnliftIO, withRunInIO, liftIO)
@@ -65,6 +65,8 @@ class (MonadUnliftIO m, MonadBaseControl IO m, MonadLogger m) => HasJobMonitor m
   getMaxAttempts :: m Int
   getDbPool :: m (Pool Connection)
   getTableName :: m TableName
+  onJobStart :: Job -> m ()
+  getDefaultMaxAttempts :: m Int
 
 data JobMonitor = JobMonitor
   { monitorPollingInterval :: Int
@@ -76,6 +78,8 @@ data JobMonitor = JobMonitor
   , monitorLogger :: (forall msg . ToLogStr msg => Loc -> LogSource -> LogLevel -> msg -> IO ())
   , monitorDbPool :: Pool Connection
   , monitorTableName :: TableName
+  , monitorOnJobStart :: Job -> IO ()
+  , monitorDefaultMaxAttempts :: Int
   }
 
 type JobMonitorM = ReaderT JobMonitor IO
@@ -100,6 +104,11 @@ instance HasJobMonitor JobMonitorM where
   getMaxAttempts = monitorMaxAttempts <$> ask
   getDbPool = monitorDbPool <$> ask
   getTableName = monitorTableName <$> ask
+  onJobStart job = do
+    fn <- monitorOnJobStart <$> ask
+    liftIO $ fn job
+
+  getDefaultMaxAttempts = monitorDefaultMaxAttempts <$> ask
 
 
 runJobMonitor :: JobMonitor -> IO ()
@@ -124,6 +133,8 @@ defaultJobMonitor dbpool = do
         toLogStr t <> " | " <>
         defaultLogStr loc logsource loglevel (toLogStr msg)
     , monitorDbPool = dbpool
+    , monitorOnJobStart = (const $ pure ())
+    , monitorDefaultMaxAttempts = 10
   }
 
 
@@ -274,19 +285,21 @@ runJob conn jid = do
           pure ()
 
         Left (SomeException e) -> do
+          defaultMaxAttempts <- getDefaultMaxAttempts
+          let newStatus = if (jobAttempts job) >= defaultMaxAttempts
+                          then Failed
+                          else Retry
           t <- liftIO getCurrentTime
-          newJob <- liftIO $ saveJob conn tname job{ jobStatus=Retry
+          newJob <- liftIO $ saveJob conn tname job{ jobStatus=newStatus
                                                    , jobLockedBy=Nothing
                                                    , jobLockedAt=Nothing
-                                                   , jobAttempts=(1 + (jobAttempts job))
                                                    , jobLastError=(Just $ toJSON $ show e) -- TODO: convert errors to json properly
-                                                   , jobRunAt=(addUTCTime (fromIntegral $ (2::Int) ^ (jobAttempts job)) t)
+                                                   , jobRunAt=(addUTCTime (fromIntegral $ (1::Int) ^ (jobAttempts job)) t)
                                                    }
-          -- NOTE: Not notifying Airbrake for the first few failures to reduce the
-          -- noise caused by temporary network failures. This can be made more
-          -- precise by catching HTTPException separately and looking at the HTTP
-          -- status code.
-          onJobRetry newJob
+          case (jobStatus newJob) of
+            Failed -> onJobPermanentlyFailed newJob
+            Retry -> onJobRetry newJob
+            x -> Prelude.error $ "Unexpected job status = " <> show x
           pure ()
 
 jobMonitor :: forall m . (HasJobMonitor m) => m ()
@@ -296,6 +309,15 @@ jobMonitor = jobMonitor_ Nothing Nothing
     jobMonitor_ mPollerAsync mEventAsync = do
       pollerAsync <- maybe (async jobPoller) pure mPollerAsync
       eventAsync <- maybe (async jobEventListener) pure mEventAsync
+      finally
+        (restartUponCrash pollerAsync eventAsync)
+        (do logInfoN "Received shutdown event. Cancelling job-poller and event-listener threads"
+            cancel eventAsync
+            cancel pollerAsync
+        )
+
+
+    restartUponCrash pollerAsync eventAsync = do
       waitEitherCatch pollerAsync eventAsync >>= \case
         Left pollerResult -> do
           either

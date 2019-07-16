@@ -36,7 +36,7 @@ createNotificationTrigger tname = "create or replace function " <> fnName <> "()
   "  return new; \n" <>
   "end; \n" <>
   "$$ language plpgsql;" <>
-  "create trigger " <> trgName <> " after insert on jobs for each row execute procedure " <> fnName <> "();"
+  "create trigger " <> trgName <> " after insert on " <> tname <> " for each row execute procedure " <> fnName <> "();"
   where
     fnName = "notify_job_monitor_for_" <> tname
     trgName = "trg_notify_job_monitor_for_" <> tname

@@ -1,4 +1,4 @@
-{-# LANGUAGE TypeSynonymInstances, FlexibleInstances, NamedFieldPuns, DeriveGeneric #-}
+{-# LANGUAGE TypeSynonymInstances, FlexibleInstances, NamedFieldPuns, DeriveGeneric, FlexibleContexts, TypeFamilies #-}
 module Test where
 
 import Test.Tasty as Tasty
@@ -9,12 +9,16 @@ import Data.Functor (void)
 import Data.Pool as Pool
 import Test.Tasty.HUnit
 import Debug.Trace
-import Control.Exception (finally)
+import Control.Exception.Lifted (finally, catch)
 import Control.Monad.Logger
 import Control.Monad.Reader
 import Data.Aeson as Aeson
-import UnliftIO.Async
-import UnliftIO.Concurrent
+-- import UnliftIO.Async
+-- import UnliftIO.Concurrent
+-- import UnliftIO.Exception
+import Control.Concurrent.Lifted
+import  Control.Concurrent.Async (AsyncCancelled(..))
+import Control.Concurrent.Async.Lifted
 import Job (Job(..), JobId)
 import System.Log.FastLogger (fromLogStr, withFastLogger, LogType(..), defaultBufSize, FastLogger, FileLogSpec(..))
 import Data.String.Conv (toS)
@@ -26,6 +30,12 @@ import qualified Hedgehog.Range as Range
 import Test.Tasty.Hedgehog
 import qualified System.Random as R
 import Data.String (fromString)
+import qualified Data.IntMap.Strict as Map
+import Control.Monad.Trans.Resource (runResourceT)
+import Control.Monad.Trans.Control (liftWith, restoreT)
+import Control.Monad.Morph (hoist)
+import Data.List as DL
+
 
 
 setupDatabase :: ConnectInfo -> IO ()
@@ -83,8 +93,10 @@ main = do
 --   ]
 
 tests appPool jobPool = testGroup "All tests"
-  [ testGroup "simple tests" [testJobCreation appPool jobPool, testJobScheduling appPool jobPool, testJobFailure appPool jobPool] -- [testJobFailure appPool jobPool, testJobCreation appPool jobPool, testJobScheduling appPool jobPool]
-  -- , testGroup "property tests" [testPayloadGenerator appPool jobPool] -- [testEverything appPool jobPool]
+  [
+    testGroup "simple tests" [testJobCreation appPool jobPool, testJobScheduling appPool jobPool, testJobFailure appPool jobPool, testEnsureShutdown appPool jobPool]
+    -- testGroup "simple tests" [testEnsureShutdown appPool jobPool]
+  , testGroup "property tests" [testEverything appPool jobPool]
   ]
 
 myTestCase
@@ -164,19 +176,27 @@ ensureJobId conn tname jid = Job.findJobById conn tname jid >>= \case
 --   threadDelay (oneSec * 280)
 --   forConcurrently_ jobs $ \Job{jobId} -> Pool.withResource appPool $ \conn -> assertJobIdStatus conn "Expecting job to be completed by now" Job.Success jid
 
+-- withRandomTable :: (MonadIO m) => Pool Connection -> (Job.TableName -> m a) -> m a
 withRandomTable jobPool action = do
-  (tname :: Job.TableName) <- ((("jobs_" <>) . fromString) <$> (replicateM 10 (R.randomRIO ('a', 'z'))))
+  (tname :: Job.TableName) <- liftIO ((("jobs_" <>) . fromString) <$> (replicateM 10 (R.randomRIO ('a', 'z'))))
   finally
-    ((Pool.withResource jobPool $ \conn -> Migrations.createJobTable conn tname) >> (action tname))
-    (Pool.withResource jobPool $ \conn -> void $ PGS.execute_ conn ("drop table if exists " <> tname <> ";"))
+    ((Pool.withResource jobPool $ \conn -> (liftIO $ Migrations.createJobTable conn tname)) >> (action tname))
+    (Pool.withResource jobPool $ \conn -> liftIO $ void $ PGS.execute_ conn ("drop table if exists " <> tname <> ";"))
 
 -- withNewJobMonitor :: (Pool Connection) -> (TableName -> Assertion) -> Assertion
-withNewJobMonitor jobPool actualTest = withRandomTable jobPool $ \tname -> do
+withNewJobMonitor jobPool actualTest = withRandomTable jobPool $ \tname -> withNamedJobMonitor tname jobPool (actualTest tname)
+
+withNamedJobMonitor tname jobPool actualTest = do
   (defaults, cleanup) <- (Job.defaultJobMonitor jobPool)
-  let jobMonitorSettings = defaults{ Job.monitorJobRunner = jobRunner, Job.monitorTableName = tname }
+  let jobMonitorSettings = defaults{ Job.monitorJobRunner = jobRunner
+                                   , Job.monitorTableName = tname
+                                   , Job.monitorDefaultMaxAttempts = 3
+                                   }
   finally
-    (withAsync (Job.runJobMonitor jobMonitorSettings) (const $ actualTest tname))
+    (withAsync (Job.runJobMonitor jobMonitorSettings) (const actualTest))
     (cleanup)
+
+
 
 payloadGen :: MonadGen m => m JobPayload
 payloadGen = Gen.recursive  Gen.choice nonRecursive recursive
@@ -187,8 +207,22 @@ payloadGen = Gen.recursive  Gen.choice nonRecursive recursive
 
 testJobCreation appPool jobPool = testCase "job creation" $ withNewJobMonitor jobPool $ \tname -> Pool.withResource appPool $ \conn -> do
   Job{jobId} <- Job.createJob conn tname (PayloadSucceed 0)
-  threadDelay (oneSec * 4)
+  threadDelay (oneSec * 6)
   assertJobIdStatus conn tname "Expecting job to tbe successful by now" Job.Success jobId
+
+testEnsureShutdown appPool jobPool = testCase "ensure shutdown" $ withRandomTable jobPool $ \tname -> do
+  jid <- scheduleJob tname
+  threadDelay (2 * Job.defaultPollingInterval)
+  Pool.withResource appPool $ \conn ->
+    assertJobIdStatus conn tname "Job should still be in queued state if job-monitor is no longer runner" Job.Queued jid
+  where
+    scheduleJob tname = withNamedJobMonitor tname jobPool $ do
+      t <- getCurrentTime
+      Pool.withResource appPool $ \conn -> do
+        Job{jobId} <- Job.scheduleJob conn tname (PayloadSucceed 0) (addUTCTime (fromIntegral (2 * (Job.defaultPollingInterval `div` oneSec))) t)
+        assertJobIdStatus conn tname "Job is scheduled in future, should still be queueud" Job.Queued jobId
+        pure jobId
+
 
 testJobScheduling appPool jobPool = testCase "job scheduling" $ withNewJobMonitor jobPool $ \tname -> Pool.withResource appPool $ \conn -> do
   t <- getCurrentTime
@@ -199,23 +233,110 @@ testJobScheduling appPool jobPool = testCase "job scheduling" $ withNewJobMonito
   threadDelay (Job.defaultPollingInterval + (oneSec * 2))
   assertJobIdStatus conn tname "Job had a runAt date in the past. It should have been successful by now" Job.Success jobId
 
-testJobFailure appPool jobPool = testCase "job failure" $ withNewJobMonitor jobPool $ \tname -> Pool.withResource appPool $ \conn -> do
+testJobFailure appPool jobPool = testCase "job retry" $ withNewJobMonitor jobPool $ \tname -> Pool.withResource appPool $ \conn -> do
   Job{jobId} <- Job.createJob conn tname (PayloadAlwaysFail 0)
-  threadDelay (oneSec * 12)
+  threadDelay (oneSec * 15)
   Job{jobAttempts, jobStatus} <- ensureJobId conn tname jobId
-  assertEqual "Exepcting job to be in Retry status" Job.Retry jobStatus
-  assertBool ("Expecting job attempts to be 3 or 4. Found " <> show jobAttempts) (jobAttempts == 3 || jobAttempts == 4)
+  assertEqual "Exepcting job to be in Failed status" Job.Failed jobStatus
+  assertEqual ("Expecting job attempts to be 3. Found " <> show jobAttempts)  3 jobAttempts
+
+-- withRandomTableLifted jobPool action = liftWith (\run -> withRandomTable jobPool (run . action)) >>= restoreT . return
+
+data JobEvent = JobStart
+              | JobRetry
+              | JobSuccess
+              | JobFailed
+              deriving (Eq, Show)
+
+testEverything appPool jobPool = testProperty "test everything" $ property $ do
+  jobPayloads <- forAll $ Gen.list (Range.linear 1 1000) payloadGen
+  traceM $ show jobPayloads
+  (defaults, cleanup) <- liftIO $ Job.defaultJobMonitor jobPool
+  jobsMVar <- liftIO $ newMVar (Map.empty :: Map.IntMap [(JobEvent, Job.Job)])
+
+  test $ withRandomTable jobPool $ \tname -> do
+    let jobMonitorSettings = defaults { Job.monitorJobRunner = jobRunner
+                                      , Job.monitorTableName = tname
+                                      , Job.monitorOnJobStart = onJobEvent JobStart jobsMVar
+                                      , Job.monitorOnJobRetry = onJobEvent JobRetry jobsMVar
+                                      , Job.monitorOnJobPermanentlyFailed = onJobEvent JobFailed jobsMVar
+                                      , Job.monitorOnJobSuccess = onJobEvent JobSuccess jobsMVar
+                                      , Job.monitorDefaultMaxAttempts = 3
+                                      , Job.monitorPollingInterval = oneSec * jobPollingInterval
+                                      }
+
+    (jobs :: [Job]) <- withAsync
+            (liftIO $ Job.runJobMonitor jobMonitorSettings)
+            (const $ finally
+              (liftIO $ actualTest jobPayloads tname jobsMVar)
+              (liftIO cleanup))
+
+    jobAudit <- takeMVar jobsMVar
+
+    -- All jobs should show up in the audit, which means they should have
+    -- been attempted /at least/ once
+    (DL.sort $ map jobId jobs) === (DL.sort $ Map.keys jobAudit)
+
+    -- No job should've been simultaneously picked-up by more than one
+    -- worker
+    True === (Map.foldl (\m js -> m && noRaceCondition js) True jobAudit)
+
+    liftIO $ print $ "Test passed with job-count = " <> show (length jobPayloads)
+
+  where
+
+    noRaceCondition js = DL.foldl (&&) True $ DL.zipWith (\(x,_) (y,_) -> not $ x==JobStart && y==JobStart) js (tail js)
+
+    jobPollingInterval = 2
+
+    onJobEvent evt jobsMVar job@Job{jobId} = void $ modifyMVar_ jobsMVar $ \jobMap -> do
+      pure $ Map.insertWith (++) jobId [(evt, job)] jobMap
+
+    actualTest :: [JobPayload] -> Job.TableName -> MVar (Map.IntMap [(JobEvent, Job.Job)]) -> IO [Job]
+    actualTest jobPayloads tname jobsMVar = do
+      jobs <- forConcurrently jobPayloads $ \pload ->
+        Pool.withResource appPool $ \conn ->
+        liftIO $ Job.createJob conn tname pload
+      let concurrencyFactor = 5
+          maxDelay = sum $ map (payloadDelay jobPollingInterval) jobPayloads
+          timeout = (maxDelay `div` concurrencyFactor) + (2 * testPollingInterval)
+          testPollingInterval = 5
+          poller nextAction = case nextAction of
+            Left s -> pure $ Left s
+            Right remaining ->
+              if remaining == 0
+              then pure (Right 0)
+              else do threadDelay (oneSec * testPollingInterval)
+                      print "------- Polling ------"
+                      x <- withMVar jobsMVar $ \jobMap ->
+                        if (Map.foldl (\m js -> m && (isJobTerminalState js)) True jobMap)
+                        then pure (Right 0)
+                        else if remaining < testPollingInterval
+                             then pure (Left $ "Timeout. Job count=" <> show (length jobPayloads) <> " timeout=" <> show timeout <> " payload delay=" <> show maxDelay)
+                             else pure $ Right (remaining - testPollingInterval)
+                      poller x
+
+      poller (Right timeout) >>= \case
+        Left s -> Prelude.error s
+        Right _ -> pure jobs
+
+    isJobTerminalState js = case js of
+      [] -> False
+      (_, j):_ -> case (Job.jobStatus j) of
+        Job.Failed -> True
+        Job.Success -> True
+        _ -> False
 
 
--- testEverything appPool dbPool = testProperty "test everything" $ property $ do
---   failurePattern <- forAll $ Gen.list (Range.linear 0 20) (Gen.element [1, 2, 3])
---   liftIO $ print failurePattern
---   True === True
---   -- xs <- forAll $ Gen.list (Range.linear 0 100) Gen.alpha
---   -- reverse (reverse xs) === xs
 
--- testPayloadGenerator appPool dbPool = testProperty "test payload generator" $ property $ do
---   pload <- forAll payloadGen
---   liftIO $ print pload
---   True === True
+payloadDelay :: Int -> JobPayload -> Int
+payloadDelay jobPollingInterval pload = payloadDelay_ 0 pload
+  where
+    payloadDelay_ total p = case p of
+      PayloadAlwaysFail x -> total + x + jobPollingInterval
+      PayloadSucceed x -> total + x + jobPollingInterval
+      PayloadFail x ip -> payloadDelay_ (total + x + jobPollingInterval) ip
+
+  -- xs <- forAll $ Gen.list (Range.linear 0 100) Gen.alpha
+  -- reverse (reverse xs) === xs
 
