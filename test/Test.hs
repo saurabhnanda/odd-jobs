@@ -13,11 +13,7 @@ import Control.Exception.Lifted (finally, catch)
 import Control.Monad.Logger
 import Control.Monad.Reader
 import Data.Aeson as Aeson
--- import UnliftIO.Async
--- import UnliftIO.Concurrent
--- import UnliftIO.Exception
 import Control.Concurrent.Lifted
-import  Control.Concurrent.Async (AsyncCancelled(..))
 import Control.Concurrent.Async.Lifted
 import Job (Job(..), JobId)
 import System.Log.FastLogger (fromLogStr, withFastLogger, LogType(..), defaultBufSize, FastLogger, FileLogSpec(..))
@@ -36,14 +32,6 @@ import Control.Monad.Trans.Control (liftWith, restoreT)
 import Control.Monad.Morph (hoist)
 import Data.List as DL
 
-
-
-setupDatabase :: ConnectInfo -> IO ()
-setupDatabase cinfo = pure ()
-  -- do
-  -- conn1 <- connect cinfo{connectDatabase="postgres"}
-  -- finally (void $ PGS.execute_ conn1 "drop database if exists jobs_test; create database jobs_test") (close conn1)
-
 main :: IO ()
 main = do
   let connInfo = ConnectInfo
@@ -53,7 +41,6 @@ main = do
                  , connectPassword = "jobs_test"
                  , connectDatabase = "jobs_test"
                  }
-  setupDatabase connInfo
   appPool <- createPool
     (PGS.connect connInfo)  -- cretea a new resource
     (PGS.close)             -- destroy resource
@@ -68,34 +55,11 @@ main = do
     (fromRational 10)       -- number of seconds unused resources are kept around
     45                     -- maximum open connections
 
-  -- let foo i conn = do
-  --       traceM $ " === executing query in thread " <> show i <> "\n\n"
-  --       void $ PGS.execute_ conn "update jobs set id=id+1 where id < 0"
-  --       threadDelay (oneSec * 5)
-
-  -- void $ forConcurrently [1..50] (\i -> Pool.withResource dbpool (foo i))
-
-  -- defaults <- (Job.defaultJobMonitor jobPool)
-  -- let jobMonitorSettings = defaults{ Job.monitorJobRunner = jobRunner }
-
-  -- withFastLogger (LogFile FileLogSpec{log_file="test.log", log_file_size=1024*1024*10, log_backup_number=5} defaultBufSize) $ \ flogger -> do
-  --   let env = Env { envDbPool = jobPool, envLogger = flogger }
-    -- finally
-    --   (withAsync (Job.runJobMonitor jobMonitorSettings)  (const $ defaultMain $ tests appPool jobPool))
-    --   ((Pool.destroyAllResources appPool) >> (Pool.destroyAllResources jobPool))
-
   defaultMain $ tests appPool jobPool
-
--- tests dbpool = testGroup "All tests" $ (\t -> t dbpool) <$> [simpleJobCreation]
--- tests appPool jobPool = testGroup "All tests"
---   [ testGroup "simple tests" $ (\t -> t appPool) <$> [testJobFailure, testJobCreation, testJobScheduling]
---   , testGroup "property tests" [testPayloadGenerator appPool jobPool] -- [testEverything appPool jobPool]
---   ]
 
 tests appPool jobPool = testGroup "All tests"
   [
     testGroup "simple tests" [testJobCreation appPool jobPool, testJobScheduling appPool jobPool, testJobFailure appPool jobPool, testEnsureShutdown appPool jobPool]
-    -- testGroup "simple tests" [testEnsureShutdown appPool jobPool]
   , testGroup "property tests" [testEverything appPool jobPool]
   ]
 
@@ -129,7 +93,6 @@ instance {-# OVERLAPPING #-} MonadLogger TestM where
   monadLoggerLog _ _ _ msg = do
     flogger <- envLogger <$> ask
     liftIO $ flogger $ toLogStr msg <> toLogStr ("\n" :: String)
-  -- monadLoggerLog _ _ _ _ = pure ()
 
 testPayload :: Value
 testPayload = toJSON (10 :: Int)
@@ -170,11 +133,6 @@ ensureJobId :: (HasCallStack) => Connection -> Job.TableName -> JobId -> IO Job
 ensureJobId conn tname jid = Job.findJobById conn tname jid >>= \case
   Nothing -> error $ "Not expecting job to be deleted. JobId=" <> show jid
   Just j -> pure j
-
--- simpleJobCreation appPool jobPool = testCase "simple job creation" $ do
---   jobs <- (forConcurrently [1..10000] (const $ Pool.withResource appPool $ \conn -> Job.createJob conn testPayload))
---   threadDelay (oneSec * 280)
---   forConcurrently_ jobs $ \Job{jobId} -> Pool.withResource appPool $ \conn -> assertJobIdStatus conn "Expecting job to be completed by now" Job.Success jid
 
 -- withRandomTable :: (MonadIO m) => Pool Connection -> (Job.TableName -> m a) -> m a
 withRandomTable jobPool action = do
@@ -239,8 +197,6 @@ testJobFailure appPool jobPool = testCase "job retry" $ withNewJobMonitor jobPoo
   Job{jobAttempts, jobStatus} <- ensureJobId conn tname jobId
   assertEqual "Exepcting job to be in Failed status" Job.Failed jobStatus
   assertEqual ("Expecting job attempts to be 3. Found " <> show jobAttempts)  3 jobAttempts
-
--- withRandomTableLifted jobPool action = liftWith (\run -> withRandomTable jobPool (run . action)) >>= restoreT . return
 
 data JobEvent = JobStart
               | JobRetry
@@ -336,7 +292,4 @@ payloadDelay jobPollingInterval pload = payloadDelay_ 0 pload
       PayloadAlwaysFail x -> total + x + jobPollingInterval
       PayloadSucceed x -> total + x + jobPollingInterval
       PayloadFail x ip -> payloadDelay_ (total + x + jobPollingInterval) ip
-
-  -- xs <- forAll $ Gen.list (Range.linear 0 100) Gen.alpha
-  -- reverse (reverse xs) === xs
 
