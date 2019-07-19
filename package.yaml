@@ -48,7 +48,9 @@ dependencies:
   - string-conv
   - hostname
   - async
-  
+  - lucid
+  - blaze-builder
+
 library:
   source-dirs:
     - src
@@ -82,3 +84,5 @@ tests:
       - mmorph
       - lifted-base
       - lifted-async
+      - lucid
+      - blaze-builder

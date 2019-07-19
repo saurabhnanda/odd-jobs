@@ -2,8 +2,8 @@
 module Test where
 
 import Test.Tasty as Tasty
-import qualified Migrations
-import qualified Job
+import qualified PGQueue.Migrations as Migrations
+import qualified PGQueue.Job as Job
 import Database.PostgreSQL.Simple as PGS
 import Data.Functor (void)
 import Data.Pool as Pool
@@ -15,7 +15,7 @@ import Control.Monad.Reader
 import Data.Aeson as Aeson
 import Control.Concurrent.Lifted
 import Control.Concurrent.Async.Lifted
-import Job (Job(..), JobId)
+import PGQueue.Job (Job(..), JobId)
 import System.Log.FastLogger (fromLogStr, withFastLogger, LogType(..), defaultBufSize, FastLogger, FileLogSpec(..))
 import Data.String.Conv (toS)
 import Data.Time
@@ -293,3 +293,6 @@ payloadDelay jobPollingInterval pload = payloadDelay_ 0 pload
       PayloadSucceed x -> total + x + jobPollingInterval
       PayloadFail x ip -> payloadDelay_ (total + x + jobPollingInterval) ip
 
+
+
+-- TODO: test to ensure that errors in callback do not affect the running of jobs

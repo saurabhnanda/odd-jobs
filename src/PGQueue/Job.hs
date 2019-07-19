@@ -1,5 +1,5 @@
 {-# LANGUAGE RankNTypes, FlexibleInstances, FlexibleContexts, PartialTypeSignatures, TupleSections #-}
-module Job
+module PGQueue.Job
   ( jobMonitor
   , jobEventListener
   , jobPoller
@@ -20,7 +20,7 @@ module Job
   )
 where
 
-import Types
+import PGQueue.Types
 import Data.Pool
 import Data.Text as T
 import Database.PostgreSQL.Simple as PGS
@@ -38,7 +38,7 @@ import UnliftIO.MVar
 import Debug.Trace
 import Control.Monad.Logger as MLogger
 import UnliftIO.IORef
-import UnliftIO.Exception (SomeException(..), try, catch, finally)
+import UnliftIO.Exception (SomeException(..), try, catch, finally, catchAny)
 import Data.Proxy
 import Control.Monad.Trans.Control
 import Control.Monad.IO.Unlift (MonadUnliftIO, withRunInIO, liftIO)
@@ -270,6 +270,10 @@ saveJob conn tname Job{jobRunAt, jobStatus, jobPayload, jobLastError, jobAttempt
     js -> Prelude.error $ "Not expecting multiple rows to ber returned when updating job id=" <> (show jobId)
 
 
+logCallbackErrors :: (HasJobMonitor m) => JobId -> Text -> m () -> m ()
+logCallbackErrors jid msg action = catchAny action $ \e -> logErrorN $ msg <> " Job ID=" <> toS (show jid) <> ": " <> toS (show e)
+
+
 runJob :: (HasJobMonitor m) => Connection -> JobId -> m ()
 runJob conn jid = do
   tname <- getTableName
@@ -281,7 +285,7 @@ runJob conn jid = do
         Right () -> do
           -- TODO: save job result for future
           newJob <- liftIO $ saveJob conn tname job{jobStatus=Success, jobLockedBy=Nothing, jobLockedAt=Nothing}
-          onJobSuccess newJob
+          logCallbackErrors (jobId newJob) "onSucces" (onJobSuccess newJob)
           pure ()
 
         Left (SomeException e) -> do
@@ -297,8 +301,8 @@ runJob conn jid = do
                                                    , jobRunAt=(addUTCTime (fromIntegral $ (1::Int) ^ (jobAttempts job)) t)
                                                    }
           case (jobStatus newJob) of
-            Failed -> onJobPermanentlyFailed newJob
-            Retry -> onJobRetry newJob
+            Failed -> logCallbackErrors (jobId newJob) "onJobPermanentlyFailed" (onJobPermanentlyFailed newJob)
+            Retry -> logCallbackErrors (jobId newJob) "onJobRetry" (onJobRetry newJob)
             x -> Prelude.error $ "Unexpected job status = " <> show x
           pure ()
 
@@ -333,40 +337,6 @@ jobMonitor = jobMonitor_ Nothing Nothing
           jobMonitor_ (Just pollerAsync) Nothing
 
 
--- jobMonitor :: (HasJobMonitor m) => JobRunner -> m ()
--- jobMonitor jobRunner = do
---   eventListenerAsync <- async (jobEventListener jobRunner)
---   jobPollerAsync <- async (jobPoller jobRunner)
---   eventListenerRef <- newIORef eventListenerAsync
---   jobPollerRef <- newIORef jobPollerAsync
---   let jobMonitor_ = forever $ do
---         elAsync <- readIORef eventListenerRef
---         jpAsync <- readIORef jobPollerRef
---         waitEitherCatch elAsync jpAsync >>= \case
---           Left eventListenerResult -> do
---             traceM "\n\n === event listener crashed == \n\n"
---             case eventListenerResult of
---               Left (SomeException e) -> logErrorN $ "Job queue (event listener) failed due to" <> toS (show e)
---               Right x -> logErrorN $ "Job queue (event listener) somehow exited the forever loop with value: " <> toS (show x)
---             newAsync <- async (jobEventListener jobRunner)
---             atomicModifyIORef eventListenerRef (const (newAsync, ()))
-
---           Right jobPollerResult -> do
---             traceM "\n\n === job poller crashed == \n\n"
---             case jobPollerResult of
---               Left (SomeException e) -> logErrorN $ "Job queue (job poller) failed due to" <> toS (show e)
---               Right x -> logErrorN $ "Job queue (job poller) somehow exited the forever loop with value: " <> toS (show x)
---             newAsync <- async (jobPoller jobRunner)
---             atomicModifyIORef jobPollerRef (const (newAsync, ()))
-
---   catch jobMonitor_ $ \(e :: AsyncException) -> do
---     logInfoN $ "Shutting down job-poller and job-event-listener due to " <> (toS $ show e)
---     elAsync <- readIORef eventListenerRef
---     jpAsync <- readIORef jobPollerRef
---     cancel elAsync
---     cancel jpAsync
-
-
 jobPollingSql :: TableName -> Query
 jobPollingSql tname = "update " <> tname <> " set locked_at = ?, locked_by = ?, attempts=attempts+1 WHERE id in (select id from " <> tname <> " where (run_at<=? AND ((locked_at is null AND locked_by is null AND status in ?) OR (locked_at<?))) ORDER BY run_at ASC LIMIT 1 FOR UPDATE) RETURNING id"
 
@@ -380,7 +350,7 @@ jobPoller = do
   withResource pool $ \pollerDbConn -> forever $ do
     logInfoN $ toS $ "[" <> show processName <> "] Polling the job queue.."
     t <- liftIO getCurrentTime
-    (liftIO $ PGS.query pollerDbConn (jobPollingSql tname) (t, processName, t, (In [Job.Queued, Job.Retry]), (addUTCTime (fromIntegral (-lockTimeout)) t))) >>= \case
+    (liftIO $ PGS.query pollerDbConn (jobPollingSql tname) (t, processName, t, (In [Queued, Retry]), (addUTCTime (fromIntegral (-lockTimeout)) t))) >>= \case
       -- When we don't have any jobs to run, we can relax a bit...
       [] -> threadDelay defaultPollingInterval
 

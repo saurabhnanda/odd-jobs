@@ -1,12 +1,12 @@
-module Migrations
-  ( module Migrations
-  , module Types
+module PGQueue.Migrations
+  ( module PGQueue.Migrations
+  , module PGQueue.Types
   )
 where
 
 import Database.PostgreSQL.Simple as PGS
 import Data.Functor (void)
-import Types
+import PGQueue.Types
 
 createJobTableQuery :: TableName -> Query
 createJobTableQuery tname = "CREATE TABLE " <> tname <>

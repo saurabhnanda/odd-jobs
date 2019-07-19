@@ -1,4 +1,4 @@
-module Types where
+module PGQueue.Types where
 
 import Database.PostgreSQL.Simple as PGS
 
