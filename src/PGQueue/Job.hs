@@ -154,7 +154,10 @@ data Status = Success
             | Queued
             | Failed
             | Retry
-            deriving (Eq, Show, Generic, Enum, Ord)
+            deriving (Eq, Show, Generic, Enum)
+
+instance Ord Status where
+  compare x y = compare (toText x) (toText y)
 
 data Job = Job
   { jobId :: JobId

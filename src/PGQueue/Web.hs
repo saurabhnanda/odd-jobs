@@ -12,6 +12,7 @@ import Database.PostgreSQL.Simple.ToRow as PGS
 import Database.PostgreSQL.Simple.ToField as PGS
 import Data.Pool as Pool
 import UnliftIO
+import Data.Maybe
 
 data OrderDirection = Asc | Desc deriving (Eq, Show, Generic, Enum)
 
@@ -74,10 +75,22 @@ data WrappedToRow = forall a . ToRow a => WrappedToRow a
 
 filterJobsQuery :: TableName -> Filter -> (PGS.Query, [Action])
 filterJobsQuery tname Filter{filterStatuses, filterCreatedBefore, filterCreatedAfter, filterUpdatedBefore, filterUpdatedAfter, filterJobTypes, filterOrder} =
-  ( "SELECT " <> Job.concatJobDbColumns <> " FROM " <> tname <> whereClause -- <> " ORDER BY " <> orderClause
+  ( "SELECT " <> Job.concatJobDbColumns <> " FROM " <> tname <> whereClause <> " " <> (orderClause $ fromMaybe (OrdUpdatedAt, Desc) filterOrder)
   , whereActions
   )
   where
+    orderClause (flt, dir) =
+      let fname = case flt of
+            OrdCreatedAt -> "created_at"
+            OrdUpdatedAt -> "updated_at"
+            OrdLockedAt -> "locked_at"
+            OrdStatus -> "status"
+            OrdJobType -> "payload->>'tag'"
+          dname = case dir of
+            Asc -> "asc nulls first"
+            Desc -> "desc nulls last"
+      in "ORDER BY " <> fname <> " " <> dname <> ", id desc"
+
 
     (whereClause, whereActions) = case statusClause `and` createdAfterClause `and` createdBeforeClause `and` updatedBeforeClause `and` updatedAfterClause `and` jobTypeClause of
       Nothing -> (mempty, toRow ())

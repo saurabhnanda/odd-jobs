@@ -33,8 +33,9 @@ import Data.List as DL
 import PGQueue.Web as Web
 import Data.Time.Convenience as Time
 import qualified Data.Text as T
-import Data.Ord (comparing)
+import Data.Ord (comparing, Down(..))
 import Data.Maybe (fromMaybe)
+import qualified Data.HashMap.Strict as HM
 
 main :: IO ()
 main = do
@@ -363,7 +364,7 @@ genFilter t = do
   updatedBefore  <- case updatedAfter of
     Nothing -> Gen.maybe (anyTimeGen t)
     Just x -> Gen.maybe (futureTimeGen x)
-  orderClause <- Gen.maybe ((,) <$> (Gen.element [Web.OrdCreatedAt, Web.OrdUpdatedAt, Web.OrdLockedAt, Web.OrdStatus]) <*> (Gen.element $ enumFrom Web.Asc))
+  orderClause <- Gen.maybe ((,) <$> (Gen.element $ enumFrom Web.OrdCreatedAt) <*> (Gen.element $ enumFrom Web.Asc))
   pure Web.blankFilter
     { filterStatuses = statuses
     , filterCreatedAfter = createdAfter
@@ -372,6 +373,13 @@ genFilter t = do
     , filterUpdatedBefore = updatedBefore
     , filterOrder = orderClause
     }
+
+jobType :: Job -> T.Text
+jobType Job{jobPayload} = case jobPayload of
+  Aeson.Object hm -> case HM.lookup "tag" hm of
+    Just (Aeson.String t) -> t
+    _ -> ""
+  _ -> ""
 
 filterJobs :: Filter -> [Job] -> [Job]
 filterJobs Web.Filter{filterStatuses, filterCreatedAfter, filterCreatedBefore, filterUpdatedAfter, filterUpdatedBefore, filterOrder} js =
@@ -383,16 +391,21 @@ filterJobs Web.Filter{filterStatuses, filterCreatedAfter, filterCreatedBefore, f
                               (filterByUpdatedBefore j)
   where
     applyOrdering (fld, dir) lst =
-      let comparer = case fld of
-            Web.OrdCreatedAt -> comparing jobCreatedAt
-            Web.OrdUpdatedAt -> comparing jobUpdatedAt
-            Web.OrdLockedAt -> comparing jobLockedAt
-            Web.OrdStatus -> comparing jobStatus
-            Web.OrdJobType -> Prelude.error "not implemented" -- comparing (\j -> jobPayload
-          resultOrder = case dir of
-            Web.Asc -> Prelude.id
-            Web.Desc -> Prelude.reverse
-      in resultOrder $ sortBy comparer lst
+      let comparer = resultOrder $ case fld of
+            Web.OrdCreatedAt -> (comparing jobCreatedAt)
+            Web.OrdUpdatedAt -> (comparing jobUpdatedAt)
+            Web.OrdLockedAt -> (comparing jobLockedAt)
+            Web.OrdStatus -> (comparing jobStatus)
+            Web.OrdJobType -> comparing jobType
+          resultOrder fn = \x y -> case fn x y of
+            EQ -> compare (Down $ jobId x) (Down $ jobId y)
+            LT -> case dir of
+              Web.Asc -> LT
+              Web.Desc -> GT
+            GT -> case dir of
+              Web.Asc -> GT
+              Web.Desc -> LT
+      in sortBy comparer lst
 
     filterByStatus Job.Job{jobStatus} = if Prelude.null filterStatuses
                                         then True
