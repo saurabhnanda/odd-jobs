@@ -50,13 +50,15 @@ dependencies:
   - async
   - lucid
   - blaze-builder
+  - timing-convenience
 
 library:
   source-dirs:
     - src
   exposed-modules:
-    - Job
-    - Migrations
+    - PGQueue.Job
+    - PGQueue.Migrations
+    - PGQueue.Web
 
 # executables:
 #   haskell-pg-queue:
@@ -75,14 +77,9 @@ tests:
       - tasty-hedgehog
       - haskell-pg-queue
       - tasty-hunit
-      - fast-logger
       - random
-      - containers
-      - resourcet
       - monad-control
-      - async
       - mmorph
       - lifted-base
       - lifted-async
-      - lucid
-      - blaze-builder
+      - containers

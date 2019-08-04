@@ -1,4 +1,4 @@
-{-# LANGUAGE RankNTypes, FlexibleInstances, FlexibleContexts, PartialTypeSignatures, TupleSections #-}
+{-# LANGUAGE RankNTypes, FlexibleInstances, FlexibleContexts, PartialTypeSignatures, TupleSections, DeriveGeneric #-}
 module PGQueue.Job
   ( jobMonitor
   , jobEventListener
@@ -17,6 +17,8 @@ module PGQueue.Job
   , defaultJobMonitor
   , runJobMonitor
   , TableName
+  , jobDbColumns
+  , concatJobDbColumns
   )
 where
 
@@ -55,6 +57,7 @@ import Data.Either (either)
 import System.Log.FastLogger (fromLogStr, newTimedFastLogger, LogType(..), defaultBufSize, FastLogger, FileLogSpec(..), TimedFastLogger)
 import System.Log.FastLogger.Date (newTimeCache, simpleTimeFormat')
 import Control.Monad.Reader
+import GHC.Generics
 
 class (MonadUnliftIO m, MonadBaseControl IO m, MonadLogger m) => HasJobMonitor m where
   getPollingInterval :: m Int
@@ -119,8 +122,8 @@ defaultLogger = do
   tcache <- newTimeCache simpleTimeFormat'
   newTimedFastLogger tcache (LogStdout defaultBufSize)
 
-defaultJobMonitor :: Pool Connection -> IO (JobMonitor, IO ())
-defaultJobMonitor dbpool = do
+defaultJobMonitor :: TableName -> Pool Connection -> IO (JobMonitor, IO ())
+defaultJobMonitor tname dbpool = do
   (logger, cleanup) <- defaultLogger
   pure $ (, cleanup) JobMonitor
     { monitorPollingInterval = defaultPollingInterval
@@ -135,6 +138,7 @@ defaultJobMonitor dbpool = do
     , monitorDbPool = dbpool
     , monitorOnJobStart = (const $ pure ())
     , monitorDefaultMaxAttempts = 10
+    , monitorTableName = tname
   }
 
 
@@ -150,7 +154,7 @@ data Status = Success
             | Queued
             | Failed
             | Retry
-            deriving (Eq, Show)
+            deriving (Eq, Show, Generic, Enum, Ord)
 
 data Job = Job
   { jobId :: JobId

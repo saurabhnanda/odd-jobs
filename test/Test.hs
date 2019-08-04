@@ -1,4 +1,4 @@
-{-# LANGUAGE TypeSynonymInstances, FlexibleInstances, NamedFieldPuns, DeriveGeneric, FlexibleContexts, TypeFamilies #-}
+{-# LANGUAGE TypeSynonymInstances, FlexibleInstances, NamedFieldPuns, DeriveGeneric, FlexibleContexts, TypeFamilies, StandaloneDeriving #-}
 module Test where
 
 import Test.Tasty as Tasty
@@ -27,10 +27,14 @@ import Test.Tasty.Hedgehog
 import qualified System.Random as R
 import Data.String (fromString)
 import qualified Data.IntMap.Strict as Map
-import Control.Monad.Trans.Resource (runResourceT)
 import Control.Monad.Trans.Control (liftWith, restoreT)
 import Control.Monad.Morph (hoist)
 import Data.List as DL
+import PGQueue.Web as Web
+import Data.Time.Convenience as Time
+import qualified Data.Text as T
+import Data.Ord (comparing)
+import Data.Maybe (fromMaybe)
 
 main :: IO ()
 main = do
@@ -60,7 +64,10 @@ main = do
 tests appPool jobPool = testGroup "All tests"
   [
     testGroup "simple tests" [testJobCreation appPool jobPool, testJobScheduling appPool jobPool, testJobFailure appPool jobPool, testEnsureShutdown appPool jobPool]
-  , testGroup "property tests" [testEverything appPool jobPool]
+  , testGroup "property tests" [
+      -- testEverything appPool jobPool,
+        propFilterJobs appPool jobPool
+      ]
   ]
 
 myTestCase
@@ -145,7 +152,7 @@ withRandomTable jobPool action = do
 withNewJobMonitor jobPool actualTest = withRandomTable jobPool $ \tname -> withNamedJobMonitor tname jobPool (actualTest tname)
 
 withNamedJobMonitor tname jobPool actualTest = do
-  (defaults, cleanup) <- (Job.defaultJobMonitor jobPool)
+  (defaults, cleanup) <- (Job.defaultJobMonitor tname jobPool)
   let jobMonitorSettings = defaults{ Job.monitorJobRunner = jobRunner
                                    , Job.monitorTableName = tname
                                    , Job.monitorDefaultMaxAttempts = 3
@@ -206,11 +213,10 @@ data JobEvent = JobStart
 
 testEverything appPool jobPool = testProperty "test everything" $ property $ do
   jobPayloads <- forAll $ Gen.list (Range.linear 1 1000) payloadGen
-  traceM $ show jobPayloads
-  (defaults, cleanup) <- liftIO $ Job.defaultJobMonitor jobPool
   jobsMVar <- liftIO $ newMVar (Map.empty :: Map.IntMap [(JobEvent, Job.Job)])
 
   test $ withRandomTable jobPool $ \tname -> do
+    (defaults, cleanup) <- liftIO $ Job.defaultJobMonitor tname jobPool
     let jobMonitorSettings = defaults { Job.monitorJobRunner = jobRunner
                                       , Job.monitorTableName = tname
                                       , Job.monitorOnJobStart = onJobEvent JobStart jobsMVar
@@ -296,3 +302,103 @@ payloadDelay jobPollingInterval pload = payloadDelay_ 0 pload
 
 
 -- TODO: test to ensure that errors in callback do not affect the running of jobs
+
+deriving instance Enum Time.Unit
+deriving instance Enum Time.Direction
+
+timeGen :: MonadGen m => UTCTime -> Time.Direction -> m UTCTime
+timeGen t d = do
+  u <- Gen.enum Time.Seconds Time.Fortnights
+  -- d <- Gen.element $ enumFrom Time.Ago
+  i <- Gen.integral (Range.constant 0 10)
+  pure $ timeSince t (fromInteger i) u d
+
+anyTimeGen :: MonadGen m => UTCTime -> m UTCTime
+anyTimeGen t = (Gen.element (enumFrom Time.Ago)) >>= (timeGen t)
+
+futureTimeGen :: MonadGen m => UTCTime -> m UTCTime
+futureTimeGen t = timeGen t Time.FromThat
+
+pastTimeGen :: MonadGen m => UTCTime -> m UTCTime
+pastTimeGen t = timeGen t Time.Ago
+
+jobGen :: (MonadGen m) => UTCTime -> m (UTCTime, UTCTime, UTCTime, Job.Status, Aeson.Value, Int, Maybe UTCTime, Maybe T.Text)
+jobGen t = do
+  createdAt <- anyTimeGen t
+  updatedAt <- futureTimeGen createdAt
+  runAt <- futureTimeGen createdAt
+  status <- Gen.element $ enumFrom Job.Success
+  pload <- payloadGen
+  attempts <- Gen.int (Range.constant 0 10)
+  (lockedAt, lockedBy) <- Gen.maybe ((,) <$> (futureTimeGen createdAt) <*> (Gen.text (Range.constant 1 100) Gen.ascii)) >>= \case
+    Nothing -> pure (Nothing, Nothing)
+    Just (x, y) -> pure (Just x, Just y)
+  pure (createdAt, updatedAt, runAt, status, toJSON pload, attempts, lockedAt, lockedBy)
+
+propFilterJobs appPool jobPool = testProperty "filter jobs" $ property $ do
+  t <- liftIO getCurrentTime
+  jobs <- forAll $ Gen.list (Range.linear 1 1000) (jobGen t)
+  f <- forAll $ genFilter t
+  test $ withRandomTable jobPool $ \tname -> do
+    (savedJobs, dbJobs) <- liftIO $ do
+      savedJobs <- Pool.withResource appPool $ \conn -> forM jobs $ \j -> (PGS.query conn (qry tname) j) >>= (pure . Prelude.head)
+      (jm, cleanup) <- liftIO $ Job.defaultJobMonitor tname jobPool
+      dbJobs <- (flip finally) cleanup $ (flip runReaderT) jm $ Web.filterJobs f
+      pure (savedJobs, dbJobs)
+    let testJobs = Test.filterJobs f savedJobs
+    -- (sortBy (comparing jobId) dbJobs) === (sortBy (comparing jobId) testJobs)
+    dbJobs === testJobs
+  where
+    qry tname = "INSERT INTO " <> tname <> " (created_at, updated_at, run_at, status, payload, attempts, locked_at, locked_by) values(?, ?, ?, ?, ?, ?, ?, ?) RETURNING " <> Job.concatJobDbColumns
+
+
+genFilter :: MonadGen m => UTCTime -> m Web.Filter
+genFilter t = do
+  statuses <- Gen.list (Range.constant 0 2) (Gen.element $ enumFrom Job.Success)
+  createdAfter <- Gen.maybe (anyTimeGen t)
+  createdBefore <- case createdAfter of
+    Nothing -> Gen.maybe (anyTimeGen t)
+    Just x -> Gen.maybe (futureTimeGen x)
+  updatedAfter  <- Gen.maybe (anyTimeGen t)
+  updatedBefore  <- case updatedAfter of
+    Nothing -> Gen.maybe (anyTimeGen t)
+    Just x -> Gen.maybe (futureTimeGen x)
+  orderClause <- Gen.maybe ((,) <$> (Gen.element [Web.OrdCreatedAt, Web.OrdUpdatedAt, Web.OrdLockedAt, Web.OrdStatus]) <*> (Gen.element $ enumFrom Web.Asc))
+  pure Web.blankFilter
+    { filterStatuses = statuses
+    , filterCreatedAfter = createdAfter
+    , filterCreatedBefore = createdBefore
+    , filterUpdatedAfter = updatedAfter
+    , filterUpdatedBefore = updatedBefore
+    , filterOrder = orderClause
+    }
+
+filterJobs :: Filter -> [Job] -> [Job]
+filterJobs Web.Filter{filterStatuses, filterCreatedAfter, filterCreatedBefore, filterUpdatedAfter, filterUpdatedBefore, filterOrder} js =
+  applyOrdering (fromMaybe (Web.OrdUpdatedAt, Web.Desc) filterOrder) $
+  (flip DL.filter) js $ \j -> (filterByStatus j) &&
+                              (filterByCreatedAfter j) &&
+                              (filterByCreatedBefore j) &&
+                              (filterByUpdatedAfter j) &&
+                              (filterByUpdatedBefore j)
+  where
+    applyOrdering (fld, dir) lst =
+      let comparer = case fld of
+            Web.OrdCreatedAt -> comparing jobCreatedAt
+            Web.OrdUpdatedAt -> comparing jobUpdatedAt
+            Web.OrdLockedAt -> comparing jobLockedAt
+            Web.OrdStatus -> comparing jobStatus
+            Web.OrdJobType -> Prelude.error "not implemented" -- comparing (\j -> jobPayload
+          resultOrder = case dir of
+            Web.Asc -> Prelude.id
+            Web.Desc -> Prelude.reverse
+      in resultOrder $ sortBy comparer lst
+
+    filterByStatus Job.Job{jobStatus} = if Prelude.null filterStatuses
+                                        then True
+                                        else jobStatus `elem` filterStatuses
+    filterByCreatedAfter Job.Job{jobCreatedAt} = maybe True (<= jobCreatedAt) filterCreatedAfter
+    filterByCreatedBefore Job.Job{jobCreatedAt} = maybe True (> jobCreatedAt) filterCreatedBefore
+    filterByUpdatedAfter Job.Job{jobUpdatedAt} = maybe True (<= jobUpdatedAt) filterUpdatedAfter
+    filterByUpdatedBefore Job.Job{jobUpdatedAt} = maybe True (> jobUpdatedAt) filterUpdatedBefore
+
