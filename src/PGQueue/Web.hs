@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveGeneric, NamedFieldPuns #-}
+{-# LANGUAGE DeriveGeneric, NamedFieldPuns, TypeOperators, DataKinds #-}
 module PGQueue.Web where
 
 import PGQueue.Types
@@ -14,6 +14,13 @@ import Data.Pool as Pool
 import UnliftIO
 import Data.Maybe
 import Data.String (fromString)
+import Control.Applicative ((<|>))
+import Data.List (nub)
+import Servant
+import Servant.API.Generic
+import Servant.HTML.Lucid
+import Lucid
+import Data.String.Conv
 
 data OrderDirection = Asc | Desc deriving (Eq, Show, Generic, Enum)
 
@@ -34,6 +41,21 @@ data Filter = Filter
   , filterOrder :: Maybe (OrderByField, OrderDirection)
   , filterPage :: Maybe (Int, Int)
   } deriving (Eq, Show, Generic)
+
+instance Semigroup Filter where
+  (<>) a b = Filter
+    { filterStatuses = nub (filterStatuses b <> filterStatuses a)
+    , filterCreatedAfter = filterCreatedAfter b <|> filterCreatedAfter a
+    , filterCreatedBefore = filterCreatedBefore b <|> filterCreatedBefore a
+    , filterUpdatedAfter = filterUpdatedAfter b <|> filterUpdatedBefore a
+    , filterUpdatedBefore = filterUpdatedBefore b <|> filterUpdatedBefore a
+    , filterJobTypes = nub (filterJobTypes b <> filterJobTypes a)
+    , filterOrder = filterOrder b <|> filterOrder a
+    , filterPage = filterPage b <|> filterPage a
+    }
+
+instance Monoid Filter where
+  mempty = blankFilter
 
 blankFilter :: Filter
 blankFilter = Filter
@@ -60,6 +82,20 @@ instance ToJSON Filter where
   toJSON = Aeson.genericToJSON  Aeson.defaultOptions{omitNothingFields = True}
 instance FromJSON Filter where
   parseJSON = Aeson.genericParseJSON Aeson.defaultOptions{omitNothingFields = True}
+
+
+instance FromHttpApiData Filter where
+  parseQueryParam x = case eitherDecode (toS x) of
+    Left e -> Left $ toS e
+    Right r -> Right r
+
+instance ToHttpApiData Filter where
+  toQueryParam x = toS $ Aeson.encode x
+
+data Routes route = Routes
+  { rFilterResults :: route :- QueryParam "filters" Filter :> Get '[HTML] (Html ())
+  , rStaticAssets :: route :- "assets" :> Raw
+  } deriving (Generic)
 
 
 filterJobsQuery :: TableName -> Filter -> (PGS.Query, [Action])

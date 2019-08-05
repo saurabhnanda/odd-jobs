@@ -1,4 +1,4 @@
-{-# LANGUAGE TypeOperators, DeriveGeneric, NamedFieldPuns, DataKinds #-}
+{-# LANGUAGE TypeOperators, DeriveGeneric, NamedFieldPuns, DataKinds, StandaloneDeriving, FlexibleContexts #-}
 
 module PGQueue.Endpoints where
 
@@ -29,11 +29,11 @@ import Data.Time.Format.Human as Time
 import Data.Aeson as Aeson
 import qualified Data.HashMap.Strict as HM
 import GHC.Exts (toList)
-
-data Routes route = Routes
-  { rFilterResults :: route :- Get '[HTML] (Html ())
-  , rStaticAssets :: route :- "assets" :> Raw
-  } deriving (Generic)
+import Data.Maybe (fromMaybe)
+import Data.Text.Conversions (fromText, toText)
+import Control.Applicative ((<|>))
+import Data.Time.Convenience as Time
+import qualified PGQueue.Links as Links
 
 startApp :: IO ()
 startApp = do
@@ -73,19 +73,22 @@ server = Routes
   , rStaticAssets = serveDirectoryFileServer "assets"
   }
 
+
 withDbConnection :: HasJobMonitor m
                  => (Connection -> m a)
                  -> m a
 withDbConnection fn = getDbPool >>= \pool -> Pool.withResource pool fn
 
 filterResults :: HasJobMonitor m
-              => m (Html ())
-filterResults = do
-  jobs <- withDbConnection $ \conn -> filterJobs blankFilter
+              => Maybe Filter
+              -> m (Html ())
+filterResults mFilter = do
+  let filters = fromMaybe mempty mFilter
+  jobs <- withDbConnection $ \conn -> filterJobs filters
   t <- liftIO getCurrentTime
   pure $ pageLayout $ do
-    searchBar
-    resultsPanel t jobs
+    searchBar t filters
+    resultsPanel t filters jobs
 
 
 pageNav :: Html ()
@@ -133,28 +136,37 @@ pageLayout inner = do
       script_ [ src_ "https://cdnjs.cloudflare.com/ajax/libs/slick-carousel/1.6.0/slick.js" ] $ ("" :: Text)
       script_ [ src_ "assets/js/logo-slider.js" ] $ ("" :: Text)
 
-searchBar :: Html ()
-searchBar = do
+searchBar :: UTCTime -> Filter -> Html ()
+searchBar t filter@Filter{filterStatuses, filterCreatedAfter, filterCreatedBefore, filterUpdatedAfter, filterUpdatedBefore, filterJobTypes} = do
   form_ [ style_ "padding-top: 2em;" ] $ do
     div_ [ class_ "form-group" ] $ do
       div_ [ class_ "search-container" ] $ do
         ul_ [ class_ "list-inline search-bar" ] $ do
-          -- li_ [ class_ "search-filter" ] $ do
-          --   span_ [ class_ "filter-name" ] $ "Status"
-          --   span_ [ class_ "filter-value" ] $ do
-          --     "Currently running"
-          --     a_ [ href_ "#", class_ "text-danger" ] $ i_ [ class_ "glyphicon glyphicon-remove" ] $ ""
-          li_ [ class_ "search-filter" ] $ ""
+          forM_ filterStatuses $ \s -> renderFilter "Status" (toText s) "#"
+          maybe mempty (\x -> renderFilter "Created after" (showText x) "#") filterCreatedAfter
+          maybe mempty (\x -> renderFilter "Created before" (showText x) "#") filterCreatedBefore
+          maybe mempty (\x -> renderFilter "Updated after" (showText x) "#") filterUpdatedAfter
+          maybe mempty (\x -> renderFilter "Updated before" (showText x) "#") filterUpdatedBefore
+          forM_ filterJobTypes $ \x -> renderFilter "Job type" x "#"
+
         button_ [ class_ "btn btn-default search-button", type_ "button" ] $ "Search"
       ul_ [ class_ "list-inline" ] $ do
         li_ $ span_ $ strong_ "Common searches:"
-        li_ $ a_ [ href_ "#" ] $ "All jobs"
+        li_ $ a_ [ href_ (Links.rFilterResults $ Just mempty) ] $ "All jobs"
         li_ $ a_ [ href_ "#" ] $ "Currently running"
-        li_ $ a_ [ href_ "#" ] $ "Successful"
-        li_ $ a_ [ href_ "#" ] $ "Failed"
-        li_ $ a_ [ href_ "#" ] $ "Future"
+        li_ $ a_ [ href_ (Links.rFilterResults $ Just $ filter <> mempty{ filterStatuses = [Job.Success] }) ] $ "Successful"
+        li_ $ a_ [ href_ (Links.rFilterResults $ Just $ filter <> mempty{ filterStatuses = [Job.Failed] }) ] $ "Failed"
+        li_ $ a_ [ href_ (Links.rFilterResults $ Just $ filter <> mempty{ filterStatuses = [Job.Queued] }) ] $ "Future"
         li_ $ a_ [ href_ "#" ] $ "Retried"
-        li_ $ a_ [ href_ "#" ] $ "Last 10 mins"
+        li_ $ a_ [ href_ (Links.rFilterResults $ Just $ filter <> mempty{ filterUpdatedAfter = Just $ timeSince t 10 Minutes Ago }) ] $ "Last 10 mins"
+  where
+    renderFilter :: Text -> Text -> Text -> Html ()
+    renderFilter k v u = do
+      li_ [ class_ "search-filter" ] $ do
+        span_ [ class_ "filter-name" ] $ toHtml k
+        span_ [ class_ "filter-value" ] $ do
+          toHtml v
+          a_ [ href_ u, class_ "text-danger" ] $ i_ [ class_ "glyphicon glyphicon-remove" ] $ ""
 
 
 timeDuration :: UTCTime -> UTCTime -> (Int, String)
@@ -376,8 +388,8 @@ rowLocked = do
     td_ "Text"
     td_ $ button_ [ class_ "btn btn-default", type_ "button" ] $ "Unlock"
 
-resultsPanel :: UTCTime -> [Job] -> Html ()
-resultsPanel t jobs = do
+resultsPanel :: UTCTime -> Filter -> [Job] -> Html ()
+resultsPanel t filter@Filter{filterPage} jobs = do
   div_ [ class_ "panel panel-default" ] $ do
     div_ [ class_ "panel-heading" ] $ h3_ [ class_ "panel-title" ] $ do
       "Currently running"
@@ -399,8 +411,13 @@ resultsPanel t jobs = do
         -- rowRetry
         -- rowFailed
     div_ [ class_ "panel-footer" ] $ nav_ $ ul_ [ class_ "pager", style_ "margin:0px;" ] $ do
-      li_ [ class_ "previous" ] $ a_ [ href_ "#" ] $ "Prev"
-      li_ [ class_ "next" ] $ a_ [ href_ "#" ] $ "Next"
+      li_ [ class_ "previous" ] $ case filterPage of
+        Nothing -> a_ [ disabled_ "disabled" ] $ "Prev"
+        Just (l, 0) -> a_ [ disabled_ "disabled" ] $ "Prev"
+        Just (l, o) -> a_ [ href_ (Links.rFilterResults $ Just $ filter {filterPage = Just (l, max 0 $ o - l)}) ] $ "Prev"
+      li_ [ class_ "next" ] $ case filterPage of
+        Nothing -> a_ [ href_ (Links.rFilterResults $ Just $ filter {filterPage = Just (10, 10)}) ] $ "Next"
+        Just (l, o) -> a_ [ href_ (Links.rFilterResults $ Just $ filter {filterPage = Just (l, o + l)}) ] $ "Next"
 
 
 ariaExpanded_ :: Text -> Attribute

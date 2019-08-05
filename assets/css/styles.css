@@ -73,7 +73,8 @@ ul.nav.nav-pills.job-type-nav > li > a {
 }
 
 ul.search-bar > li.search-filter {
-  padding:0px;
+    padding:0px;
+    margin-right: 0.5em;
 }
 
 .filter-value i.glyphicon {

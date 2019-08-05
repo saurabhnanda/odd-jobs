@@ -1,4 +1,4 @@
-{-# LANGUAGE RankNTypes, FlexibleInstances, FlexibleContexts, PartialTypeSignatures, TupleSections, DeriveGeneric #-}
+{-# LANGUAGE RankNTypes, FlexibleInstances, FlexibleContexts, PartialTypeSignatures, TupleSections, DeriveGeneric, UndecidableInstances #-}
 module PGQueue.Job
   ( jobMonitor
   , jobEventListener
@@ -50,7 +50,7 @@ import Data.Time
 import Data.Aeson hiding (Success)
 import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.Types as Aeson (Parser, parseMaybe)
-import Data.String.Conv (toS)
+import Data.String.Conv (StringConv(..), toS)
 import Data.Functor (void)
 import Control.Monad (forever)
 import Data.Maybe (isNothing)
@@ -181,13 +181,13 @@ instance ToText Status where
     Retry -> "retry"
     Failed -> "failed"
 
-instance FromText (Either String Status) where
+instance (StringConv Text a) => FromText (Either a Status) where
   fromText t = case t of
     "success" -> Right Success
     "queued" -> Right Queued
     "failed" -> Right Failed
     "retry" -> Right Retry
-    x -> Left $ "Unknown job status: " <> toS x
+    x -> Left $ toS $ "Unknown job status: " <> x
 
 instance FromField Status where
   fromField f mBS = (fromText <$> (fromField f mBS)) >>= \case
