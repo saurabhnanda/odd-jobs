@@ -19,6 +19,7 @@ module PGQueue.Job
   , TableName
   , jobDbColumns
   , concatJobDbColumns
+  , jobType
   )
 where
 
@@ -58,6 +59,7 @@ import System.Log.FastLogger (fromLogStr, newTimedFastLogger, LogType(..), defau
 import System.Log.FastLogger.Date (newTimeCache, simpleTimeFormat')
 import Control.Monad.Reader
 import GHC.Generics
+import qualified Data.HashMap.Strict as HM
 
 class (MonadUnliftIO m, MonadBaseControl IO m, MonadLogger m) => HasJobMonitor m where
   getPollingInterval :: m Int
@@ -445,3 +447,11 @@ scheduleJob conn tname payload runAt = do
     [] -> (Prelude.error . (<> "Not expecting a blank result set when creating a job. Query=")) <$> queryFormatter
     [r] -> pure r
     _ -> (Prelude.error . (<> "Not expecting multiple rows when creating a single job. Query=")) <$> queryFormatter 
+
+
+jobType :: Job -> T.Text
+jobType Job{jobPayload} = case jobPayload of
+  Aeson.Object hm -> case HM.lookup "tag" hm of
+    Just (Aeson.String t) -> t
+    _ -> ""
+  _ -> ""

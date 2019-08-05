@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveGeneric, NamedFieldPuns, RankNTypes, ExistentialQuantification #-}
+{-# LANGUAGE DeriveGeneric, NamedFieldPuns #-}
 module PGQueue.Web where
 
 import PGQueue.Types
@@ -44,19 +44,9 @@ blankFilter = Filter
   , filterUpdatedBefore = Nothing
   , filterJobTypes = []
   , filterOrder = Nothing
+  , filterPage = Just (10, 0)
   }
 
-
--- data FilterTerm = FTStatuses [Status]
---                 | FTCreatedAfter UTCTime
---                 | FTCreatedBefore UTCTime
---                 | FTUpdatedAfter UTCTime
---                 | FTUpdatedBefore UTCTime
---                 | FTJobType Text
---                 | FTOrderBy OrderByField OrderDirection
---                 deriving (Eq, Show, Generic)
-
--- type Filter = [FilterTerm]
 
 instance ToJSON Status
 instance FromJSON Status
@@ -65,15 +55,12 @@ instance ToJSON OrderDirection
 instance FromJSON OrderDirection
 instance ToJSON OrderByField
 instance FromJSON OrderByField
--- instance ToJSON FilterTerm
--- instance FromJSON FilterTerm
+
 instance ToJSON Filter where
   toJSON = Aeson.genericToJSON  Aeson.defaultOptions{omitNothingFields = True}
 instance FromJSON Filter where
   parseJSON = Aeson.genericParseJSON Aeson.defaultOptions{omitNothingFields = True}
 
-
-data WrappedToRow = forall a . ToRow a => WrappedToRow a
 
 filterJobsQuery :: TableName -> Filter -> (PGS.Query, [Action])
 filterJobsQuery tname Filter{filterStatuses, filterCreatedBefore, filterCreatedAfter, filterUpdatedBefore, filterUpdatedAfter, filterJobTypes, filterOrder, filterPage} =
@@ -140,7 +127,7 @@ filterJobs f = do
 
 -- f = encode [FTStatuses [Job.Success, Queued], FTJobType "QueuedMail"]
 
-f = blankFilter
-  { filterStatuses = [Job.Success, Queued]
-  , filterJobTypes = ["QueuedMail", "ConfirmBooking"]
-  }
+-- f = blankFilter
+--   { filterStatuses = [Job.Success, Queued]
+--   , filterJobTypes = ["QueuedMail", "ConfirmBooking"]
+--   }

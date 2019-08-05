@@ -51,6 +51,13 @@ dependencies:
   - lucid
   - blaze-builder
   - timing-convenience
+  - servant
+  - servant-server
+  - servant-lucid
+  - warp
+  - friendly-time
+  - unordered-containers
+
 
 library:
   source-dirs:
@@ -59,12 +66,15 @@ library:
     - PGQueue.Job
     - PGQueue.Migrations
     - PGQueue.Web
+    - PGQueue.Endpoints
 
-# executables:
-#   haskell-pg-queue:
-#     source-dirs:      src
-#     main:             Main.hs
-
+executables:
+  devel:
+    source-dirs:      dev
+    main:             DevelMain.hs
+    dependencies:
+      - foreign-store
+      - haskell-pg-queue
 
 tests:
   jobrunner:
@@ -83,4 +93,3 @@ tests:
       - lifted-base
       - lifted-async
       - containers
-      - unordered-containers

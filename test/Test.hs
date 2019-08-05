@@ -35,7 +35,6 @@ import Data.Time.Convenience as Time
 import qualified Data.Text as T
 import Data.Ord (comparing, Down(..))
 import Data.Maybe (fromMaybe)
-import qualified Data.HashMap.Strict as HM
 
 main :: IO ()
 main = do
@@ -376,12 +375,6 @@ genFilter t = do
     , filterPage = limitOffset
     }
 
-jobType :: Job -> T.Text
-jobType Job{jobPayload} = case jobPayload of
-  Aeson.Object hm -> case HM.lookup "tag" hm of
-    Just (Aeson.String t) -> t
-    _ -> ""
-  _ -> ""
 
 filterJobs :: Filter -> [Job] -> [Job]
 filterJobs Web.Filter{filterStatuses, filterCreatedAfter, filterCreatedBefore, filterUpdatedAfter, filterUpdatedBefore, filterOrder, filterPage} js =
