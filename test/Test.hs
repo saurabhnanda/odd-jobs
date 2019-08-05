@@ -365,6 +365,7 @@ genFilter t = do
     Nothing -> Gen.maybe (anyTimeGen t)
     Just x -> Gen.maybe (futureTimeGen x)
   orderClause <- Gen.maybe ((,) <$> (Gen.element $ enumFrom Web.OrdCreatedAt) <*> (Gen.element $ enumFrom Web.Asc))
+  limitOffset <- Gen.maybe ((,) <$> (Gen.int (Range.constant 5 10)) <*> (Gen.int (Range.constant 0 30)))
   pure Web.blankFilter
     { filterStatuses = statuses
     , filterCreatedAfter = createdAfter
@@ -372,6 +373,7 @@ genFilter t = do
     , filterUpdatedAfter = updatedAfter
     , filterUpdatedBefore = updatedBefore
     , filterOrder = orderClause
+    , filterPage = limitOffset
     }
 
 jobType :: Job -> T.Text
@@ -382,7 +384,8 @@ jobType Job{jobPayload} = case jobPayload of
   _ -> ""
 
 filterJobs :: Filter -> [Job] -> [Job]
-filterJobs Web.Filter{filterStatuses, filterCreatedAfter, filterCreatedBefore, filterUpdatedAfter, filterUpdatedBefore, filterOrder} js =
+filterJobs Web.Filter{filterStatuses, filterCreatedAfter, filterCreatedBefore, filterUpdatedAfter, filterUpdatedBefore, filterOrder, filterPage} js =
+  applyLimitOffset $
   applyOrdering (fromMaybe (Web.OrdUpdatedAt, Web.Desc) filterOrder) $
   (flip DL.filter) js $ \j -> (filterByStatus j) &&
                               (filterByCreatedAfter j) &&
@@ -390,6 +393,8 @@ filterJobs Web.Filter{filterStatuses, filterCreatedAfter, filterCreatedBefore, f
                               (filterByUpdatedAfter j) &&
                               (filterByUpdatedBefore j)
   where
+    applyLimitOffset = maybe Prelude.id (\(l, o) -> (Prelude.take l). (Prelude.drop o)) filterPage
+
     applyOrdering (fld, dir) lst =
       let comparer = resultOrder $ case fld of
             Web.OrdCreatedAt -> (comparing jobCreatedAt)

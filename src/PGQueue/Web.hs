@@ -13,6 +13,7 @@ import Database.PostgreSQL.Simple.ToField as PGS
 import Data.Pool as Pool
 import UnliftIO
 import Data.Maybe
+import Data.String (fromString)
 
 data OrderDirection = Asc | Desc deriving (Eq, Show, Generic, Enum)
 
@@ -31,6 +32,7 @@ data Filter = Filter
   , filterUpdatedBefore :: Maybe UTCTime
   , filterJobTypes :: [Text]
   , filterOrder :: Maybe (OrderByField, OrderDirection)
+  , filterPage :: Maybe (Int, Int)
   } deriving (Eq, Show, Generic)
 
 blankFilter :: Filter
@@ -74,8 +76,8 @@ instance FromJSON Filter where
 data WrappedToRow = forall a . ToRow a => WrappedToRow a
 
 filterJobsQuery :: TableName -> Filter -> (PGS.Query, [Action])
-filterJobsQuery tname Filter{filterStatuses, filterCreatedBefore, filterCreatedAfter, filterUpdatedBefore, filterUpdatedAfter, filterJobTypes, filterOrder} =
-  ( "SELECT " <> Job.concatJobDbColumns <> " FROM " <> tname <> whereClause <> " " <> (orderClause $ fromMaybe (OrdUpdatedAt, Desc) filterOrder)
+filterJobsQuery tname Filter{filterStatuses, filterCreatedBefore, filterCreatedAfter, filterUpdatedBefore, filterUpdatedAfter, filterJobTypes, filterOrder, filterPage} =
+  ( "SELECT " <> Job.concatJobDbColumns <> " FROM " <> tname <> whereClause <> " " <> (orderClause $ fromMaybe (OrdUpdatedAt, Desc) filterOrder) <> " " <> limitOffsetClause
   , whereActions
   )
   where
@@ -91,6 +93,10 @@ filterJobsQuery tname Filter{filterStatuses, filterCreatedBefore, filterCreatedA
             Desc -> "desc nulls last"
       in "ORDER BY " <> fname <> " " <> dname <> ", id desc"
 
+    limitOffsetClause :: Query
+    limitOffsetClause = case filterPage of
+      Nothing -> mempty
+      Just (l, o) -> "LIMIT " <> fromString (show l) <> " OFFSET " <> fromString (show o)
 
     (whereClause, whereActions) = case statusClause `and` createdAfterClause `and` createdBeforeClause `and` updatedBeforeClause `and` updatedAfterClause `and` jobTypeClause of
       Nothing -> (mempty, toRow ())
