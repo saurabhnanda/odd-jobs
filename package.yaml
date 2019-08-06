@@ -57,24 +57,28 @@ dependencies:
   - warp
   - friendly-time
   - unordered-containers
+  - foreign-store
+  
 
 
 library:
   source-dirs:
     - src
+    - dev
   exposed-modules:
     - PGQueue.Job
     - PGQueue.Migrations
     - PGQueue.Web
     - PGQueue.Endpoints
+    - DevelMain
 
-executables:
-  devel:
-    source-dirs:      dev
-    main:             DevelMain.hs
-    dependencies:
-      - foreign-store
-      - haskell-pg-queue
+# executables:
+#   devel:
+#     source-dirs:      dev
+#     main:             DevelMain.hs
+#     dependencies:
+#       - foreign-store
+#       - haskell-pg-queue
 
 tests:
   jobrunner:

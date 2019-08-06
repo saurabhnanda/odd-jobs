@@ -34,6 +34,7 @@ import Data.Text.Conversions (fromText, toText)
 import Control.Applicative ((<|>))
 import Data.Time.Convenience as Time
 import qualified PGQueue.Links as Links
+import Data.List ((\\))
 
 startApp :: IO ()
 startApp = do
@@ -137,28 +138,30 @@ pageLayout inner = do
       script_ [ src_ "assets/js/logo-slider.js" ] $ ("" :: Text)
 
 searchBar :: UTCTime -> Filter -> Html ()
-searchBar t filter@Filter{filterStatuses, filterCreatedAfter, filterCreatedBefore, filterUpdatedAfter, filterUpdatedBefore, filterJobTypes} = do
+searchBar t filter@Filter{filterStatuses, filterCreatedAfter, filterCreatedBefore, filterUpdatedAfter, filterUpdatedBefore, filterJobTypes, filterRunAfter} = do
   form_ [ style_ "padding-top: 2em;" ] $ do
     div_ [ class_ "form-group" ] $ do
       div_ [ class_ "search-container" ] $ do
         ul_ [ class_ "list-inline search-bar" ] $ do
-          forM_ filterStatuses $ \s -> renderFilter "Status" (toText s) "#"
-          maybe mempty (\x -> renderFilter "Created after" (showText x) "#") filterCreatedAfter
-          maybe mempty (\x -> renderFilter "Created before" (showText x) "#") filterCreatedBefore
-          maybe mempty (\x -> renderFilter "Updated after" (showText x) "#") filterUpdatedAfter
-          maybe mempty (\x -> renderFilter "Updated before" (showText x) "#") filterUpdatedBefore
-          forM_ filterJobTypes $ \x -> renderFilter "Job type" x "#"
+          forM_ filterStatuses $ \s -> renderFilter "Status" (toText s) (Links.rFilterResults $ Just filter{filterStatuses = filterStatuses \\ [s]})
+          maybe mempty (\x -> renderFilter "Created after" (showText x) (Links.rFilterResults $ Just filter{filterCreatedAfter = Nothing})) filterCreatedAfter
+          maybe mempty (\x -> renderFilter "Created before" (showText x) (Links.rFilterResults $ Just filter{filterCreatedBefore = Nothing})) filterCreatedBefore
+          maybe mempty (\x -> renderFilter "Updated after" (showText x) (Links.rFilterResults $ Just filter{filterUpdatedAfter = Nothing})) filterUpdatedAfter
+          maybe mempty (\x -> renderFilter "Updated before" (showText x) (Links.rFilterResults $ Just filter{filterUpdatedBefore = Nothing})) filterUpdatedBefore
+          maybe mempty (\x -> renderFilter "Run after" (showText x) (Links.rFilterResults $ Just filter{filterRunAfter = Nothing})) filterRunAfter
+          forM_ filterJobTypes $ \x -> renderFilter "Job type" x (Links.rFilterResults $ Just filter{filterJobTypes = filterJobTypes \\ [x]})
 
         button_ [ class_ "btn btn-default search-button", type_ "button" ] $ "Search"
       ul_ [ class_ "list-inline" ] $ do
         li_ $ span_ $ strong_ "Common searches:"
         li_ $ a_ [ href_ (Links.rFilterResults $ Just mempty) ] $ "All jobs"
-        li_ $ a_ [ href_ "#" ] $ "Currently running"
-        li_ $ a_ [ href_ (Links.rFilterResults $ Just $ filter <> mempty{ filterStatuses = [Job.Success] }) ] $ "Successful"
-        li_ $ a_ [ href_ (Links.rFilterResults $ Just $ filter <> mempty{ filterStatuses = [Job.Failed] }) ] $ "Failed"
-        li_ $ a_ [ href_ (Links.rFilterResults $ Just $ filter <> mempty{ filterStatuses = [Job.Queued] }) ] $ "Future"
+        li_ $ a_ [ href_ (Links.rFilterResults $ Just $ filter{ filterStatuses = [Job.Locked] }) ] $ "Currently running"
+        li_ $ a_ [ href_ (Links.rFilterResults $ Just $ filter{ filterStatuses = [Job.Success] }) ] $ "Successful"
+        li_ $ a_ [ href_ (Links.rFilterResults $ Just $ filter{ filterStatuses = [Job.Failed] }) ] $ "Failed"
+        li_ $ a_ [ href_ (Links.rFilterResults $ Just $ filter{ filterRunAfter = Just t }) ] $ "Future"
         li_ $ a_ [ href_ "#" ] $ "Retried"
-        li_ $ a_ [ href_ (Links.rFilterResults $ Just $ filter <> mempty{ filterUpdatedAfter = Just $ timeSince t 10 Minutes Ago }) ] $ "Last 10 mins"
+        li_ $ a_ [ href_ "#" ] $ "Waiting"
+        li_ $ a_ [ href_ (Links.rFilterResults $ Just $ filter{ filterUpdatedAfter = Just $ timeSince t 10 Minutes Ago }) ] $ "Last 10 mins"
   where
     renderFilter :: Text -> Text -> Text -> Html ()
     renderFilter k v u = do

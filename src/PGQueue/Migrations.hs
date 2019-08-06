@@ -20,7 +20,7 @@ createJobTableQuery tname = "CREATE TABLE " <> tname <>
   ", attempts int not null default 0" <>
   ", locked_at timestamp with time zone null" <>
   ", locked_by text null" <>
-  ", constraint incorrect_locking_info CHECK ((locked_at is null and locked_by is null) or (locked_at is not null and locked_by is not null))" <>
+  ", constraint incorrect_locking_info CHECK ((status <> 'locked' and locked_at is null and locked_by is null) or (status = 'locked' and locked_at is not null and locked_by is not null))" <>
   ");" <>
   "create index idx_" <> tname <> "_created_at on " <> tname <> "(created_at);" <>
   "create index idx_" <> tname <> "_updated_at on " <> tname <> "(updated_at);" <>

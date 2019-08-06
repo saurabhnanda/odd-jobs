@@ -156,6 +156,7 @@ data Status = Success
             | Queued
             | Failed
             | Retry
+            | Locked
             deriving (Eq, Show, Generic, Enum)
 
 instance Ord Status where
@@ -180,6 +181,7 @@ instance ToText Status where
     Queued -> "queued"
     Retry -> "retry"
     Failed -> "failed"
+    Locked -> "locked"
 
 instance (StringConv Text a) => FromText (Either a Status) where
   fromText t = case t of
@@ -187,6 +189,7 @@ instance (StringConv Text a) => FromText (Either a Status) where
     "queued" -> Right Queued
     "failed" -> Right Failed
     "retry" -> Right Retry
+    "locked" -> Right Locked
     x -> Left $ toS $ "Unknown job status: " <> x
 
 instance FromField Status where
@@ -347,7 +350,7 @@ jobMonitor = jobMonitor_ Nothing Nothing
 
 
 jobPollingSql :: TableName -> Query
-jobPollingSql tname = "update " <> tname <> " set locked_at = ?, locked_by = ?, attempts=attempts+1 WHERE id in (select id from " <> tname <> " where (run_at<=? AND ((locked_at is null AND locked_by is null AND status in ?) OR (locked_at<?))) ORDER BY run_at ASC LIMIT 1 FOR UPDATE) RETURNING id"
+jobPollingSql tname = "update " <> tname <> " set status = ?, locked_at = ?, locked_by = ?, attempts=attempts+1 WHERE id in (select id from " <> tname <> " where (run_at<=? AND ((status in ?) OR (status = ? and locked_at<?))) ORDER BY run_at ASC LIMIT 1 FOR UPDATE) RETURNING id"
 
 
 jobPoller :: (HasJobMonitor m) => m ()
@@ -359,7 +362,7 @@ jobPoller = do
   withResource pool $ \pollerDbConn -> forever $ do
     logInfoN $ toS $ "[" <> show processName <> "] Polling the job queue.."
     t <- liftIO getCurrentTime
-    (liftIO $ PGS.query pollerDbConn (jobPollingSql tname) (t, processName, t, (In [Queued, Retry]), (addUTCTime (fromIntegral (-lockTimeout)) t))) >>= \case
+    (liftIO $ PGS.query pollerDbConn (jobPollingSql tname) (Locked, t, processName, t, (In [Queued, Retry]), Locked, (addUTCTime (fromIntegral (-lockTimeout)) t))) >>= \case
       -- When we don't have any jobs to run, we can relax a bit...
       [] -> threadDelay defaultPollingInterval
 
@@ -413,8 +416,8 @@ jobEventListener = do
                       -- been picked up by the poller by the time we get here.
                       t2 <- liftIO getCurrentTime
                       jwName <- liftIO jobWorkerName
-                      let q = "UPDATE " <> tname <> " SET locked_at=?, locked_by=?, attempts=attempts+1 WHERE id=? AND locked_at IS NULL AND locked_by IS NULL RETURNING id"
-                      (liftIO $ PGS.query conn q (t2, jwName, jid)) >>= \case
+                      let q = "UPDATE " <> tname <> " SET status=?, locked_at=?, locked_by=?, attempts=attempts+1 WHERE id=? AND status in ? RETURNING id"
+                      (liftIO $ PGS.query conn q (Locked, t2, jwName, jid, In [Queued, Retry])) >>= \case
                         [] -> logDebugN $ toS $ "Job was locked by someone else before I could start. Skipping it. JobId=" <> show jid
                         [Only (_ :: JobId)] -> do
                           logDebugN $ "Attempting to run JobId=" <> (toS $ show jid)

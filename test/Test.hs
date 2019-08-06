@@ -64,10 +64,9 @@ main = do
 tests appPool jobPool = testGroup "All tests"
   [
     testGroup "simple tests" [testJobCreation appPool jobPool, testJobScheduling appPool jobPool, testJobFailure appPool jobPool, testEnsureShutdown appPool jobPool]
-  , testGroup "property tests" [
-      -- testEverything appPool jobPool,
-        propFilterJobs appPool jobPool
-      ]
+  , testGroup "property tests" [ testEverything appPool jobPool
+                               , propFilterJobs appPool jobPool
+                               ]
   ]
 
 myTestCase
@@ -330,9 +329,12 @@ jobGen t = do
   status <- Gen.element $ enumFrom Job.Success
   pload <- payloadGen
   attempts <- Gen.int (Range.constant 0 10)
-  (lockedAt, lockedBy) <- Gen.maybe ((,) <$> (futureTimeGen createdAt) <*> (Gen.text (Range.constant 1 100) Gen.ascii)) >>= \case
-    Nothing -> pure (Nothing, Nothing)
-    Just (x, y) -> pure (Just x, Just y)
+  (lockedAt, lockedBy) <- case status of
+    Job.Locked -> do
+      x <- futureTimeGen createdAt
+      y <- Gen.text (Range.constant 1 100) Gen.ascii
+      pure (Just x, Just y)
+    _ -> pure (Nothing, Nothing)
   pure (createdAt, updatedAt, runAt, status, toJSON pload, attempts, lockedAt, lockedBy)
 
 propFilterJobs appPool jobPool = testProperty "filter jobs" $ property $ do
@@ -365,6 +367,7 @@ genFilter t = do
     Just x -> Gen.maybe (futureTimeGen x)
   orderClause <- Gen.maybe ((,) <$> (Gen.element $ enumFrom Web.OrdCreatedAt) <*> (Gen.element $ enumFrom Web.Asc))
   limitOffset <- Gen.maybe ((,) <$> (Gen.int (Range.constant 5 10)) <*> (Gen.int (Range.constant 0 30)))
+  runAfter <- Gen.maybe (futureTimeGen t)
   pure Web.blankFilter
     { filterStatuses = statuses
     , filterCreatedAfter = createdAfter
@@ -373,18 +376,20 @@ genFilter t = do
     , filterUpdatedBefore = updatedBefore
     , filterOrder = orderClause
     , filterPage = limitOffset
+    , filterRunAfter = runAfter
     }
 
 
 filterJobs :: Filter -> [Job] -> [Job]
-filterJobs Web.Filter{filterStatuses, filterCreatedAfter, filterCreatedBefore, filterUpdatedAfter, filterUpdatedBefore, filterOrder, filterPage} js =
+filterJobs Web.Filter{filterStatuses, filterCreatedAfter, filterCreatedBefore, filterUpdatedAfter, filterUpdatedBefore, filterOrder, filterPage, filterRunAfter} js =
   applyLimitOffset $
   applyOrdering (fromMaybe (Web.OrdUpdatedAt, Web.Desc) filterOrder) $
   (flip DL.filter) js $ \j -> (filterByStatus j) &&
                               (filterByCreatedAfter j) &&
                               (filterByCreatedBefore j) &&
                               (filterByUpdatedAfter j) &&
-                              (filterByUpdatedBefore j)
+                              (filterByUpdatedBefore j) &&
+                              (filterByRunAfter j)
   where
     applyLimitOffset = maybe Prelude.id (\(l, o) -> (Prelude.take l). (Prelude.drop o)) filterPage
 
@@ -394,7 +399,7 @@ filterJobs Web.Filter{filterStatuses, filterCreatedAfter, filterCreatedBefore, f
             Web.OrdUpdatedAt -> (comparing jobUpdatedAt)
             Web.OrdLockedAt -> (comparing jobLockedAt)
             Web.OrdStatus -> (comparing jobStatus)
-            Web.OrdJobType -> comparing jobType
+            Web.OrdJobType -> comparing Job.jobType
           resultOrder fn = \x y -> case fn x y of
             EQ -> compare (Down $ jobId x) (Down $ jobId y)
             LT -> case dir of
@@ -412,4 +417,4 @@ filterJobs Web.Filter{filterStatuses, filterCreatedAfter, filterCreatedBefore, f
     filterByCreatedBefore Job.Job{jobCreatedAt} = maybe True (> jobCreatedAt) filterCreatedBefore
     filterByUpdatedAfter Job.Job{jobUpdatedAt} = maybe True (<= jobUpdatedAt) filterUpdatedAfter
     filterByUpdatedBefore Job.Job{jobUpdatedAt} = maybe True (> jobUpdatedAt) filterUpdatedBefore
-
+    filterByRunAfter Job.Job{jobRunAt} = maybe True (< jobRunAt) filterRunAfter

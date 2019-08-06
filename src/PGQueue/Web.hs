@@ -40,6 +40,7 @@ data Filter = Filter
   , filterJobTypes :: [Text]
   , filterOrder :: Maybe (OrderByField, OrderDirection)
   , filterPage :: Maybe (Int, Int)
+  , filterRunAfter :: Maybe UTCTime
   } deriving (Eq, Show, Generic)
 
 instance Semigroup Filter where
@@ -52,6 +53,7 @@ instance Semigroup Filter where
     , filterJobTypes = nub (filterJobTypes b <> filterJobTypes a)
     , filterOrder = filterOrder b <|> filterOrder a
     , filterPage = filterPage b <|> filterPage a
+    , filterRunAfter = filterRunAfter b <|> filterRunAfter a
     }
 
 instance Monoid Filter where
@@ -67,6 +69,7 @@ blankFilter = Filter
   , filterJobTypes = []
   , filterOrder = Nothing
   , filterPage = Just (10, 0)
+  , filterRunAfter = Nothing
   }
 
 
@@ -99,7 +102,7 @@ data Routes route = Routes
 
 
 filterJobsQuery :: TableName -> Filter -> (PGS.Query, [Action])
-filterJobsQuery tname Filter{filterStatuses, filterCreatedBefore, filterCreatedAfter, filterUpdatedBefore, filterUpdatedAfter, filterJobTypes, filterOrder, filterPage} =
+filterJobsQuery tname Filter{filterStatuses, filterCreatedBefore, filterCreatedAfter, filterUpdatedBefore, filterUpdatedAfter, filterJobTypes, filterOrder, filterPage, filterRunAfter} =
   ( "SELECT " <> Job.concatJobDbColumns <> " FROM " <> tname <> whereClause <> " " <> (orderClause $ fromMaybe (OrdUpdatedAt, Desc) filterOrder) <> " " <> limitOffsetClause
   , whereActions
   )
@@ -121,7 +124,7 @@ filterJobsQuery tname Filter{filterStatuses, filterCreatedBefore, filterCreatedA
       Nothing -> mempty
       Just (l, o) -> "LIMIT " <> fromString (show l) <> " OFFSET " <> fromString (show o)
 
-    (whereClause, whereActions) = case statusClause `and` createdAfterClause `and` createdBeforeClause `and` updatedBeforeClause `and` updatedAfterClause `and` jobTypeClause of
+    (whereClause, whereActions) = case statusClause `and` createdAfterClause `and` createdBeforeClause `and` updatedBeforeClause `and` updatedAfterClause `and` jobTypeClause `and` runAfterClause of
       Nothing -> (mempty, toRow ())
       Just (q, as) -> (" WHERE " <> q, as)
 
@@ -133,6 +136,7 @@ filterJobsQuery tname Filter{filterStatuses, filterCreatedBefore, filterCreatedA
     createdBeforeClause = Prelude.fmap (\x -> ("created_at < ?", toRow $ Only x)) filterCreatedBefore
     updatedAfterClause = Prelude.fmap (\x -> ("updated_at >= ?", toRow $ Only x)) filterUpdatedAfter
     updatedBeforeClause = Prelude.fmap (\x -> ("updated_at < ?", toRow $ Only x)) filterUpdatedBefore
+    runAfterClause = Prelude.fmap (\x -> ("run_at > ?", toRow $ Only x)) filterRunAfter
 
     jobTypeClause :: Maybe (Query, [Action])
     jobTypeClause = case filterJobTypes of
