@@ -1,10 +1,10 @@
 {-# LANGUAGE TypeOperators, DeriveGeneric, NamedFieldPuns, DataKinds, StandaloneDeriving, FlexibleContexts #-}
 
-module PGQueue.Endpoints where
+module OddJobs.Endpoints where
 
-import PGQueue.Web as Web
-import PGQueue.Job as Job
-import PGQueue.Types
+import OddJobs.Web as Web
+import OddJobs.Job as Job
+import OddJobs.Types
 import GHC.Generics
 
 import Servant
@@ -33,7 +33,7 @@ import Data.Maybe (fromMaybe)
 import Data.Text.Conversions (fromText, toText)
 import Control.Applicative ((<|>))
 import Data.Time.Convenience as Time
-import qualified PGQueue.Links as Links
+import qualified OddJobs.Links as Links
 import Data.List ((\\))
 
 startApp :: IO ()

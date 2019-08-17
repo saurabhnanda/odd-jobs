@@ -1,8 +1,8 @@
 {-# LANGUAGE DeriveGeneric, NamedFieldPuns, TypeOperators, DataKinds #-}
-module PGQueue.Web where
+module OddJobs.Web where
 
-import PGQueue.Types
-import PGQueue.Job as Job
+import OddJobs.Types
+import OddJobs.Job as Job
 import Data.Time
 import Data.Aeson as Aeson
 import Data.Text as T

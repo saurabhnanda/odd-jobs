@@ -30,7 +30,7 @@ import           GHC.Word                 (Word32)
 import           Network.Wai.Handler.Warp (defaultSettings, runSettings,
                                            setPort)
 
-import           PGQueue.Endpoints                     (startApp, stopApp)
+import           OddJobs.Endpoints                     (startApp, stopApp)
 -- import qualified ElmCodeGen
 
 -- | Start or restart the server.

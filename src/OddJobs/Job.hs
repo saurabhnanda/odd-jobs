@@ -1,5 +1,5 @@
 {-# LANGUAGE RankNTypes, FlexibleInstances, FlexibleContexts, PartialTypeSignatures, TupleSections, DeriveGeneric, UndecidableInstances #-}
-module PGQueue.Job
+module OddJobs.Job
   ( jobMonitor
   , jobEventListener
   , jobPoller
@@ -23,7 +23,7 @@ module PGQueue.Job
   )
 where
 
-import PGQueue.Types
+import OddJobs.Types
 import Data.Pool
 import Data.Text as T
 import Database.PostgreSQL.Simple as PGS

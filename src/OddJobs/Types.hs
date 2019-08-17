@@ -1,4 +1,4 @@
-module PGQueue.Types where
+module OddJobs.Types where
 
 import Database.PostgreSQL.Simple as PGS
 

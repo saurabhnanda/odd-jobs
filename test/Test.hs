@@ -2,8 +2,8 @@
 module Test where
 
 import Test.Tasty as Tasty
-import qualified PGQueue.Migrations as Migrations
-import qualified PGQueue.Job as Job
+import qualified OddJobs.Migrations as Migrations
+import qualified OddJobs.Job as Job
 import Database.PostgreSQL.Simple as PGS
 import Data.Functor (void)
 import Data.Pool as Pool
@@ -15,7 +15,7 @@ import Control.Monad.Reader
 import Data.Aeson as Aeson
 import Control.Concurrent.Lifted
 import Control.Concurrent.Async.Lifted
-import PGQueue.Job (Job(..), JobId)
+import OddJobs.Job (Job(..), JobId)
 import System.Log.FastLogger (fromLogStr, withFastLogger, LogType(..), defaultBufSize, FastLogger, FileLogSpec(..))
 import Data.String.Conv (toS)
 import Data.Time
@@ -30,7 +30,7 @@ import qualified Data.IntMap.Strict as Map
 import Control.Monad.Trans.Control (liftWith, restoreT)
 import Control.Monad.Morph (hoist)
 import Data.List as DL
-import PGQueue.Web as Web
+import OddJobs.Web as Web
 import Data.Time.Convenience as Time
 import qualified Data.Text as T
 import Data.Ord (comparing, Down(..))

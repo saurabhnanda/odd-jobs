@@ -1,7 +1,9 @@
-name:                haskell-pg-queue
+name:                odd-jobs
 version:             0.1.0.0
-#synopsis:
-#description:
+synopsis: A full-featured PostgreSQL-backed job queue (with an admin UI)
+description: |
+  Something long comes here
+  Something very long
 homepage:            https://github.com/githubuser/haskell-pg-queue#readme
 license:             BSD3
 author:              Saurabh Nanda
@@ -11,8 +13,12 @@ category:            Web
 extra-source-files:
 - README.md
 
-ghc-options: -Wall -fno-warn-orphans -fno-warn-unused-imports -fno-warn-dodgy-exports -O0 -threaded
-
+ghc-options: 
+  - -Wall 
+  - -fno-warn-orphans 
+  - -fno-warn-unused-imports 
+  - -fno-warn-dodgy-exports 
+  - -O0
 
 default-extensions:
   - NamedFieldPuns
@@ -66,10 +72,10 @@ library:
     - src
     - dev
   exposed-modules:
-    - PGQueue.Job
-    - PGQueue.Migrations
-    - PGQueue.Web
-    - PGQueue.Endpoints
+    - OddJobs.Job
+    - OddJobs.Migrations
+    - OddJobs.Web
+    - OddJobs.Endpoints
     - DevelMain
 
 # executables:
@@ -82,6 +88,8 @@ library:
 
 tests:
   jobrunner:
+    ghc-options:
+      - -threaded
     main: Test
     source-dirs: test
     dependencies:

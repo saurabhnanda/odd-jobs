@@ -1,10 +1,10 @@
 {-# LANGUAGE RecordWildCards, OverloadedStrings #-}
 
-module PGQueue.Links where
+module OddJobs.Links where
 
 import Servant
 import Servant.API.Generic
-import PGQueue.Web (Routes(..))
+import OddJobs.Web (Routes(..))
 import Data.String.Conv
 import Data.Text
 
