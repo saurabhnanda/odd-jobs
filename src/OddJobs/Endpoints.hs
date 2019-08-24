@@ -35,6 +35,10 @@ import Control.Applicative ((<|>))
 import Data.Time.Convenience as Time
 import qualified OddJobs.Links as Links
 import Data.List ((\\))
+import qualified System.Log.FastLogger as FLogger
+import qualified System.Log.FastLogger.Date as FLogger
+import Control.Monad.Logger as MLogger
+
 
 startApp :: IO ()
 startApp = do
@@ -52,7 +56,10 @@ startApp = do
     (fromRational 10)       -- number of seconds unused resources are kept around
     5                     -- maximum open connections
 
-  (jm, cleanup) <- Job.defaultJobMonitor "jobs_ugqsdyceqf" dbPool
+  tcache <- FLogger.newTimeCache FLogger.simpleTimeFormat'
+  (tlogger, cleanup) <- FLogger.newTimedFastLogger tcache (FLogger.LogStdout FLogger.defaultBufSize)
+  let flogger loc lsource llevel lstr = tlogger $ \t -> FLogger.toLogStr t <> " | " <> defaultLogStr loc lsource llevel lstr
+      jm = Job.defaultJobMonitor flogger "jobs_ugqsdyceqf" dbPool
 
   let nt :: ReaderT Job.JobMonitor IO a -> Servant.Handler a
       nt action = (liftIO $ try $ runReaderT action jm) >>= \case

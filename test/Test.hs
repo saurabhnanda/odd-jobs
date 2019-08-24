@@ -16,7 +16,8 @@ import Data.Aeson as Aeson
 import Control.Concurrent.Lifted
 import Control.Concurrent.Async.Lifted
 import OddJobs.Job (Job(..), JobId)
-import System.Log.FastLogger (fromLogStr, withFastLogger, LogType(..), defaultBufSize, FastLogger, FileLogSpec(..))
+import System.Log.FastLogger (fromLogStr, withFastLogger, LogType(..), defaultBufSize, FastLogger, FileLogSpec(..), newTimedFastLogger)
+import System.Log.FastLogger.Date (newTimeCache, simpleTimeFormat')
 import Data.String.Conv (toS)
 import Data.Time
 import GHC.Generics
@@ -151,15 +152,13 @@ withRandomTable jobPool action = do
 withNewJobMonitor jobPool actualTest = withRandomTable jobPool $ \tname -> withNamedJobMonitor tname jobPool (actualTest tname)
 
 withNamedJobMonitor tname jobPool actualTest = do
-  (defaults, cleanup) <- (Job.defaultJobMonitor tname jobPool)
+  (defaults, cleanup) <- Test.defaultJobMonitor tname jobPool
   let jobMonitorSettings = defaults{ Job.monitorJobRunner = jobRunner
-                                   , Job.monitorTableName = tname
                                    , Job.monitorDefaultMaxAttempts = 3
                                    }
   finally
     (withAsync (Job.runJobMonitor jobMonitorSettings) (const actualTest))
     (cleanup)
-
 
 
 payloadGen :: MonadGen m => m JobPayload
@@ -215,7 +214,7 @@ testEverything appPool jobPool = testProperty "test everything" $ property $ do
   jobsMVar <- liftIO $ newMVar (Map.empty :: Map.IntMap [(JobEvent, Job.Job)])
 
   test $ withRandomTable jobPool $ \tname -> do
-    (defaults, cleanup) <- liftIO $ Job.defaultJobMonitor tname jobPool
+    (defaults, cleanup) <- liftIO $ Test.defaultJobMonitor tname jobPool
     let jobMonitorSettings = defaults { Job.monitorJobRunner = jobRunner
                                       , Job.monitorTableName = tname
                                       , Job.monitorOnJobStart = onJobEvent JobStart jobsMVar
@@ -344,7 +343,7 @@ propFilterJobs appPool jobPool = testProperty "filter jobs" $ property $ do
   test $ withRandomTable jobPool $ \tname -> do
     (savedJobs, dbJobs) <- liftIO $ do
       savedJobs <- Pool.withResource appPool $ \conn -> forM jobs $ \j -> (PGS.query conn (qry tname) j) >>= (pure . Prelude.head)
-      (jm, cleanup) <- liftIO $ Job.defaultJobMonitor tname jobPool
+      (jm, cleanup) <- liftIO $ Test.defaultJobMonitor tname jobPool
       dbJobs <- (flip finally) cleanup $ (flip runReaderT) jm $ Web.filterJobs f
       pure (savedJobs, dbJobs)
     let testJobs = Test.filterJobs f savedJobs
@@ -418,3 +417,14 @@ filterJobs Web.Filter{filterStatuses, filterCreatedAfter, filterCreatedBefore, f
     filterByUpdatedAfter Job.Job{jobUpdatedAt} = maybe True (<= jobUpdatedAt) filterUpdatedAfter
     filterByUpdatedBefore Job.Job{jobUpdatedAt} = maybe True (> jobUpdatedAt) filterUpdatedBefore
     filterByRunAfter Job.Job{jobRunAt} = maybe True (< jobRunAt) filterRunAfter
+
+defaultJobMonitor :: Job.TableName
+                  -> Pool Connection
+                  -> IO (Job.JobMonitor, IO ())
+defaultJobMonitor tname pool = do
+  tcache <- newTimeCache simpleTimeFormat'
+  (tlogger, cleanup) <- newTimedFastLogger tcache (LogStdout defaultBufSize)
+  let flogger loc lsource llevel lstr = tlogger $ \t -> toLogStr t <> " | " <> defaultLogStr loc lsource llevel lstr
+  pure ( Job.defaultJobMonitor flogger tname pool
+       , cleanup
+       )

@@ -55,7 +55,7 @@ import Data.Functor (void)
 import Control.Monad (forever)
 import Data.Maybe (isNothing)
 import Data.Either (either)
-import System.Log.FastLogger (fromLogStr, newTimedFastLogger, LogType(..), defaultBufSize, FastLogger, FileLogSpec(..), TimedFastLogger)
+-- import System.Log.FastLogger (fromLogStr, newTimedFastLogger, LogType(..), defaultBufSize, FastLogger, FileLogSpec(..), TimedFastLogger)
 import System.Log.FastLogger.Date (newTimeCache, simpleTimeFormat')
 import Control.Monad.Reader
 import GHC.Generics
@@ -80,7 +80,7 @@ data JobMonitor = JobMonitor
   , monitorOnJobPermanentlyFailed :: Job -> IO ()
   , monitorJobRunner :: Job -> IO ()
   , monitorMaxAttempts :: Int
-  , monitorLogger :: (forall msg . ToLogStr msg => Loc -> LogSource -> LogLevel -> msg -> IO ())
+  , monitorLogger :: Loc -> LogSource -> LogLevel -> LogStr -> IO ()
   , monitorDbPool :: Pool Connection
   , monitorTableName :: TableName
   , monitorOnJobStart :: Job -> IO ()
@@ -92,7 +92,7 @@ type JobMonitorM = ReaderT JobMonitor IO
 instance {-# OVERLAPS #-} MonadLogger JobMonitorM where
   monadLoggerLog loc logsource loglevel msg = do
     fn <- monitorLogger <$> ask
-    liftIO $ fn loc logsource loglevel msg
+    liftIO $ fn loc logsource loglevel (toLogStr msg)
 
 instance HasJobMonitor JobMonitorM where
   getPollingInterval = monitorPollingInterval <$> ask
@@ -119,28 +119,30 @@ instance HasJobMonitor JobMonitorM where
 runJobMonitor :: JobMonitor -> IO ()
 runJobMonitor jm = runReaderT jobMonitor jm
 
-defaultLogger :: IO (TimedFastLogger, IO ())
-defaultLogger = do
-  tcache <- newTimeCache simpleTimeFormat'
-  newTimedFastLogger tcache (LogStdout defaultBufSize)
+-- defaultLogger :: IO (TimedFastLogger, IO ())
+-- defaultLogger = do
+--   tcache <- newTimeCache simpleTimeFormat'
+--   newTimedFastLogger tcache (LogStdout defaultBufSize)
 
-defaultJobMonitor :: TableName -> Pool Connection -> IO (JobMonitor, IO ())
-defaultJobMonitor tname dbpool = do
-  (logger, cleanup) <- defaultLogger
-  pure $ (, cleanup) JobMonitor
-    { monitorPollingInterval = defaultPollingInterval
-    , monitorOnJobSuccess = (const $ pure ())
-    , monitorOnJobRetry = (const $ pure ())
-    , monitorOnJobPermanentlyFailed = (const $ pure ())
-    , monitorJobRunner = (const $ pure ())
-    , monitorMaxAttempts = 25
-    , monitorLogger = \ loc logsource loglevel msg -> logger $ \t ->
-        toLogStr t <> " | " <>
-        defaultLogStr loc logsource loglevel (toLogStr msg)
-    , monitorDbPool = dbpool
-    , monitorOnJobStart = (const $ pure ())
-    , monitorDefaultMaxAttempts = 10
-    , monitorTableName = tname
+defaultJobMonitor :: (Loc -> LogSource -> LogLevel -> LogStr -> IO ())
+                  -> TableName
+                  -> Pool Connection
+                  -> JobMonitor
+defaultJobMonitor logger tname dbpool = JobMonitor
+  { monitorPollingInterval = defaultPollingInterval
+  , monitorOnJobSuccess = (const $ pure ())
+  , monitorOnJobRetry = (const $ pure ())
+  , monitorOnJobPermanentlyFailed = (const $ pure ())
+  , monitorJobRunner = (const $ pure ())
+  , monitorMaxAttempts = 25
+  , monitorLogger = logger
+    -- \ loc logsource loglevel msg -> logger $ \t ->
+    --   toLogStr t <> " | " <>
+    --   defaultLogStr loc logsource loglevel (toLogStr msg)
+  , monitorDbPool = dbpool
+  , monitorOnJobStart = (const $ pure ())
+  , monitorDefaultMaxAttempts = 10
+  , monitorTableName = tname
   }
 
 
