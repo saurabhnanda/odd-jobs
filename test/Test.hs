@@ -64,7 +64,12 @@ main = do
 
 tests appPool jobPool = testGroup "All tests"
   [
-    testGroup "simple tests" [testJobCreation appPool jobPool, testJobScheduling appPool jobPool, testJobFailure appPool jobPool, testEnsureShutdown appPool jobPool]
+    testGroup "simple tests" [ testJobCreation appPool jobPool
+                             , testJobScheduling appPool jobPool
+                             , testJobFailure appPool jobPool
+                             , testEnsureShutdown appPool jobPool
+                             , testGracefuleShutdown appPool jobPool
+                             ]
   , testGroup "property tests" [ testEverything appPool jobPool
                                , propFilterJobs appPool jobPool
                                ]
@@ -186,6 +191,17 @@ testEnsureShutdown appPool jobPool = testCase "ensure shutdown" $ withRandomTabl
         assertJobIdStatus conn tname "Job is scheduled in future, should still be queueud" Job.Queued jobId
         pure jobId
 
+testGracefuleShutdown appPool jobPool = testCase "ensure graceful shutdown" $ withRandomTable jobPool $ \tname -> do
+  (j1, j2) <- withNamedJobMonitor tname jobPool $ Pool.withResource appPool $ \conn -> do
+    t <- getCurrentTime
+    j1 <- Job.createJob conn tname (PayloadSucceed $ Job.defaultPollingInterval)
+    j2 <- Job.scheduleJob conn tname (PayloadSucceed 0) (addUTCTime (fromIntegral $ 2 * (Job.defaultPollingInterval `div` oneSec)) t)
+    pure (j1, j2)
+  threadDelay oneSec
+  Pool.withResource appPool $ \conn -> do
+    assertJobIdStatus conn tname "Exepcting the first job to be completed succeffully if graceful shutdown is impleted correctly" Job.Success (jobId j1)
+    assertJobIdStatus conn tname "Exepcting the second job to be queued because no new job should be picked up during gracefule shutdown" Job.Queued (jobId j2)
+  pure ()
 
 testJobScheduling appPool jobPool = testCase "job scheduling" $ withNewJobMonitor jobPool $ \tname -> Pool.withResource appPool $ \conn -> do
   t <- getCurrentTime
