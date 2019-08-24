@@ -121,11 +121,6 @@ instance HasJobMonitor JobMonitorM where
 runJobMonitor :: JobMonitor -> IO ()
 runJobMonitor jm = runReaderT jobMonitor jm
 
--- defaultLogger :: IO (TimedFastLogger, IO ())
--- defaultLogger = do
---   tcache <- newTimeCache simpleTimeFormat'
---   newTimedFastLogger tcache (LogStdout defaultBufSize)
-
 defaultJobMonitor :: (Loc -> LogSource -> LogLevel -> LogStr -> IO ())
                   -> TableName
                   -> Pool Connection
@@ -138,9 +133,6 @@ defaultJobMonitor logger tname dbpool = JobMonitor
   , monitorJobRunner = (const $ pure ())
   , monitorMaxAttempts = 25
   , monitorLogger = logger
-    -- \ loc logsource loglevel msg -> logger $ \t ->
-    --   toLogStr t <> " | " <>
-    --   defaultLogStr loc logsource loglevel (toLogStr msg)
   , monitorDbPool = dbpool
   , monitorOnJobStart = (const $ pure ())
   , monitorDefaultMaxAttempts = 10
@@ -414,7 +406,7 @@ jobEventListener = do
       Left e -> logErrorN $ toS $  "Unable to decode notification payload received from Postgres. Payload=" <> show pload <> " Error=" <> show e
 
       -- Checking if job needs to be fired immediately AND it is not already
-      -- taken by the time it got to us
+      -- taken by some othe thread, by the time it got to us
       Right (v :: Value) -> case (Aeson.parseMaybe parser v) of
         Nothing -> logErrorN $ toS $ "Unable to extract id/run_at/locked_at from " <> show pload
         Just (jid, runAt_, mLockedAt_) -> do
