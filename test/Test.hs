@@ -132,12 +132,12 @@ oneSec :: Int
 oneSec = 1000000
 
 assertJobIdStatus :: (HasCallStack) => Connection -> Job.TableName -> String -> Job.Status -> JobId -> Assertion
-assertJobIdStatus conn tname msg st jid = Job.findJobById conn tname jid >>= \case
+assertJobIdStatus conn tname msg st jid = Job.findJobByIdIO conn tname jid >>= \case
   Nothing -> assertFailure $ "Not expecting job to be deleted. JobId=" <> show jid
   Just (Job{jobStatus}) -> assertEqual msg st jobStatus
 
 ensureJobId :: (HasCallStack) => Connection -> Job.TableName -> JobId -> IO Job
-ensureJobId conn tname jid = Job.findJobById conn tname jid >>= \case
+ensureJobId conn tname jid = Job.findJobByIdIO conn tname jid >>= \case
   Nothing -> error $ "Not expecting job to be deleted. JobId=" <> show jid
   Just j -> pure j
 
@@ -192,7 +192,7 @@ testJobScheduling appPool jobPool = testCase "job scheduling" $ withNewJobMonito
   job@Job{jobId} <- Job.scheduleJob conn tname (PayloadSucceed 0) (addUTCTime (fromIntegral 3600) t)
   threadDelay (oneSec * 2)
   assertJobIdStatus conn tname "Job is scheduled in the future. It should NOT have been successful by now" Job.Queued jobId
-  j <- Job.saveJob conn tname job{jobRunAt = (addUTCTime (fromIntegral (-1)) t)}
+  j <- Job.saveJobIO conn tname job{jobRunAt = (addUTCTime (fromIntegral (-1)) t)}
   threadDelay (Job.defaultPollingInterval + (oneSec * 2))
   assertJobIdStatus conn tname "Job had a runAt date in the past. It should have been successful by now" Job.Success jobId
 

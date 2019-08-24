@@ -10,8 +10,10 @@ module OddJobs.Job
   , HasJobMonitor(..)
   , Status(..)
   , findJobById
+  , findJobByIdIO
   , JobId
   , saveJob
+  , saveJobIO
   , defaultPollingInterval
   , JobMonitor(..)
   , defaultJobMonitor
@@ -56,7 +58,7 @@ import Control.Monad (forever)
 import Data.Maybe (isNothing)
 import Data.Either (either)
 -- import System.Log.FastLogger (fromLogStr, newTimedFastLogger, LogType(..), defaultBufSize, FastLogger, FileLogSpec(..), TimedFastLogger)
-import System.Log.FastLogger.Date (newTimeCache, simpleTimeFormat')
+-- import System.Log.FastLogger.Date (newTimeCache, simpleTimeFormat')
 import Control.Monad.Reader
 import GHC.Generics
 import qualified Data.HashMap.Strict as HM
@@ -256,8 +258,22 @@ concatJobDbColumns = concatJobDbColumns_ jobDbColumns ""
 findJobByIdQuery :: TableName -> PGS.Query
 findJobByIdQuery tname = "SELECT " <> concatJobDbColumns <> " FROM " <> tname <> " WHERE id = ?"
 
-findJobById :: Connection -> TableName -> JobId -> IO (Maybe Job)
-findJobById conn tname jid = PGS.query conn (findJobByIdQuery tname) (Only jid) >>= \case
+withDbConnection :: (HasJobMonitor m)
+                 => (Connection -> m a)
+                 -> m a
+withDbConnection action = do
+  pool <- getDbPool
+  withResource pool action
+
+findJobById :: (HasJobMonitor m)
+            => JobId
+            -> m (Maybe Job)
+findJobById jid = do
+  tname <- getTableName
+  withDbConnection $ \conn -> liftIO $ findJobByIdIO conn tname jid
+
+findJobByIdIO :: Connection -> TableName -> JobId -> IO (Maybe Job)
+findJobByIdIO conn tname jid = PGS.query conn (findJobByIdQuery tname) (Only jid) >>= \case
   [] -> pure Nothing
   [j] -> pure (Just j)
   js -> Prelude.error $ "Not expecting to find multiple jobs by id=" <> (show jid)
@@ -266,8 +282,14 @@ findJobById conn tname jid = PGS.query conn (findJobByIdQuery tname) (Only jid) 
 saveJobQuery :: TableName -> PGS.Query
 saveJobQuery tname = "UPDATE " <> tname <> " set run_at = ?, status = ?, payload = ?, last_error = ?, attempts = ?, locked_at = ?, locked_by = ? WHERE id = ? RETURNING " <> concatJobDbColumns
 
-saveJob :: Connection -> TableName -> Job -> IO Job
-saveJob conn tname Job{jobRunAt, jobStatus, jobPayload, jobLastError, jobAttempts, jobLockedBy, jobLockedAt, jobId} = do
+
+saveJob :: (HasJobMonitor m) => Job -> m Job
+saveJob j = do
+  tname <- getTableName
+  withDbConnection $ \conn -> liftIO $ saveJobIO conn tname j
+
+saveJobIO :: Connection -> TableName -> Job -> IO Job
+saveJobIO conn tname Job{jobRunAt, jobStatus, jobPayload, jobLastError, jobAttempts, jobLockedBy, jobLockedAt, jobId} = do
   rs <- PGS.query conn (saveJobQuery tname)
         ( jobRunAt
         , jobStatus
@@ -288,17 +310,16 @@ logCallbackErrors :: (HasJobMonitor m) => JobId -> Text -> m () -> m ()
 logCallbackErrors jid msg action = catchAny action $ \e -> logErrorN $ msg <> " Job ID=" <> toS (show jid) <> ": " <> toS (show e)
 
 
-runJob :: (HasJobMonitor m) => Connection -> JobId -> m ()
-runJob conn jid = do
-  tname <- getTableName
-  (liftIO $ findJobById conn tname jid) >>= \case
+runJob :: (HasJobMonitor m) => JobId -> m ()
+runJob jid =
+  (findJobById jid) >>= \case
     Nothing -> Prelude.error $ "Could not find job id=" <> show jid
     Just job -> do
       jobRunner_ <- getJobRunner
       (try $ liftIO $ jobRunner_ job) >>= \case
         Right () -> do
           -- TODO: save job result for future
-          newJob <- liftIO $ saveJob conn tname job{jobStatus=Success, jobLockedBy=Nothing, jobLockedAt=Nothing}
+          newJob <- saveJob job{jobStatus=Success, jobLockedBy=Nothing, jobLockedAt=Nothing}
           logCallbackErrors (jobId newJob) "onSucces" (onJobSuccess newJob)
           pure ()
 
@@ -308,12 +329,12 @@ runJob conn jid = do
                           then Failed
                           else Retry
           t <- liftIO getCurrentTime
-          newJob <- liftIO $ saveJob conn tname job{ jobStatus=newStatus
-                                                   , jobLockedBy=Nothing
-                                                   , jobLockedAt=Nothing
-                                                   , jobLastError=(Just $ toJSON $ show e) -- TODO: convert errors to json properly
-                                                   , jobRunAt=(addUTCTime (fromIntegral $ (1::Int) ^ (jobAttempts job)) t)
-                                                   }
+          newJob <- saveJob job{ jobStatus=newStatus
+                               , jobLockedBy=Nothing
+                               , jobLockedAt=Nothing
+                               , jobLastError=(Just $ toJSON $ show e) -- TODO: convert errors to json properly
+                               , jobRunAt=(addUTCTime (fromIntegral $ (1::Int) ^ (jobAttempts job)) t)
+                               }
           case (jobStatus newJob) of
             Failed -> logCallbackErrors (jobId newJob) "onJobPermanentlyFailed" (onJobPermanentlyFailed newJob)
             Retry -> logCallbackErrors (jobId newJob) "onJobRetry" (onJobRetry newJob)
@@ -369,22 +390,9 @@ jobPoller = do
       [] -> threadDelay defaultPollingInterval
 
       -- When we find a job to run, fork and try to find the next job without any delay...
-      [Only (jid :: JobId)] -> do
-        logInfoN $ toS $ "Job poller found a job. Forking another thread in the background. JobId=" <> show jid
-
-        -- NOTE: If we don't have any more connections in the pool, the
-        -- following statements will block, which is a good thing. Because, if we
-        -- don't have any more DB connections, there's no point in polling for
-        -- more jobs...
-
-        jobReadyToRun <- newEmptyMVar
-        void $ async $ withResource pool $ \jobConn -> do
-          logInfoN $ toS $ "DB connection acquired. Signalling the job-poller to continue polling. JobId=" <> show jid
-          putMVar jobReadyToRun True
-          runJob jobConn jid
-
-        -- Block the polling till the job-runner is ready to run....
-        void $ readMVar jobReadyToRun
+      [Only (jid :: JobId)] -> void $ async $ do
+        logDebugN $ "Forked new thread to run JobID=" <> (toS $ show jid)
+        runJob jid
 
       x -> error $ "WTF just happened? I was supposed to get only a single row, but got: " ++ (show x)
 
@@ -413,17 +421,17 @@ jobEventListener = do
           t <- liftIO getCurrentTime
           if (runAt_ <= t) && (isNothing mLockedAt_)
             then do logDebugN $ toS $ "Job needs needs to be run immediately. Attempting to fork in background. JobId=" <> show jid
-                    void $ async $ withResource pool $ \conn -> do
+                    void $ async $ do
                       -- Let's try to lock the job first... it is possible that it has already
                       -- been picked up by the poller by the time we get here.
                       t2 <- liftIO getCurrentTime
                       jwName <- liftIO jobWorkerName
                       let q = "UPDATE " <> tname <> " SET status=?, locked_at=?, locked_by=?, attempts=attempts+1 WHERE id=? AND status in ? RETURNING id"
-                      (liftIO $ PGS.query conn q (Locked, t2, jwName, jid, In [Queued, Retry])) >>= \case
+                      (withDbConnection $ \conn -> (liftIO $ PGS.query conn q (Locked, t2, jwName, jid, In [Queued, Retry]))) >>= \case
                         [] -> logDebugN $ toS $ "Job was locked by someone else before I could start. Skipping it. JobId=" <> show jid
                         [Only (_ :: JobId)] -> do
                           logDebugN $ "Attempting to run JobId=" <> (toS $ show jid)
-                          runJob conn jid
+                          runJob jid
                         x -> error $ "WTF just happned? Was expecting a single row to be returned, received " ++ (show x)
             else logDebugN $ toS $ "Job is either for future, or is already locked. Skipping. JobId=" <> show jid
   where
