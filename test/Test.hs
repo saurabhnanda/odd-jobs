@@ -199,7 +199,7 @@ testGracefuleShutdown appPool jobPool = testCase "ensure graceful shutdown" $ wi
     pure (j1, j2)
   threadDelay oneSec
   Pool.withResource appPool $ \conn -> do
-    assertJobIdStatus conn tname "Exepcting the first job to be completed succeffully if graceful shutdown is impleted correctly" Job.Success (jobId j1)
+    assertJobIdStatus conn tname "Exepcting the first job to be completed successfully if graceful shutdown is implemented correctly" Job.Success (jobId j1)
     assertJobIdStatus conn tname "Exepcting the second job to be queued because no new job should be picked up during gracefule shutdown" Job.Queued (jobId j2)
   pure ()
 

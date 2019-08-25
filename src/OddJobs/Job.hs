@@ -43,7 +43,7 @@ import UnliftIO.MVar
 import Debug.Trace
 import Control.Monad.Logger as MLogger
 import UnliftIO.IORef
-import UnliftIO.Exception (SomeException(..), try, catch, finally, catchAny)
+import UnliftIO.Exception (SomeException(..), try, catch, finally, catchAny, bracket)
 import Data.Proxy
 import Control.Monad.Trans.Control
 import Control.Monad.IO.Unlift (MonadUnliftIO, withRunInIO, liftIO)
@@ -62,6 +62,7 @@ import Data.Either (either)
 import Control.Monad.Reader
 import GHC.Generics
 import qualified Data.HashMap.Strict as HM
+import qualified Data.List as DL
 
 class (MonadUnliftIO m, MonadBaseControl IO m, MonadLogger m) => HasJobMonitor m where
   getPollingInterval :: m Int
@@ -334,42 +335,84 @@ runJob jid =
           pure ()
 
 jobMonitor :: forall m . (HasJobMonitor m) => m ()
-jobMonitor = jobMonitor_ Nothing Nothing
+jobMonitor = do
+  threadsRef <- newIORef []
+  jobMonitor_ threadsRef Nothing Nothing Nothing
   where
-    jobMonitor_ :: Maybe (Async ()) -> Maybe (Async ()) -> m ()
-    jobMonitor_ mPollerAsync mEventAsync = do
-      pollerAsync <- maybe (async jobPoller) pure mPollerAsync
-      eventAsync <- maybe (async jobEventListener) pure mEventAsync
+    jobMonitor_ :: IORef [Async ()] -> Maybe (Async ()) -> Maybe (Async ()) -> Maybe (Async ()) -> m ()
+    jobMonitor_ threadsRef mPollerAsync mEventAsync mThreadMonitorAsync = do
+      pollerAsync <- maybe (async $ jobPoller threadsRef) pure mPollerAsync
+      eventAsync <- maybe (async $ jobEventListener threadsRef) pure mEventAsync
+      threadMonitorAsync <- maybe (async $ threadMonitor threadsRef) pure mThreadMonitorAsync
       finally
-        (restartUponCrash pollerAsync eventAsync)
+        (restartUponCrash threadsRef pollerAsync eventAsync threadMonitorAsync)
         (do logInfoN "Received shutdown event. Cancelling job-poller and event-listener threads"
             cancel eventAsync
             cancel pollerAsync
+            cancel threadMonitorAsync
         )
 
 
-    restartUponCrash pollerAsync eventAsync = do
-      waitEitherCatch pollerAsync eventAsync >>= \case
-        Left pollerResult -> do
-          either
-            (\(SomeException e) -> logErrorN $ "Job poller seems to have crashed. Respawning: " <> toS (show e))
-            (\x -> logErrorN $ "Job poller seems to have escaped the `forever` loop. Respawning: " <> toS (show x))
-            pollerResult
-          jobMonitor_ Nothing (Just eventAsync)
-        Right eventResult -> do
-          either
-            (\(SomeException e) -> logErrorN $ "Event listened seems to have crashed. Respawning: " <> toS (show e))
-            (\x -> logErrorN $ "Event listener seems to have escaped the `forever` loop. Respawning: " <> toS (show x))
-            eventResult
-          jobMonitor_ (Just pollerAsync) Nothing
-
+    restartUponCrash threadsRef pollerAsync eventAsync threadMonitorAsync = do
+      (t, result) <- waitAnyCatch [pollerAsync, eventAsync, threadMonitorAsync]
+      if t==pollerAsync
+        then do either
+                  (\(SomeException e) -> logErrorN $ "Job poller seems to have crashed. Respawning: " <> toS (show e))
+                  (\x -> logErrorN $ "Job poller seems to have escaped the `forever` loop. Respawning: " <> toS (show x))
+                  result
+                jobMonitor_ threadsRef Nothing (Just eventAsync) (Just threadMonitorAsync)
+        else if t==eventAsync
+             then do either
+                       (\(SomeException e) -> logErrorN $ "Event listener seems to have crashed. Respawning: " <> toS (show e))
+                       (\x -> logErrorN $ "Event listener seems to have escaped the `forever` loop. Respawning: " <> toS (show x))
+                       result
+                     jobMonitor_ threadsRef (Just pollerAsync) Nothing (Just threadMonitorAsync)
+             else if t==threadMonitorAsync
+                  then do either
+                            (\(SomeException e) -> logErrorN $ "Thread monitor seems to have crashed. Respawning: " <> toS (show e))
+                            (\x -> logErrorN $ "Thread monitor seems to have escaped the `forever` loop. Respawning: " <> toS (show x))
+                            result
+                          jobMonitor_ threadsRef (Just pollerAsync) (Just eventAsync) Nothing
+                  else logErrorN "Impossible happened. One of the three top-level threads/asyncs crashed by we were unable to figure out which one."
 
 jobPollingSql :: TableName -> Query
 jobPollingSql tname = "update " <> tname <> " set status = ?, locked_at = ?, locked_by = ?, attempts=attempts+1 WHERE id in (select id from " <> tname <> " where (run_at<=? AND ((status in ?) OR (status = ? and locked_at<?))) ORDER BY run_at ASC LIMIT 1 FOR UPDATE) RETURNING id"
 
+threadMonitor :: (HasJobMonitor m)
+              => IORef [Async ()]
+              -> m ()
+threadMonitor threadsRef = finally threadMonitor_ $ do
+  timeoutThread <- async timeout
+  waitForCompletion timeoutThread
+  where
+    waitForCompletion timeoutThread = readIORef threadsRef >>= \case
+      [] -> do
+        logDebugN "No job threads running."
+      threads -> do
+        logDebugN $ toS $ "Waiting for " <> show (DL.length threads) <> " to complete..."
+        (thread, _) <- waitAnyCatch threads
+        removeThreadRef thread
+        waitForCompletion timeoutThread
 
-jobPoller :: (HasJobMonitor m) => m ()
-jobPoller = do
+    timeout = do
+      threadDelay $ lockTimeout * oneSec
+      logDebugN "===> Timeout has expired. Forcefulling cancelling all job-threads now. <==="
+      mapM_ uninterruptibleCancel =<< (readIORef threadsRef)
+
+    threadMonitor_ =  forever $ readIORef threadsRef >>= \case
+      [] -> threadDelay =<< getPollingInterval
+      threads -> do
+        logDebugN $ toS $ "Waiting on job threads: " <> show (DL.length threads) <> " threads"
+        (thread, ret) <- waitAnyCatch threads
+        let tid = asyncThreadId thread
+        logDebugN $ toS $ "Thread finished " <> show tid <> ". Result: " <> show ret
+        removeThreadRef thread
+
+    removeThreadRef thread = atomicModifyIORef' threadsRef $ \threads -> (DL.delete thread threads, ())
+
+
+jobPoller :: (HasJobMonitor m) => IORef [Async ()] -> m ()
+jobPoller threadsRef = do
   processName <- liftIO jobWorkerName
   pool <- getDbPool
   tname <- getTableName
@@ -379,19 +422,21 @@ jobPoller = do
     t <- liftIO getCurrentTime
     (liftIO $ PGS.query pollerDbConn (jobPollingSql tname) (Locked, t, processName, t, (In [Queued, Retry]), Locked, (addUTCTime (fromIntegral (-lockTimeout)) t))) >>= \case
       -- When we don't have any jobs to run, we can relax a bit...
-      [] -> threadDelay defaultPollingInterval
+      [] -> threadDelay =<< getPollingInterval
 
       -- When we find a job to run, fork and try to find the next job without any delay...
       [Only (jid :: JobId)] -> void $ async $ do
         logDebugN $ "Forked new thread to run JobID=" <> (toS $ show jid)
-        runJob jid
+        spawnJob threadsRef lockTimeout $ runJob jid
 
       x -> error $ "WTF just happened? I was supposed to get only a single row, but got: " ++ (show x)
 
 
 
-jobEventListener :: (HasJobMonitor m) => m ()
-jobEventListener = do
+jobEventListener :: (HasJobMonitor m)
+                 => IORef [Async ()]
+                 -> m ()
+jobEventListener threadsRef = do
   logInfoN "Starting the job monitor via LISTEN/NOTIFY..."
   pool <- getDbPool
   tname <- getTableName
@@ -413,7 +458,7 @@ jobEventListener = do
           t <- liftIO getCurrentTime
           if (runAt_ <= t) && (isNothing mLockedAt_)
             then do logDebugN $ toS $ "Job needs needs to be run immediately. Attempting to fork in background. JobId=" <> show jid
-                    void $ async $ do
+                    void $ spawnJob threadsRef lockTimeout $ do
                       -- Let's try to lock the job first... it is possible that it has already
                       -- been picked up by the poller by the time we get here.
                       t2 <- liftIO getCurrentTime
@@ -460,3 +505,17 @@ jobType Job{jobPayload} = case jobPayload of
     Just (Aeson.String t) -> t
     _ -> ""
   _ -> ""
+
+spawnJob :: (HasJobMonitor m)
+         => IORef [Async a]
+         -> Int
+         -> m a
+         -> m (Async a)
+spawnJob threadsRef timeout action = do
+  a <- async action
+  t <- async $ do
+    threadDelay (oneSec * timeout)
+    uninterruptibleCancel a
+  atomicModifyIORef' threadsRef $ \threads -> (a:threads, ())
+  logDebugN $ toS $ "Spawned job in " <> show (asyncThreadId a)
+  pure a
