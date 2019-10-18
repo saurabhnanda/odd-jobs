@@ -233,8 +233,16 @@ data JobEvent = JobStart
               deriving (Eq, Show)
 
 testEverything appPool jobPool = testProperty "test everything" $ property $ do
+
   jobPayloads <- forAll $ Gen.list (Range.linear 300 1000) payloadGen
   jobsMVar <- liftIO $ newMVar (Map.empty :: Map.IntMap [(JobEvent, Job.Job)])
+
+  let maxDelay = sum $ map (payloadDelay jobPollingInterval) jobPayloads
+      completeRun = ((unSeconds maxDelay) `div` concurrencyFactor) + (2 * (unSeconds testPollingInterval))
+
+  shutdownAfter <- forAll $ Gen.choice [ pure $ Seconds completeRun -- Either we allow all jobs to be completed properly
+                                       , (Seconds <$> (Gen.int $ Range.linear 1 completeRun)) -- Or, we shutdown early after a random number of seconds
+                                       ]
 
   test $ withRandomTable jobPool $ \tname -> do
     (defaults, cleanup) <- liftIO $ Test.defaultJobMonitor tname jobPool
@@ -251,14 +259,20 @@ testEverything appPool jobPool = testProperty "test everything" $ property $ do
     (jobs :: [Job]) <- withAsync
             (liftIO $ Job.runJobMonitor jobMonitorSettings)
             (const $ finally
-              (liftIO $ actualTest jobPayloads tname jobsMVar)
+              (liftIO $ actualTest shutdownAfter jobPayloads tname jobsMVar)
               (liftIO cleanup))
 
     jobAudit <- takeMVar jobsMVar
 
-    -- All jobs should show up in the audit, which means they should have
+    [(Only (lockedJobCount :: Int))] <- liftIO $ Pool.withResource appPool $ \conn ->
+      PGS.query conn ("SELECT coalesce(count(id), 0) FROM " <>  tname <> " where status=?") (Only Job.Locked)
+
+    -- ALL jobs should show up in the audit, which means they should have
     -- been attempted /at least/ once
     (DL.sort $ map jobId jobs) === (DL.sort $ Map.keys jobAudit)
+
+    -- No job should be in a locked state
+    0 === lockedJobCount
 
     -- No job should've been simultaneously picked-up by more than one
     -- worker
@@ -268,6 +282,9 @@ testEverything appPool jobPool = testProperty "test everything" $ property $ do
 
   where
 
+    testPollingInterval = 5
+    concurrencyFactor = 5
+
     noRaceCondition js = DL.foldl (&&) True $ DL.zipWith (\(x,_) (y,_) -> not $ x==JobStart && y==JobStart) js (tail js)
 
     jobPollingInterval = Seconds 2
@@ -275,16 +292,12 @@ testEverything appPool jobPool = testProperty "test everything" $ property $ do
     onJobEvent evt jobsMVar job@Job{jobId} = void $ modifyMVar_ jobsMVar $ \jobMap -> do
       pure $ Map.insertWith (++) jobId [(evt, job)] jobMap
 
-    actualTest :: [JobPayload] -> Job.TableName -> MVar (Map.IntMap [(JobEvent, Job.Job)]) -> IO [Job]
-    actualTest jobPayloads tname jobsMVar = do
+    actualTest :: Seconds -> [JobPayload] -> Job.TableName -> MVar (Map.IntMap [(JobEvent, Job.Job)]) -> IO [Job]
+    actualTest shutdownAfter jobPayloads tname jobsMVar = do
       jobs <- forConcurrently jobPayloads $ \pload ->
         Pool.withResource appPool $ \conn ->
         liftIO $ Job.createJob conn tname pload
-      let concurrencyFactor = 5
-          maxDelay = sum $ map (payloadDelay jobPollingInterval) jobPayloads
-          timeout = Seconds $ ((unSeconds maxDelay) `div` concurrencyFactor) + (2 * (unSeconds testPollingInterval)) 
-          testPollingInterval = 5
-          poller nextAction = case nextAction of
+      let poller nextAction = case nextAction of
             Left s -> pure $ Left s
             Right remaining ->
               if remaining == Seconds 0
@@ -295,12 +308,12 @@ testEverything appPool jobPool = testProperty "test everything" $ property $ do
                         if (Map.foldl (\m js -> m && (isJobTerminalState js)) True jobMap)
                         then pure (Right $ Seconds 0)
                         else if remaining < testPollingInterval
-                             then pure (Left $ "Timeout. Job count=" <> show (length jobPayloads) <> " timeout=" <> show timeout <> " payload delay=" <> show maxDelay)
+                             then pure (Left $ "Timeout. Job count=" <> show (length jobPayloads) <> " shutdownAfter=" <> show shutdownAfter)
                              else pure $ Right (remaining - testPollingInterval)
                       poller x
 
-      poller (Right timeout) >>= \case
-        Left s -> Prelude.error s
+      poller (Right shutdownAfter) >>= \case
+        Left s -> pure jobs -- Prelude.error s
         Right _ -> pure jobs
 
     isJobTerminalState js = case js of

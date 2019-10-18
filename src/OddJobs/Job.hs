@@ -37,7 +37,7 @@ import Database.PostgreSQL.Simple.ToField as ToField
 import Database.PostgreSQL.Simple.FromRow as FromRow
 import UnliftIO.Async
 import Control.Concurrent.Async (AsyncCancelled(..))
-import UnliftIO.Concurrent (threadDelay)
+import UnliftIO.Concurrent (threadDelay, myThreadId)
 import Data.String
 import System.Posix.Process (getProcessID)
 import Network.HostName (getHostName)
@@ -342,7 +342,7 @@ runJobWithTimeout timeoutSec job = do
   a <- async $ liftIO $ jobRunner_ job
 
   x <- atomicModifyIORef' threadsRef $ \threads -> (a:threads, DL.map asyncThreadId (a:threads))
-  liftIO $ putStrLn $ "Threads: " <> show x
+  -- liftIO $ putStrLn $ "Threads: " <> show x
   logDebugN $ toS $ "Spawned job in " <> show (asyncThreadId a)
 
   t <- async $ do
@@ -459,8 +459,11 @@ waitForJobs = do
   readIORef threadsRef >>= \case
     [] -> liftIO $ putStrLn "Jobs stopped."
     as -> do
-      void $ waitAnyCatch as
-      liftIO $ putStrLn $ show $ DL.map asyncThreadId as
+      tid <- myThreadId
+      (a, _) <- waitAnyCatch as
+      liftIO $ putStrLn $ "Job complete: " <> show (asyncThreadId a)
+      liftIO $ putStrLn $ "Waiting for " <> show (DL.length as) <> " jobs to complete before shutting down. myThreadId=" <> (show tid)
+      delaySeconds (Seconds 1)
       waitForJobs
 
 
