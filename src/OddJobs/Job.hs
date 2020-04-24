@@ -24,6 +24,8 @@ module OddJobs.Job
   , jobType
   , delaySeconds
   , Seconds(..)
+  , ConcurrencyControl(..)
+  , withConnectionPool
   )
 where
 
@@ -65,6 +67,7 @@ import Control.Monad.Reader
 import GHC.Generics
 import qualified Data.HashMap.Strict as HM
 import qualified Data.List as DL
+import qualified Data.ByteString as BS
 
 class (MonadUnliftIO m, MonadBaseControl IO m, MonadLogger m) => HasJobMonitor m where
   getPollingInterval :: m Seconds
@@ -100,6 +103,12 @@ data JobMonitor = JobMonitor
 data ConcurrencyControl = MaxConcurrentJobs Int
                         | UnlimitedConcurrentJobs
                         | DynamicConcurrency (IO Bool)
+
+instance Show ConcurrencyControl where
+  show cc = case cc of
+    MaxConcurrentJobs n -> "MaxConcurrentJobs " <> show n
+    UnlimitedConcurrentJobs -> "UnlimitedConcurrentJobs"
+    DynamicConcurrency _ -> "DynamicConcurrency (IO Bool)"
 
 data MonitorEnv = MonitorEnv
   { envConfig :: JobMonitor
@@ -160,8 +169,9 @@ runJobMonitor jm = do
 defaultJobMonitor :: (Loc -> LogSource -> LogLevel -> LogStr -> IO ())
                   -> TableName
                   -> Pool Connection
+                  -> ConcurrencyControl
                   -> JobMonitor
-defaultJobMonitor logger tname dbpool = JobMonitor
+defaultJobMonitor logger tname dbpool ccControl = JobMonitor
   { monitorPollingInterval = defaultPollingInterval
   , monitorOnJobSuccess = (const $ pure ())
   , monitorOnJobFailed = (const $ pure ())
@@ -174,8 +184,22 @@ defaultJobMonitor logger tname dbpool = JobMonitor
   , monitorDefaultMaxAttempts = 10
   , monitorTableName = tname
   , monitorOnJobTimeout = (const $ pure ())
+  , monitorConcurrencyControl = ccControl
   }
 
+withConnectionPool :: (MonadUnliftIO m)
+                   => Either BS.ByteString PGS.ConnectInfo
+                   -> (Pool PGS.Connection -> m a)
+                   -> m a
+withConnectionPool connSettings action = withRunInIO $ \runInIO -> do
+  bracket poolCreator destroyAllResources (runInIO . action)
+  where
+    poolCreator = liftIO $
+      case connSettings of
+        Left connString ->
+          createPool (PGS.connectPostgreSQL connString) PGS.close 1 (fromIntegral $ 2 * (unSeconds defaultPollingInterval)) 5
+        Right connInfo ->
+          createPool (PGS.connect connInfo) PGS.close 1 (fromIntegral $ 2 * (unSeconds defaultPollingInterval)) 5
 
 oneSec :: Int
 oneSec = 1000000
@@ -256,7 +280,7 @@ jobWorkerName :: IO String
 jobWorkerName = do
   pid <- getProcessID
   hname <- getHostName
-  pure $ (show hname) ++ ":" ++ (show pid)
+  pure $ hname ++ ":" ++ (show pid)
 
 -- TODO: Make this configurable based on a per-job basis
 lockTimeout :: Seconds
@@ -371,23 +395,34 @@ runJob jid =
     Just job -> (flip catches) [Handler $ timeoutHandler job, Handler $ exceptionHandler job] $ do
       runJobWithTimeout lockTimeout job
       newJob <- saveJob job{jobStatus=Success, jobLockedBy=Nothing, jobLockedAt=Nothing}
+      logInfoN $ "Successfully completed JobId " <> humanReadableJob job
       onJobSuccess newJob
       pure ()
   where
     timeoutHandler job (e :: TimeoutException) = retryOrFail (show e) job onJobTimeout onJobPermanentlyFailed
     exceptionHandler job (e :: SomeException) = retryOrFail (show e) job onJobFailed onJobPermanentlyFailed
-    retryOrFail errStr job onFail onPermanentFail = do
+    humanReadableJob job@Job{jobId} = "JobId=" <> (toS $ show jobId) <> " JobType=" <> jobType job :: Text
+    retryOrFail errStr job@Job{jobAttempts} onFail onPermanentFail = do
       defaultMaxAttempts <- getDefaultMaxAttempts
-      let (newStatus, action) = if (jobAttempts job) >= defaultMaxAttempts
-                                then (Failed, onPermanentFail)
-                                else (Retry, onFail)
+      let (newStatus, action, logAction) = if jobAttempts >= defaultMaxAttempts
+                                           then ( Failed
+                                                , onPermanentFail
+                                                , logErrorN $ "FAILED attempts=" <> (toS $ show jobAttempts) <> " " <>
+                                                  humanReadableJob job
+                                                )
+                                           else ( Retry
+                                                , onFail
+                                                , logWarnN $ "RETRY attempts=" <> (toS $ show jobAttempts) <> " " <>
+                                                  humanReadableJob job
+                                                )
       t <- liftIO getCurrentTime
       newJob <- saveJob job{ jobStatus=newStatus
                            , jobLockedBy=Nothing
                            , jobLockedAt=Nothing
                            , jobLastError=(Just $ toJSON errStr) -- TODO: convert errors to json properly
-                           , jobRunAt=(addUTCTime (fromIntegral $ (1::Int) ^ (jobAttempts job)) t)
+                           , jobRunAt=(addUTCTime (fromIntegral $ (2::Int) ^ jobAttempts) t)
                            }
+      logAction
       void $ action newJob
       pure ()
 
@@ -396,13 +431,13 @@ restartUponCrash :: (HasJobMonitor m, Show a) => Text -> m a -> m ()
 restartUponCrash name_ action = do
   a <- async action
   finally (waitCatch a >>= fn) $ do
-    (liftIO $ putStrLn $ "Received shutdown: " <> toS name_)
+    (logDebugN $ "Received shutdown: " <> toS name_)
     cancel a
   where
     fn x = do
       case x of
-        Left (e :: SomeException) -> liftIO $ putStrLn $ toS $ name_ <> " seems to have exited with an error. Restarting: " <> toS (show e)
-        Right r -> liftIO $ putStrLn  $ toS $ name_ <> " seems to have exited with the folloing result: " <> toS (show r) <> ". Restaring."
+        Left (e :: SomeException) -> logErrorN $ name_ <> " seems to have exited with an error. Restarting: " <> toS (show e)
+        Right r -> logErrorN $ name_ <> " seems to have exited with the folloing result: " <> toS (show r) <> ". Restaring."
       restartUponCrash name_ action
 
 jobMonitor :: forall m . (HasJobMonitor m) => m ()
@@ -410,14 +445,14 @@ jobMonitor = do
   a1 <- async $ restartUponCrash "Job poller" jobPoller
   a2 <- async $ restartUponCrash "Job event listener" jobEventListener
   finally (void $ waitAnyCatch [a1, a2]) $ do
-    liftIO $ putStrLn "Stopping jobPoller and jobEventListener threads."
+    -- liftIO $ putStrLn "Stopping jobPoller and jobEventListener threads."
     logInfoN "Stopping jobPoller and jobEventListener threads."
     cancel a2
     cancel a1
-    liftIO $ putStrLn "Waiting for jobs to complete."
-    logInfoN "Waiting for job complete."
+    -- liftIO $ putStrLn "Waiting for jobs to complete."
+    logInfoN "Waiting for jobs to complete."
     waitForJobs
-    liftIO $ putStrLn "STOPPED jobPoller and jobEventListener threads."
+    -- liftIO $ putStrLn "STOPPED jobPoller and jobEventListener threads."
 
   -- threadsRef <- newIORef []
   -- jobMonitor_ threadsRef Nothing Nothing Nothing
@@ -466,12 +501,11 @@ waitForJobs :: (HasJobMonitor m)
 waitForJobs = do
   threadsRef <- envJobThreadsRef <$> getMonitorEnv
   readIORef threadsRef >>= \case
-    [] -> liftIO $ putStrLn "Jobs stopped."
+    [] -> logInfoN "All job-threads exited"
     as -> do
       tid <- myThreadId
       (a, _) <- waitAnyCatch as
-      liftIO $ putStrLn $ "Job complete: " <> show (asyncThreadId a)
-      liftIO $ putStrLn $ "Waiting for " <> show (DL.length as) <> " jobs to complete before shutting down. myThreadId=" <> (show tid)
+      logDebugN $ toS $ "Waiting for " <> show (DL.length as) <> " jobs to complete before shutting down. myThreadId=" <> (show tid)
       delaySeconds (Seconds 1)
       waitForJobs
 
@@ -532,13 +566,13 @@ jobPoller = do
   processName <- liftIO jobWorkerName
   pool <- getDbPool
   tname <- getTableName
-  logInfoN $ toS $ "Starting the job monitor via DB polling with processName=" <> show processName
+  logInfoN $ toS $ "Starting the job monitor via DB polling with processName=" <> processName
   concurrencyControlFn <- getConcurrencyControlFn
   withResource pool $ \pollerDbConn -> forever $ concurrencyControlFn >>= \case
     False -> logInfoN $ "NOT polling the job queue due to concurrency control"
     True -> do
       nextAction <- mask_ $ do
-        logInfoN $ toS $ "[" <> show processName <> "] Polling the job queue.."
+        logDebugN $ toS $ "[" <> processName <> "] Polling the job queue.."
         t <- liftIO getCurrentTime
         r <- liftIO $
              PGS.query pollerDbConn (jobPollingSql tname)
@@ -579,7 +613,7 @@ jobEventListener = do
   withResource pool $ \monitorDbConn -> do
     void $ liftIO $ PGS.execute monitorDbConn ("LISTEN " <> pgEventName tname) ()
     forever $ do
-      logInfoN "[LISTEN/NOFIFY] Event loop"
+      logDebugN "[LISTEN/NOFIFY] Event loop"
       notif <- liftIO $ getNotification monitorDbConn
       concurrencyControlFn >>= \case
         False -> logInfoN $ "Received job event, but ignoring it due to concurrency control"

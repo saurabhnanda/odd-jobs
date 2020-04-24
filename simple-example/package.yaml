@@ -1,0 +1,29 @@
+name:                simple-example
+version:             0.1.0.0
+#synopsis:
+#description:
+homepage:            https://github.com/saurabhnanda/simple-example#readme
+license:             BSD3
+author:              Saurabh Nanda
+maintainer:          saurabhnanda@gmail.com
+copyright:           Saurabh Nanda
+category:            Web
+extra-source-files:
+- README.md
+
+dependencies:
+  - base >= 4.7 && < 5
+  - odd-jobs
+  - text
+  - monad-logger
+  - aeson
+  - fast-logger
+
+executables:
+  simple-example:
+    source-dirs:      src
+    main:             Main.hs
+    ghc-options:
+      - -threaded
+      - -with-rtsopts=-N
+      - -O2

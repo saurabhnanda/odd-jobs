@@ -4,7 +4,7 @@ synopsis: A full-featured PostgreSQL-backed job queue (with an admin UI)
 description: |
   Something long comes here
   Something very long
-homepage:            https://github.com/githubuser/haskell-pg-queue#readme
+homepage:            https://github.com/saurabhnanda/haskell-pg-queue#readme
 license:             BSD3
 author:              Saurabh Nanda
 maintainer:          saurabhnanda@gmail.com
@@ -19,6 +19,7 @@ ghc-options:
   - -fno-warn-unused-imports 
   - -fno-warn-dodgy-exports 
   - -O0
+  - -Werror=missing-fields
 
 default-extensions:
   - NamedFieldPuns
@@ -64,7 +65,7 @@ dependencies:
   - friendly-time
   - unordered-containers
   - foreign-store
-  
+  - optparse-applicative
 
 
 library:
@@ -76,6 +77,7 @@ library:
     - OddJobs.Migrations
     - OddJobs.Web
     - OddJobs.Endpoints
+    - OddJobs.Cli
     - DevelMain
 
 # executables:
@@ -85,6 +87,18 @@ library:
 #     dependencies:
 #       - foreign-store
 #       - haskell-pg-queue
+
+executables:
+  odd-jobs-cli-parser:
+    source-dirs: test
+    ghc-options:
+      - -threaded
+      - -with-rtsopts=-N
+      - -main-is CliParser
+    main: CliParser.hs
+    other-modules: []
+    dependencies:
+      - odd-jobs
 
 tests:
   jobrunner:
@@ -97,7 +111,7 @@ tests:
       - tasty-discover
       - hedgehog
       - tasty-hedgehog
-      - haskell-pg-queue
+      - odd-jobs
       - tasty-hunit
       - random
       - monad-control
