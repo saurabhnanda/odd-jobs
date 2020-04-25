@@ -28,16 +28,18 @@ data StopArgs = StopArgs
 data Command
   = Start StartArgs
   | Stop StopArgs
+  | Status
   deriving (Eq, Show)
 
 data Args = Args
   { argsCommand :: !Command
   } deriving (Eq, Show)
 
-data CliActions = CliActions
-  { actionStart :: StartArgs -> (Config -> IO ()) -> IO ()
-  , actionStop :: StopArgs -> IO ()
-  }
+-- data CliActions = CliActions
+--   { actionStart :: StartArgs -> (Config -> IO ()) -> IO ()
+--   , actionStop :: StopArgs -> IO ()
+--   , actionStatus :: IO ()
+--   }
 
 argParser :: Seconds -> Parser Args
 argParser defaultTimeout = Args
@@ -45,8 +47,9 @@ argParser defaultTimeout = Args
 
 commandParser :: Seconds -> Parser Command
 commandParser defaultTimeout = hsubparser
-   ( command "start" (info startParser ( progDesc "start the odd-jobs runner")) <>
-     command "stop" (info (stopParser defaultTimeout) (progDesc "stop the odd-jobs runner"))
+   ( command "start" (info startParser (progDesc "start the odd-jobs runner")) <>
+     command "stop" (info (stopParser defaultTimeout) (progDesc "stop the odd-jobs runner")) <>
+     command "status" (info statusParser (progDesc "print status of all active jobs"))
    )
 
 pidFileParser :: Parser FilePath
@@ -57,6 +60,9 @@ pidFileParser =
               showDefault <>
               help "Path of the PID file for the daemon. Takes effect only during stop or only when using the --daemonize option at startup"
             )
+
+statusParser :: Parser Command
+statusParser = pure Status
 
 startParser :: Parser Command
 startParser = fmap Start $ StartArgs
@@ -102,13 +108,13 @@ defaultDaemonOptions = DaemonOptions
   }
 
 defaultStartCommand :: StartArgs
-                    -> CliActions
+                    -> ((Config -> IO ()) -> IO ())
                     -> IO ()
-defaultStartCommand args@StartArgs{..} CliActions{actionStart} = do
+defaultStartCommand StartArgs{..} startFn = do
   progName <- getProgName
   case startDaemonize of
     False -> do
-      actionStart args startJobRunner
+      startFn startJobRunner
     True -> do
       (Dir.doesPathExist startPidFile) >>= \case
         True -> do
@@ -120,13 +126,11 @@ defaultStartCommand args@StartArgs{..} CliActions{actionStart} = do
             pid <- getProcessID
             writeFile startPidFile (show pid)
             putStrLn $ "Started " <> progName <> " in background with PID=" <> show pid <> ". PID written to " <> startPidFile
-            actionStart args $ \jm -> startJobRunner jm{cfgPidFile = Just startPidFile}
+            startFn $ \jm -> startJobRunner jm{cfgPidFile = Just startPidFile}
 
 defaultStopCommand :: StopArgs
-                   -> CliActions
                    -> IO ()
-defaultStopCommand args@StopArgs{..} CliActions{actionStop} = do
-  actionStop args
+defaultStopCommand StopArgs{..} = do
   progName <- getProgName
   pid <- read <$> (readFile shutPidFile)
   if (shutTimeout == Seconds 0)
@@ -155,12 +159,14 @@ defaultStopCommand args@StopArgs{..} CliActions{actionStop} = do
           pure ()
 
 
-defaultMain :: CliActions -> IO ()
-defaultMain cliActions = do
+defaultMain :: ((Config -> IO ()) -> IO ()) -> IO ()
+defaultMain startFn = do
   Args{argsCommand} <- customExecParser defaultCliParserPrefs (defaultCliInfo lockTimeout)
   case argsCommand of
     Start cmdArgs -> do
-      defaultStartCommand cmdArgs cliActions
+      defaultStartCommand cmdArgs startFn
     Stop cmdArgs -> do
-      defaultStopCommand cmdArgs cliActions
+      defaultStopCommand cmdArgs
+    Status ->
+      Prelude.error "not implemented yet"
 

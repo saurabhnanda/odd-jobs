@@ -7,7 +7,7 @@
 module Main where
 
 import OddJobs.Job (Job(..), defaultConfig, ConcurrencyControl(..), withConnectionPool, Config(..), throwParsePayload)
-import OddJobs.Cli (defaultMain, CliActions(..))
+import OddJobs.Cli (defaultMain)
 import Control.Monad.Logger(defaultLogStr, LogLevel(..))
 import System.Log.FastLogger(withFastLogger, LogType'(..), defaultBufSize)
 
@@ -37,16 +37,13 @@ myJobRunner job = do
 
 main :: IO ()
 main = do
-  defaultMain CliActions
-    { actionStop = const $ pure ()
-    , actionStart = startJobMonitor
-    }
+  defaultMain startJobMonitor
   where
-    startJobMonitor _ runJobMonitor = do
+    startJobMonitor callback = do
       withConnectionPool (Left "dbname=jobs_test user=jobs_test password=jobs_test host=localhost")$ \dbPool -> do
         withFastLogger (LogFileNoRotate "oddjobs.log" defaultBufSize) $ \logger -> do
           let loggerIO loc logSource logLevel logStr = if logLevel==LevelDebug
                                                        then pure ()
                                                        else logger $ defaultLogStr loc logSource logLevel logStr
               jm = defaultConfig loggerIO "jobs_aqgrqtaowi" dbPool (MaxConcurrentJobs 50)
-          runJobMonitor jm{cfgJobRunner=myJobRunner}
+          callback jm{cfgJobRunner=myJobRunner}
