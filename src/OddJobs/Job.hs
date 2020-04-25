@@ -26,6 +26,7 @@ module OddJobs.Job
   , Seconds(..)
   , ConcurrencyControl(..)
   , withConnectionPool
+  , lockTimeout
   )
 where
 
@@ -68,6 +69,8 @@ import GHC.Generics
 import qualified Data.HashMap.Strict as HM
 import qualified Data.List as DL
 import qualified Data.ByteString as BS
+import System.FilePath (FilePath)
+import qualified System.Directory as Dir
 
 class (MonadUnliftIO m, MonadBaseControl IO m, MonadLogger m) => HasJobMonitor m where
   getPollingInterval :: m Seconds
@@ -83,6 +86,7 @@ class (MonadUnliftIO m, MonadBaseControl IO m, MonadLogger m) => HasJobMonitor m
   onJobTimeout :: Job -> m ()
   getMonitorEnv :: m MonitorEnv
   getConcurrencyControl :: m ConcurrencyControl
+  getPidFile :: m (Maybe FilePath)
 
 data JobMonitor = JobMonitor
   { monitorPollingInterval :: Seconds
@@ -98,6 +102,7 @@ data JobMonitor = JobMonitor
   , monitorTableName :: TableName
   , monitorDefaultMaxAttempts :: Int
   , monitorConcurrencyControl :: ConcurrencyControl
+  , monitorPidFile :: Maybe FilePath
   }
 
 data ConcurrencyControl = MaxConcurrentJobs Int
@@ -155,6 +160,8 @@ instance HasJobMonitor JobMonitorM where
 
   getConcurrencyControl = (monitorConcurrencyControl . envConfig <$> ask)
 
+  getPidFile = monitorPidFile . envConfig <$> ask
+
 
 
 runJobMonitor :: JobMonitor -> IO ()
@@ -185,6 +192,7 @@ defaultJobMonitor logger tname dbpool ccControl = JobMonitor
   , monitorTableName = tname
   , monitorOnJobTimeout = (const $ pure ())
   , monitorConcurrencyControl = ccControl
+  , monitorPidFile = Nothing
   }
 
 withConnectionPool :: (MonadUnliftIO m)
@@ -200,9 +208,6 @@ withConnectionPool connSettings action = withRunInIO $ \runInIO -> do
           createPool (PGS.connectPostgreSQL connString) PGS.close 1 (fromIntegral $ 2 * (unSeconds defaultPollingInterval)) 5
         Right connInfo ->
           createPool (PGS.connect connInfo) PGS.close 1 (fromIntegral $ 2 * (unSeconds defaultPollingInterval)) 5
-
-oneSec :: Int
-oneSec = 1000000
 
 defaultPollingInterval :: Seconds
 defaultPollingInterval = Seconds 5
@@ -285,9 +290,6 @@ jobWorkerName = do
 -- TODO: Make this configurable based on a per-job basis
 lockTimeout :: Seconds
 lockTimeout = Seconds 600
-
-delaySeconds :: (MonadIO m) => Seconds -> m ()
-delaySeconds (Seconds s) = threadDelay $ oneSec * s
 
 jobDbColumns :: (IsString s, Semigroup s) => [s]
 jobDbColumns =
@@ -445,13 +447,16 @@ jobMonitor = do
   a1 <- async $ restartUponCrash "Job poller" jobPoller
   a2 <- async $ restartUponCrash "Job event listener" jobEventListener
   finally (void $ waitAnyCatch [a1, a2]) $ do
-    -- liftIO $ putStrLn "Stopping jobPoller and jobEventListener threads."
     logInfoN "Stopping jobPoller and jobEventListener threads."
     cancel a2
     cancel a1
-    -- liftIO $ putStrLn "Waiting for jobs to complete."
     logInfoN "Waiting for jobs to complete."
     waitForJobs
+    getPidFile >>= \case
+      Nothing -> pure ()
+      Just f -> do
+        logInfoN $ "Removing PID file: " <> toS f
+        liftIO $ Dir.removePathForcibly f
     -- liftIO $ putStrLn "STOPPED jobPoller and jobEventListener threads."
 
   -- threadsRef <- newIORef []

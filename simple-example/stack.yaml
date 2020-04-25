@@ -44,6 +44,7 @@ packages:
 
 extra-deps:
   - timing-convenience-0.1@sha256:7ff807a9a9e5596f2b18d45c5a01aefb91d4a98f6a1008d183b5c550f68f7cb7,2092
+  - direct-daemonize-3.1@sha256:f33505932b8613267cd8ad2d51470af2c5708d750ddf55a5dd38292f04962dcc,1630
 
 
 # Override default flag values for local packages and extra-deps

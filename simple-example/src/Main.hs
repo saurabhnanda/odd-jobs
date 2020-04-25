@@ -6,7 +6,7 @@
 module Main where
 
 import OddJobs.Job (Job(..), defaultJobMonitor, ConcurrencyControl(..), withConnectionPool, JobMonitor(..))
-import OddJobs.Cli (defaultMain)
+import OddJobs.Cli (defaultMain, CliActions(..))
 import Control.Monad.Logger(defaultLogStr, LogLevel(..))
 import System.Log.FastLogger(withFastLogger, LogType'(..), defaultBufSize)
 
@@ -24,7 +24,6 @@ data MyJob = SendWelcomeEmail Int
 
 myJobRunner :: Job -> IO ()
 myJobRunner Job{jobPayload} = do
-  traceM $ show jobPayload
   case (ifromJSON jobPayload :: IResult MyJob) of
     IError jpath e ->
       Prelude.error $ formatError jpath e
@@ -39,11 +38,16 @@ myJobRunner Job{jobPayload} = do
 
 main :: IO ()
 main = do
-  withConnectionPool (Left "dbname=jobs_test user=jobs_test password=jobs_test host=localhost")$ \dbPool -> do
-    withFastLogger (LogStdout defaultBufSize) $ \logger -> do
-      let loggerIO loc logSource logLevel logStr = if logLevel==LevelDebug
-                                                   then pure ()
-                                                   else logger $ defaultLogStr loc logSource logLevel logStr
-          jm = defaultJobMonitor loggerIO "jobs_aqgrqtaowi" dbPool (MaxConcurrentJobs 50)
-      defaultMain jm{monitorJobRunner=myJobRunner}
-
+  defaultMain CliActions
+    { actionStop = const $ pure ()
+    , actionStart = startJobMonitor
+    }
+  where
+    startJobMonitor _ runJobMonitor = do
+      withConnectionPool (Left "dbname=jobs_test user=jobs_test password=jobs_test host=localhost")$ \dbPool -> do
+        withFastLogger (LogFileNoRotate "oddjobs.log" defaultBufSize) $ \logger -> do
+          let loggerIO loc logSource logLevel logStr = if logLevel==LevelDebug
+                                                       then pure ()
+                                                       else logger $ defaultLogStr loc logSource logLevel logStr
+              jm = defaultJobMonitor loggerIO "jobs_aqgrqtaowi" dbPool (MaxConcurrentJobs 50)
+          runJobMonitor jm{monitorJobRunner=myJobRunner}

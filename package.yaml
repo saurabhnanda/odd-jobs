@@ -66,6 +66,9 @@ dependencies:
   - unordered-containers
   - foreign-store
   - optparse-applicative
+  - direct-daemonize
+  - filepath
+  - directory
 
 
 library:
