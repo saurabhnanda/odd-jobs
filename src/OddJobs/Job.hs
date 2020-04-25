@@ -7,7 +7,7 @@ module OddJobs.Job
   , scheduleJob
   , Job(..)
   , JobRunner
-  , HasJobMonitor(..)
+  , HasJobRunner (..)
   , Status(..)
   , findJobById
   , findJobByIdIO
@@ -15,9 +15,9 @@ module OddJobs.Job
   , saveJob
   , saveJobIO
   , defaultPollingInterval
-  , JobMonitor(..)
-  , defaultJobMonitor
-  , runJobMonitor
+  , Config(..)
+  , defaultConfig
+  , startJobRunner
   , TableName
   , jobDbColumns
   , concatJobDbColumns
@@ -69,10 +69,11 @@ import GHC.Generics
 import qualified Data.HashMap.Strict as HM
 import qualified Data.List as DL
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as BSL
 import System.FilePath (FilePath)
 import qualified System.Directory as Dir
 
-class (MonadUnliftIO m, MonadBaseControl IO m, MonadLogger m) => HasJobMonitor m where
+class (MonadUnliftIO m, MonadBaseControl IO m, MonadLogger m) => HasJobRunner m where
   getPollingInterval :: m Seconds
   onJobSuccess :: Job -> m ()
   onJobFailed :: Job -> m ()
@@ -84,25 +85,25 @@ class (MonadUnliftIO m, MonadBaseControl IO m, MonadLogger m) => HasJobMonitor m
   onJobStart :: Job -> m ()
   getDefaultMaxAttempts :: m Int
   onJobTimeout :: Job -> m ()
-  getMonitorEnv :: m MonitorEnv
+  getRunnerEnv :: m RunnerEnv
   getConcurrencyControl :: m ConcurrencyControl
   getPidFile :: m (Maybe FilePath)
 
-data JobMonitor = JobMonitor
-  { monitorPollingInterval :: Seconds
-  , monitorOnJobSuccess :: Job -> IO ()
-  , monitorOnJobFailed :: Job -> IO ()
-  , monitorOnJobPermanentlyFailed :: Job -> IO ()
-  , monitorOnJobStart :: Job -> IO ()
-  , monitorOnJobTimeout :: Job -> IO ()
-  , monitorJobRunner :: Job -> IO ()
-  , monitorMaxAttempts :: Int
-  , monitorLogger :: Loc -> LogSource -> LogLevel -> LogStr -> IO ()
-  , monitorDbPool :: Pool Connection
-  , monitorTableName :: TableName
-  , monitorDefaultMaxAttempts :: Int
-  , monitorConcurrencyControl :: ConcurrencyControl
-  , monitorPidFile :: Maybe FilePath
+data Config = Config
+  { cfgPollingInterval :: Seconds
+  , cfgOnJobSuccess :: Job -> IO ()
+  , cfgOnJobFailed :: Job -> IO ()
+  , cfgOnJobPermanentlyFailed :: Job -> IO ()
+  , cfgOnJobStart :: Job -> IO ()
+  , cfgOnJobTimeout :: Job -> IO ()
+  , cfgJobRunner :: Job -> IO ()
+  , cfgMaxAttempts :: Int
+  , cfgLogger :: Loc -> LogSource -> LogLevel -> LogStr -> IO ()
+  , cfgDbPool :: Pool Connection
+  , cfgTableName :: TableName
+  , cfgDefaultMaxAttempts :: Int
+  , cfgConcurrencyControl :: ConcurrencyControl
+  , cfgPidFile :: Maybe FilePath
   }
 
 data ConcurrencyControl = MaxConcurrentJobs Int
@@ -115,95 +116,95 @@ instance Show ConcurrencyControl where
     UnlimitedConcurrentJobs -> "UnlimitedConcurrentJobs"
     DynamicConcurrency _ -> "DynamicConcurrency (IO Bool)"
 
-data MonitorEnv = MonitorEnv
-  { envConfig :: JobMonitor
-  , envJobThreadsRef :: IORef [Async ()]
+data RunnerEnv = RunnerEnv
+  { envConfig :: !Config
+  , envJobThreadsRef :: !(IORef [Async ()])
   }
 
-type JobMonitorM = ReaderT MonitorEnv IO
+type RunnerM = ReaderT RunnerEnv IO
 
-instance {-# OVERLAPS #-} MonadLogger JobMonitorM where
+instance {-# OVERLAPS #-} MonadLogger RunnerM where
   monadLoggerLog loc logsource loglevel msg = do
-    fn <- monitorLogger . envConfig <$> ask
+    fn <- cfgLogger . envConfig <$> ask
     liftIO $ fn loc logsource loglevel (toLogStr msg)
 
 
-logCallbackErrors :: (HasJobMonitor m) => JobId -> Text -> m () -> m ()
+logCallbackErrors :: (HasJobRunner m) => JobId -> Text -> m () -> m ()
 logCallbackErrors jid msg action = catchAny action $ \e -> logErrorN $ msg <> " Job ID=" <> toS (show jid) <> ": " <> toS (show e)
 
-instance HasJobMonitor JobMonitorM where
-  getPollingInterval = monitorPollingInterval . envConfig <$> ask
+instance HasJobRunner RunnerM where
+  getPollingInterval = cfgPollingInterval . envConfig <$> ask
   onJobFailed job = do
-    fn <- monitorOnJobFailed . envConfig  <$> ask
+    fn <- cfgOnJobFailed . envConfig  <$> ask
     logCallbackErrors (jobId job) "onJobFailed" $ liftIO $ fn job
   onJobSuccess job = do
-    fn <- monitorOnJobSuccess . envConfig <$> ask
+    fn <- cfgOnJobSuccess . envConfig <$> ask
     logCallbackErrors (jobId job) "onJobSuccess" $ liftIO $ fn job
   onJobPermanentlyFailed job = do
-    fn <- monitorOnJobPermanentlyFailed . envConfig <$> ask
+    fn <- cfgOnJobPermanentlyFailed . envConfig <$> ask
     logCallbackErrors (jobId job) "onJobPermanentlyFailed" $ liftIO $ fn job
-  getJobRunner = monitorJobRunner . envConfig <$> ask
-  getMaxAttempts = monitorMaxAttempts . envConfig <$> ask
-  getDbPool = monitorDbPool . envConfig <$> ask
-  getTableName = monitorTableName . envConfig <$> ask
+  getJobRunner = cfgJobRunner . envConfig <$> ask
+  getMaxAttempts = cfgMaxAttempts . envConfig <$> ask
+  getDbPool = cfgDbPool . envConfig <$> ask
+  getTableName = cfgTableName . envConfig <$> ask
   onJobStart job = do
-    fn <- monitorOnJobStart . envConfig <$> ask
+    fn <- cfgOnJobStart . envConfig <$> ask
     logCallbackErrors (jobId job) "onJobStart" $ liftIO $ fn job
 
   onJobTimeout job = do
-    fn <- monitorOnJobTimeout . envConfig <$> ask
+    fn <- cfgOnJobTimeout . envConfig <$> ask
     logCallbackErrors (jobId job) "onJobTimeout" $ liftIO $ fn job
 
-  getDefaultMaxAttempts = monitorDefaultMaxAttempts . envConfig <$> ask
+  getDefaultMaxAttempts = cfgDefaultMaxAttempts . envConfig <$> ask
 
-  getMonitorEnv = ask
+  getRunnerEnv = ask
 
-  getConcurrencyControl = (monitorConcurrencyControl . envConfig <$> ask)
+  getConcurrencyControl = (cfgConcurrencyControl . envConfig <$> ask)
 
-  getPidFile = monitorPidFile . envConfig <$> ask
+  getPidFile = cfgPidFile . envConfig <$> ask
 
 
 
-runJobMonitor :: JobMonitor -> IO ()
-runJobMonitor jm = do
+startJobRunner :: Config -> IO ()
+startJobRunner jm = do
   r <- newIORef []
-  let monitorEnv = MonitorEnv
+  let monitorEnv = RunnerEnv
                    { envConfig = jm
                    , envJobThreadsRef = r
                    }
   runReaderT jobMonitor monitorEnv
 
-defaultJobMonitor :: (Loc -> LogSource -> LogLevel -> LogStr -> IO ())
+defaultConfig :: (Loc -> LogSource -> LogLevel -> LogStr -> IO ())
                   -> TableName
                   -> Pool Connection
                   -> ConcurrencyControl
-                  -> JobMonitor
-defaultJobMonitor logger tname dbpool ccControl = JobMonitor
-  { monitorPollingInterval = defaultPollingInterval
-  , monitorOnJobSuccess = (const $ pure ())
-  , monitorOnJobFailed = (const $ pure ())
-  , monitorOnJobPermanentlyFailed = (const $ pure ())
-  , monitorJobRunner = (const $ pure ())
-  , monitorMaxAttempts = 25
-  , monitorLogger = logger
-  , monitorDbPool = dbpool
-  , monitorOnJobStart = (const $ pure ())
-  , monitorDefaultMaxAttempts = 10
-  , monitorTableName = tname
-  , monitorOnJobTimeout = (const $ pure ())
-  , monitorConcurrencyControl = ccControl
-  , monitorPidFile = Nothing
+                  -> Config
+defaultConfig logger tname dbpool ccControl = Config
+  { cfgPollingInterval = defaultPollingInterval
+  , cfgOnJobSuccess = (const $ pure ())
+  , cfgOnJobFailed = (const $ pure ())
+  , cfgOnJobPermanentlyFailed = (const $ pure ())
+  , cfgJobRunner = (const $ pure ())
+  , cfgMaxAttempts = 25
+  , cfgLogger = logger
+  , cfgDbPool = dbpool
+  , cfgOnJobStart = (const $ pure ())
+  , cfgDefaultMaxAttempts = 10
+  , cfgTableName = tname
+  , cfgOnJobTimeout = (const $ pure ())
+  , cfgConcurrencyControl = ccControl
+  , cfgPidFile = Nothing
   }
 
 withConnectionPool :: (MonadUnliftIO m)
                    => Either BS.ByteString PGS.ConnectInfo
                    -> (Pool PGS.Connection -> m a)
                    -> m a
-withConnectionPool connSettings action = withRunInIO $ \runInIO -> do
+withConnectionPool connConfig action = withRunInIO $ \runInIO -> do
   bracket poolCreator destroyAllResources (runInIO . action)
   where
     poolCreator = liftIO $
-      case connSettings of
+      case connConfig of
         Left connString ->
           createPool (PGS.connectPostgreSQL connString) PGS.close 1 (fromIntegral $ 2 * (unSeconds defaultPollingInterval)) 5
         Right connInfo ->
@@ -230,7 +231,7 @@ data Job = Job
   , jobUpdatedAt :: UTCTime
   , jobRunAt :: UTCTime
   , jobStatus :: Status
-  , jobPayload :: Value
+  , jobPayload :: BSL.ByteString
   , jobLastError :: Maybe Value
   , jobAttempts :: Int
   , jobLockedAt :: Maybe UTCTime
@@ -316,14 +317,14 @@ concatJobDbColumns = concatJobDbColumns_ jobDbColumns ""
 findJobByIdQuery :: TableName -> PGS.Query
 findJobByIdQuery tname = "SELECT " <> concatJobDbColumns <> " FROM " <> tname <> " WHERE id = ?"
 
-withDbConnection :: (HasJobMonitor m)
+withDbConnection :: (HasJobRunner m)
                  => (Connection -> m a)
                  -> m a
 withDbConnection action = do
   pool <- getDbPool
   withResource pool action
 
-findJobById :: (HasJobMonitor m)
+findJobById :: (HasJobRunner m)
             => JobId
             -> m (Maybe Job)
 findJobById jid = do
@@ -341,7 +342,7 @@ saveJobQuery :: TableName -> PGS.Query
 saveJobQuery tname = "UPDATE " <> tname <> " set run_at = ?, status = ?, payload = ?, last_error = ?, attempts = ?, locked_at = ?, locked_by = ? WHERE id = ? RETURNING " <> concatJobDbColumns
 
 
-saveJob :: (HasJobMonitor m) => Job -> m Job
+saveJob :: (HasJobRunner m) => Job -> m Job
 saveJob j = do
   tname <- getTableName
   withDbConnection $ \conn -> liftIO $ saveJobIO conn tname j
@@ -366,12 +367,12 @@ saveJobIO conn tname Job{jobRunAt, jobStatus, jobPayload, jobLastError, jobAttem
 data TimeoutException = TimeoutException deriving (Eq, Show)
 instance Exception TimeoutException
 
-runJobWithTimeout :: (HasJobMonitor m)
+runJobWithTimeout :: (HasJobRunner m)
                   => Seconds
                   -> Job
                   -> m ()
 runJobWithTimeout timeoutSec job = do
-  threadsRef <- envJobThreadsRef <$> getMonitorEnv
+  threadsRef <- envJobThreadsRef <$> getRunnerEnv
   jobRunner_ <- getJobRunner
 
   a <- async $ liftIO $ jobRunner_ job
@@ -390,7 +391,7 @@ runJobWithTimeout timeoutSec job = do
     (atomicModifyIORef' threadsRef $ \threads -> (DL.delete a threads, ()))
 
 
-runJob :: (HasJobMonitor m) => JobId -> m ()
+runJob :: (HasJobRunner m) => JobId -> m ()
 runJob jid =
   (findJobById jid) >>= \case
     Nothing -> Prelude.error $ "Could not find job id=" <> show jid
@@ -429,7 +430,7 @@ runJob jid =
       pure ()
 
 
-restartUponCrash :: (HasJobMonitor m, Show a) => Text -> m a -> m ()
+restartUponCrash :: (HasJobRunner m, Show a) => Text -> m a -> m ()
 restartUponCrash name_ action = do
   a <- async action
   finally (waitCatch a >>= fn) $ do
@@ -442,7 +443,7 @@ restartUponCrash name_ action = do
         Right r -> logErrorN $ name_ <> " seems to have exited with the folloing result: " <> toS (show r) <> ". Restaring."
       restartUponCrash name_ action
 
-jobMonitor :: forall m . (HasJobMonitor m) => m ()
+jobMonitor :: forall m . (HasJobRunner m) => m ()
 jobMonitor = do
   a1 <- async $ restartUponCrash "Job poller" jobPoller
   a2 <- async $ restartUponCrash "Job event listener" jobEventListener
@@ -501,10 +502,10 @@ jobMonitor = do
 jobPollingSql :: TableName -> Query
 jobPollingSql tname = "update " <> tname <> " set status = ?, locked_at = ?, locked_by = ?, attempts=attempts+1 WHERE id in (select id from " <> tname <> " where (run_at<=? AND ((status in ?) OR (status = ? and locked_at<?))) ORDER BY run_at ASC LIMIT 1 FOR UPDATE) RETURNING id"
 
-waitForJobs :: (HasJobMonitor m)
+waitForJobs :: (HasJobRunner m)
             => m ()
 waitForJobs = do
-  threadsRef <- envJobThreadsRef <$> getMonitorEnv
+  threadsRef <- envJobThreadsRef <$> getRunnerEnv
   readIORef threadsRef >>= \case
     [] -> logInfoN "All job-threads exited"
     as -> do
@@ -544,11 +545,11 @@ waitForJobs = do
 
   --   removeThreadRef thread = atomicModifyIORef' threadsRef $ \threads -> (DL.delete thread threads, ())
 
--- withThreadAccounting :: (HasJobMonitor m)
+-- withThreadAccounting :: (HasJobRunner m)
 --                      => m a
 --                      -> m (Async a)
 -- withThreadAccounting action = do
---   threadsRef <- envJobThreadsRef <$> getMonitorEnv
+--   threadsRef <- envJobThreadsRef <$> getRunnerEnv
 --   mv <- newEmptyMVar
 --   a <- async $ do
 --     takeMVar mv
@@ -557,16 +558,16 @@ waitForJobs = do
 --   putMVar mv ()
 --   pure a
 
-getConcurrencyControlFn :: (HasJobMonitor m)
+getConcurrencyControlFn :: (HasJobRunner m)
                         => m (m Bool)
 getConcurrencyControlFn = getConcurrencyControl >>= \case
   UnlimitedConcurrentJobs -> pure $ pure True
   MaxConcurrentJobs maxJobs -> pure $ do
-    curJobs <- getMonitorEnv >>= (readIORef . envJobThreadsRef)
+    curJobs <- getRunnerEnv >>= (readIORef . envJobThreadsRef)
     pure $ (DL.length curJobs) < maxJobs
   DynamicConcurrency fn -> pure $ liftIO fn
 
-jobPoller :: (HasJobMonitor m) => m ()
+jobPoller :: (HasJobRunner m) => m ()
 jobPoller = do
   processName <- liftIO jobWorkerName
   pool <- getDbPool
@@ -597,7 +598,7 @@ jobPoller = do
     delayAction = delaySeconds =<< getPollingInterval
     noDelayAction = pure ()
 
-jobEventListener :: (HasJobMonitor m)
+jobEventListener :: (HasJobRunner m)
                  => m ()
 jobEventListener = do
   logInfoN "Starting the job monitor via LISTEN/NOTIFY..."
@@ -673,13 +674,15 @@ scheduleJob conn tname payload runAt = do
 
 
 jobType :: Job -> T.Text
-jobType Job{jobPayload} = case jobPayload of
-  Aeson.Object hm -> case HM.lookup "tag" hm of
-    Just (Aeson.String t) -> t
-    _ -> ""
-  _ -> ""
+jobType Job{jobPayload} = ""
+
+  -- case jobPayload of
+  -- Aeson.Object hm -> case HM.lookup "tag" hm of
+  --   Just (Aeson.String t) -> t
+  --   _ -> ""
+  -- _ -> ""
 
 
--- getMonitorEnv :: (HasJobMonitor m) => m MonitorEnv
--- getMonitorEnv = ask
+-- getRunnerEnv :: (HasJobRunner m) => m RunnerEnv
+-- getRunnerEnv = ask
 

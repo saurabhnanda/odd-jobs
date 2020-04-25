@@ -3,7 +3,7 @@ module OddJobs.Cli where
 
 import Options.Applicative as Opts
 import Data.Text
-import OddJobs.Job (runJobMonitor, JobMonitor(..), lockTimeout)
+import OddJobs.Job (startJobRunner, Config(..), lockTimeout)
 import System.Daemonize (DaemonOptions(..), daemonize)
 import System.FilePath (FilePath)
 import System.Posix.Process (getProcessID)
@@ -35,7 +35,7 @@ data Args = Args
   } deriving (Eq, Show)
 
 data CliActions = CliActions
-  { actionStart :: StartArgs -> (JobMonitor -> IO ()) -> IO ()
+  { actionStart :: StartArgs -> (Config -> IO ()) -> IO ()
   , actionStop :: StopArgs -> IO ()
   }
 
@@ -108,7 +108,7 @@ defaultStartCommand args@StartArgs{..} CliActions{actionStart} = do
   progName <- getProgName
   case startDaemonize of
     False -> do
-      actionStart args runJobMonitor
+      actionStart args startJobRunner
     True -> do
       (Dir.doesPathExist startPidFile) >>= \case
         True -> do
@@ -120,7 +120,7 @@ defaultStartCommand args@StartArgs{..} CliActions{actionStart} = do
             pid <- getProcessID
             writeFile startPidFile (show pid)
             putStrLn $ "Started " <> progName <> " in background with PID=" <> show pid <> ". PID written to " <> startPidFile
-            actionStart args $ \jm -> runJobMonitor jm{monitorPidFile = Just startPidFile}
+            actionStart args $ \jm -> startJobRunner jm{cfgPidFile = Just startPidFile}
 
 defaultStopCommand :: StopArgs
                    -> CliActions

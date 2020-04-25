@@ -18,7 +18,7 @@ import Lucid.Base
 import Data.Text as T
 import Network.Wai.Handler.Warp   (run)
 import Servant.Server.StaticFiles (serveDirectoryFileServer)
-import UnliftIO
+import UnliftIO hiding (Handler)
 import Database.PostgreSQL.Simple as PGS
 import Data.Pool as Pool
 import Control.Monad.Reader
@@ -38,7 +38,16 @@ import Data.List ((\\))
 import qualified System.Log.FastLogger as FLogger
 import qualified System.Log.FastLogger.Date as FLogger
 import Control.Monad.Logger as MLogger
+import qualified Data.ByteString.Lazy as BSL
 
+-- startApp :: IO ()
+-- startApp = undefined
+
+-- stopApp :: IO ()
+-- stopApp = undefined
+
+tname :: TableName
+tname = "jobs_aqgrqtaowi"
 
 startApp :: IO ()
 startApp = do
@@ -59,68 +68,70 @@ startApp = do
   tcache <- FLogger.newTimeCache FLogger.simpleTimeFormat'
   (tlogger, cleanup) <- FLogger.newTimedFastLogger tcache (FLogger.LogStdout FLogger.defaultBufSize)
   let flogger loc lsource llevel lstr = tlogger $ \t -> FLogger.toLogStr t <> " | " <> defaultLogStr loc lsource llevel lstr
-      jm = Job.defaultJobMonitor flogger "jobs_ugqsdyceqf" dbPool
+      jm = Job.defaultConfig flogger tname dbPool Job.UnlimitedConcurrentJobs
 
-  let nt :: ReaderT Job.JobMonitor IO a -> Servant.Handler a
+  let nt :: ReaderT Job.Config IO a -> Servant.Handler a
       nt action = (liftIO $ try $ runReaderT action jm) >>= \case
         Left (e :: SomeException) -> Servant.Handler  $ ExceptT $ pure $ Left $ err500 { errBody = toS $ show e }
         Right a -> Servant.Handler $ ExceptT $ pure $ Right a
       appProxy = (Proxy :: Proxy (ToServant Routes AsApi))
 
   finally
-    (run 8080 $ serve appProxy $ hoistServer appProxy nt (toServant server))
+    (run 8080 $ genericServe (server dbPool))
     (cleanup >> (Pool.destroyAllResources dbPool))
 
 stopApp :: IO ()
 stopApp = pure ()
 
-server :: HasJobMonitor m
-       => Routes (AsServerT m)
-server = Routes
-  { rFilterResults = filterResults
+server :: Pool Connection
+       -> Routes AsServer
+server dbPool = Routes
+  { rFilterResults = (\mFilter -> filterResults dbPool mFilter)
   , rStaticAssets = serveDirectoryFileServer "assets"
   }
 
 
-withDbConnection :: HasJobMonitor m
-                 => (Connection -> m a)
-                 -> m a
-withDbConnection fn = getDbPool >>= \pool -> Pool.withResource pool fn
+-- withDbConnection :: HasJobMonitor m
+--                  => (Connection -> m a)
+--                  -> m a
+-- withDbConnection fn = getDbPool >>= \pool -> Pool.withResource pool fn
 
-filterResults :: HasJobMonitor m
-              => Maybe Filter
-              -> m (Html ())
-filterResults mFilter = do
+filterResults :: Pool Connection
+              -> Maybe Filter
+              -> Handler (Html ())
+filterResults dbPool mFilter = do
   let filters = fromMaybe mempty mFilter
-  jobs <- withDbConnection $ \conn -> filterJobs filters
+  (jobs, runningCount) <- liftIO $ Pool.withResource dbPool $ \conn -> (,)
+    <$> (filterJobs conn tname filters)
+    <*> (countJobs conn tname filters{ filterStatuses = [Job.Locked] })
   t <- liftIO getCurrentTime
   pure $ pageLayout $ do
     searchBar t filters
-    resultsPanel t filters jobs
+    resultsPanel t filters jobs runningCount
 
 
 pageNav :: Html ()
 pageNav = do
   div_ $ nav_ [ class_ "navbar navbar-default navigation-clean" ] $ div_ [ class_ "container" ] $ do
     div_ [ class_ "navbar-header" ] $ do
-      a_ [ class_ "navbar-brand navbar-link", href_ "#" ] $ "Company Name"
+      a_ [ class_ "navbar-brand navbar-link", href_ "#", style_ "padding: 0px;" ] $ img_ [ src_ "/assets/odd-jobs-color-logo.png", title_ "Odd Jobs Logo" ]
       button_ [ class_ "navbar-toggle collapsed", data_ "toggle" "collapse", data_ "target" "#navcol-1" ] $ do
         span_ [ class_ "sr-only" ] $ "Toggle navigation"
         span_ [ class_ "icon-bar" ] $ ""
         span_ [ class_ "icon-bar" ] $ ""
         span_ [ class_ "icon-bar" ] $ ""
-    div_ [ class_ "collapse navbar-collapse", id_ "navcol-1" ] $ ul_ [ class_ "nav navbar-nav navbar-right" ] $ do
-      li_ [ class_ "active", role_ "presentation" ] $ a_ [ href_ "#" ] $ "First Item"
-      li_ [ role_ "presentation" ] $ a_ [ href_ "#" ] $ "Second Item"
-      li_ [ role_ "presentation" ] $ a_ [ href_ "#" ] $ "Third Item"
-      li_ [ class_ "dropdown" ] $ do
-        a_ [ class_ "dropdown-toggle", data_ "toggle" "dropdown", ariaExpanded_ "false", href_ "#" ] $ do
-          "Dropdown"
-          span_ [ class_ "caret" ] $ ""
-        ul_ [ class_ "dropdown-menu", role_ "menu" ] $ do
-          li_ [ role_ "presentation" ] $ a_ [ href_ "#" ] $ "First Item"
-          li_ [ role_ "presentation" ] $ a_ [ href_ "#" ] $ "Second Item"
-          li_ [ role_ "presentation" ] $ a_ [ href_ "#" ] $ "Third Item"
+    -- div_ [ class_ "collapse navbar-collapse", id_ "navcol-1" ] $ ul_ [ class_ "nav navbar-nav navbar-right" ] $ do
+    --   li_ [ class_ "active", role_ "presentation" ] $ a_ [ href_ "#" ] $ "First Item"
+    --   li_ [ role_ "presentation" ] $ a_ [ href_ "#" ] $ "Second Item"
+    --   li_ [ role_ "presentation" ] $ a_ [ href_ "#" ] $ "Third Item"
+    --   li_ [ class_ "dropdown" ] $ do
+    --     a_ [ class_ "dropdown-toggle", data_ "toggle" "dropdown", ariaExpanded_ "false", href_ "#" ] $ do
+    --       "Dropdown"
+    --       span_ [ class_ "caret" ] $ ""
+    --     ul_ [ class_ "dropdown-menu", role_ "menu" ] $ do
+    --       li_ [ role_ "presentation" ] $ a_ [ href_ "#" ] $ "First Item"
+    --       li_ [ role_ "presentation" ] $ a_ [ href_ "#" ] $ "Second Item"
+    --       li_ [ role_ "presentation" ] $ a_ [ href_ "#" ] $ "Third Item"
 
 pageLayout :: Html () -> Html ()
 pageLayout inner = do
@@ -166,9 +177,10 @@ searchBar t filter@Filter{filterStatuses, filterCreatedAfter, filterCreatedBefor
         li_ $ a_ [ href_ (Links.rFilterResults $ Just $ filter{ filterStatuses = [Job.Success] }) ] $ "Successful"
         li_ $ a_ [ href_ (Links.rFilterResults $ Just $ filter{ filterStatuses = [Job.Failed] }) ] $ "Failed"
         li_ $ a_ [ href_ (Links.rFilterResults $ Just $ filter{ filterRunAfter = Just t }) ] $ "Future"
-        li_ $ a_ [ href_ "#" ] $ "Retried"
-        li_ $ a_ [ href_ "#" ] $ "Waiting"
+        -- li_ $ a_ [ href_ "#" ] $ "Retried"
+        li_ $ a_ [ href_ (Links.rFilterResults $ Just $ filter{ filterStatuses = [Job.Queued] }) ] $ "Queued"
         li_ $ a_ [ href_ (Links.rFilterResults $ Just $ filter{ filterUpdatedAfter = Just $ timeSince t 10 Minutes Ago }) ] $ "Last 10 mins"
+        li_ $ a_ [ href_ (Links.rFilterResults $ Just $ filter{ filterCreatedAfter = Just $ timeSince t 10 Minutes Ago }) ] $ "Recently created"
   where
     renderFilter :: Text -> Text -> Text -> Html ()
     renderFilter k v u = do
@@ -195,12 +207,12 @@ timeDuration from to = (diff, str)
 showText :: (Show a) => a -> Text
 showText a = toS $ show a
 
-jobContent :: Value -> Value
-jobContent v = case v of
-  Aeson.Object o -> case HM.lookup "contents" o of
-    Nothing -> v
-    Just c -> c
-  _ -> v
+-- jobContent :: Value -> Value
+-- jobContent v = case v of
+--   Aeson.Object o -> case HM.lookup "contents" o of
+--     Nothing -> v
+--     Just c -> c
+--   _ -> v
 
 rowSuccess :: UTCTime -> Job -> Html ()
 rowSuccess t job@Job{jobStatus, jobCreatedAt, jobUpdatedAt, jobPayload, jobAttempts, jobRunAt} = do
@@ -212,12 +224,16 @@ rowSuccess t job@Job{jobStatus, jobCreatedAt, jobUpdatedAt, jobPayload, jobAttem
                     then statusFuture
                     else statusWaiting
       Job.Retry -> statusRetry
+      Job.Locked -> statusLocked
+
 
       -- span_ [ class_ "label label-success" ] $ "Success"
       -- span_ [ class_ "job-run-time" ] $ "Completed 23h ago. Took 3 sec."
     td_ $ toHtml $ Job.jobType job
     td_ $ div_ [ class_ "job-payload" ] $ do
-      payloadToHtml $ jobContent jobPayload
+      case Aeson.eitherDecode jobPayload :: Either String Value of
+        Left e -> toHtml e
+        Right v -> payloadToHtml v
       -- span_ [ class_ "key-value-pair" ] $ do
       --   span_ [ class_ "key" ] $ "args"
       --   span_ [ class_ "value" ] $ do
@@ -232,6 +248,7 @@ rowSuccess t job@Job{jobStatus, jobCreatedAt, jobUpdatedAt, jobPayload, jobAttem
                     then actionsFuture
                     else mempty
       Job.Retry -> actionsRetry
+      Job.Locked -> mempty
   where
 
     actionsFailed = do
@@ -289,6 +306,12 @@ rowSuccess t job@Job{jobStatus, jobCreatedAt, jobUpdatedAt, jobPayload, jobAttem
       span_ [ class_ "job-run-time" ] $ do
         abbr_ [ title_ (showText jobUpdatedAt) ] $ toHtml $ "Retried " <> humanReadableTime' t jobUpdatedAt <> ". "
         abbr_ [ title_ (showText jobRunAt)] $ toHtml $ "Next retry in " <> humanReadableTime' t jobRunAt
+
+    statusLocked = do
+      span_ [ class_ "label label-warning" ] $ toHtml ("Locked"  :: Text)
+      -- span_ [ class_ "job-run-time" ] $ do
+      --   abbr_ [ title_ (showText jobUpdatedAt) ] $ toHtml $ "Retried " <> humanReadableTime' t jobUpdatedAt <> ". "
+      --   abbr_ [ title_ (showText jobRunAt)] $ toHtml $ "Next retry in " <> humanReadableTime' t jobRunAt
 
 
 rowRetry :: Html ()
@@ -398,12 +421,12 @@ rowLocked = do
     td_ "Text"
     td_ $ button_ [ class_ "btn btn-default", type_ "button" ] $ "Unlock"
 
-resultsPanel :: UTCTime -> Filter -> [Job] -> Html ()
-resultsPanel t filter@Filter{filterPage} jobs = do
+resultsPanel :: UTCTime -> Filter -> [Job] -> Int -> Html ()
+resultsPanel t filter@Filter{filterPage} jobs runningCount = do
   div_ [ class_ "panel panel-default" ] $ do
     div_ [ class_ "panel-heading" ] $ h3_ [ class_ "panel-title" ] $ do
-      "Currently running"
-      span_ [ class_ "badge" ] $ "3"
+      "Currently running "
+      span_ [ class_ "badge" ] $ toHtml (show runningCount)
     div_ [ class_ "panel-body" ] $ div_ [ class_ "currently-running" ] $ div_ [ class_ "table-responsive" ] $ table_ [ class_ "table" ] $ do
       thead_ $ tr_ $ do
         th_ "Job status"
