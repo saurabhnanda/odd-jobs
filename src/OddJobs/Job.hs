@@ -44,7 +44,6 @@ import Database.PostgreSQL.Simple.FromField as FromField
 import Database.PostgreSQL.Simple.ToField as ToField
 import Database.PostgreSQL.Simple.FromRow as FromRow
 import UnliftIO.Async
-import Control.Concurrent.Async (AsyncCancelled(..))
 import UnliftIO.Concurrent (threadDelay, myThreadId)
 import Data.String
 import System.Posix.Process (getProcessID)
@@ -70,8 +69,6 @@ import Data.Functor (void)
 import Control.Monad (forever)
 import Data.Maybe (isNothing)
 import Data.Either (either)
--- import System.Log.FastLogger (fromLogStr, newTimedFastLogger, LogType(..), defaultBufSize, FastLogger, FileLogSpec(..), TimedFastLogger)
--- import System.Log.FastLogger.Date (newTimeCache, simpleTimeFormat')
 import Control.Monad.Reader
 import GHC.Generics
 import qualified Data.HashMap.Strict as HM
@@ -721,12 +718,9 @@ eitherParsePayloadWith :: (Aeson.Value -> Aeson.Parser a)
                        -> Either String a
 eitherParsePayloadWith parser Job{jobPayload} = do
   case iparse parser jobPayload of
-    IError jpath e ->
-      -- TODO: throw a custom exception so that error reporting
-      -- is better
-      Left $ formatError jpath e
-    ISuccess r ->
-      Right r
+    -- TODO: throw a custom exception so that error reporting is better
+    IError jpath e -> Left $ formatError jpath e
+    ISuccess r -> Right r
 
 throwParsePayloadWith :: (Aeson.Value -> Aeson.Parser a)
                       -> Job

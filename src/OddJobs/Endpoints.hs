@@ -25,14 +25,14 @@ import Control.Monad.Reader
 import Data.String.Conv (toS)
 import Control.Monad.Except
 import Data.Time as Time
-import Data.Time.Format.Human as Time
+import Data.Time.Format.Human (humanReadableTime')
 import Data.Aeson as Aeson
 import qualified Data.HashMap.Strict as HM
 import GHC.Exts (toList)
 import Data.Maybe (fromMaybe)
 import Data.Text.Conversions (fromText, toText)
 import Control.Applicative ((<|>))
-import Data.Time.Convenience as Time
+import Data.Time.Convenience (timeSince, Unit(..), Direction(..))
 import qualified OddJobs.Links as Links
 import Data.List ((\\))
 import qualified System.Log.FastLogger as FLogger

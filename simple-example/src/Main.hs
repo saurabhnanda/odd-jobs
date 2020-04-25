@@ -27,7 +27,8 @@ myJobRunner :: Job -> IO ()
 myJobRunner job = do
   (throwParsePayload job) >>= \case
     SendWelcomeEmail userId -> do
-      putStrLn "This should call the function that actually sends the welcome email"
+      putStrLn "This should call the function that actually sends the welcome email. " <>
+        "\nWe are purposely waiting 60 seconds before completing this job so that graceful shutdown can be demonstrated."
       delaySeconds (Seconds 60)
       putStrLn "60 second wait is now over..."
     SendPasswordResetEmail tkn ->

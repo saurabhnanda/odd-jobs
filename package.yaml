@@ -2,9 +2,12 @@ name:                odd-jobs
 version:             0.1.0.0
 synopsis: A full-featured PostgreSQL-backed job queue (with an admin UI)
 description: |
-  Something long comes here
-  Something very long
-homepage:            https://github.com/saurabhnanda/haskell-pg-queue#readme
+  - Background jobs library for Haskell.
+  - Inspired by the Delayed Jobs library in Rails.
+  - Queue backend is a Postgres table.
+  - Queue is monitored using, both, LISTEN/NOTIFY and polling the DB.
+  - Comes with an in-built admin UI.
+homepage:            https://github.com/saurabhnanda/odd-jobs/
 license:             BSD3
 author:              Saurabh Nanda
 maintainer:          saurabhnanda@gmail.com
@@ -18,7 +21,6 @@ ghc-options:
   - -fno-warn-orphans 
   - -fno-warn-unused-imports 
   - -fno-warn-dodgy-exports 
-  - -O0
   - -Werror=missing-fields
 
 default-extensions:
@@ -37,34 +39,27 @@ dependencies:
   - bytestring
   - safe
   - text-conversions
-  - process
   - aeson
   - resource-pool
-  - timeit
   - unliftio
   - unliftio-core
   - mtl
-  - template-haskell
   - monad-logger
   - fast-logger
   - either
   - time
-  - exceptions
   - unix
   - monad-control
   - string-conv
   - hostname
-  - async
   - lucid
-  - blaze-builder
   - timing-convenience
+  - friendly-time
   - servant
   - servant-server
   - servant-lucid
   - warp
-  - friendly-time
   - unordered-containers
-  - foreign-store
   - optparse-applicative
   - direct-daemonize
   - filepath
@@ -74,7 +69,6 @@ dependencies:
 library:
   source-dirs:
     - src
-    - dev
   exposed-modules:
     - OddJobs.Job
     - OddJobs.Migrations
@@ -82,26 +76,17 @@ library:
     - OddJobs.Endpoints
     - OddJobs.Cli
     - OddJobs.Types
-    - DevelMain
-
-# executables:
-#   devel:
-#     source-dirs:      dev
-#     main:             DevelMain.hs
-#     dependencies:
-#       - foreign-store
-#       - haskell-pg-queue
 
 executables:
-  odd-jobs-cli-parser:
-    source-dirs: test
+  devel:
+    source-dirs:      dev
+    main:             DevelMain.hs
     ghc-options:
       - -threaded
       - -with-rtsopts=-N
-      - -main-is CliParser
-    main: CliParser.hs
-    other-modules: []
+      - -main-is DevelMain
     dependencies:
+      - foreign-store
       - odd-jobs
 
 tests:
