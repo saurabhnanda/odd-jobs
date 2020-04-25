@@ -207,12 +207,12 @@ timeDuration from to = (diff, str)
 showText :: (Show a) => a -> Text
 showText a = toS $ show a
 
--- jobContent :: Value -> Value
--- jobContent v = case v of
---   Aeson.Object o -> case HM.lookup "contents" o of
---     Nothing -> v
---     Just c -> c
---   _ -> v
+jobContent :: Value -> Value
+jobContent v = case v of
+  Aeson.Object o -> case HM.lookup "contents" o of
+    Nothing -> v
+    Just c -> c
+  _ -> v
 
 rowSuccess :: UTCTime -> Job -> Html ()
 rowSuccess t job@Job{jobStatus, jobCreatedAt, jobUpdatedAt, jobPayload, jobAttempts, jobRunAt} = do
@@ -229,11 +229,9 @@ rowSuccess t job@Job{jobStatus, jobCreatedAt, jobUpdatedAt, jobPayload, jobAttem
 
       -- span_ [ class_ "label label-success" ] $ "Success"
       -- span_ [ class_ "job-run-time" ] $ "Completed 23h ago. Took 3 sec."
-    td_ $ toHtml $ Job.jobType job
-    td_ $ div_ [ class_ "job-payload" ] $ do
-      case Aeson.eitherDecode jobPayload :: Either String Value of
-        Left e -> toHtml e
-        Right v -> payloadToHtml v
+
+    td_ $ toHtml $ Job.defaultJobType job -- TODO: this needs to be changed
+    td_ $ div_ [ class_ "job-payload" ] $ payloadToHtml $ jobContent jobPayload
       -- span_ [ class_ "key-value-pair" ] $ do
       --   span_ [ class_ "key" ] $ "args"
       --   span_ [ class_ "value" ] $ do

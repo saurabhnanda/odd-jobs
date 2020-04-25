@@ -21,12 +21,17 @@ module OddJobs.Job
   , TableName
   , jobDbColumns
   , concatJobDbColumns
-  , jobType
   , delaySeconds
   , Seconds(..)
   , ConcurrencyControl(..)
   , withConnectionPool
   , lockTimeout
+  , eitherParsePayload
+  , throwParsePayload
+  , eitherParsePayloadWith
+  , throwParsePayloadWith
+  , defaultJobToText
+  , defaultJobType
   )
 where
 
@@ -48,7 +53,10 @@ import UnliftIO.MVar
 import Debug.Trace
 import Control.Monad.Logger as MLogger
 import UnliftIO.IORef
-import UnliftIO.Exception (SomeException(..), try, catch, finally, catchAny, bracket, Exception(..), throwIO, catches, Handler(..), mask_)
+import UnliftIO.Exception ( SomeException(..), try, catch, finally
+                          , catchAny, bracket, Exception(..), throwIO
+                          , catches, Handler(..), mask_, throwString
+                          )
 import Data.Proxy
 import Control.Monad.Trans.Control
 import Control.Monad.IO.Unlift (MonadUnliftIO, withRunInIO, liftIO)
@@ -72,6 +80,7 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BSL
 import System.FilePath (FilePath)
 import qualified System.Directory as Dir
+import Data.Aeson.Internal (iparse, IResult(..), formatError)
 
 class (MonadUnliftIO m, MonadBaseControl IO m, MonadLogger m) => HasJobRunner m where
   getPollingInterval :: m Seconds
@@ -88,6 +97,7 @@ class (MonadUnliftIO m, MonadBaseControl IO m, MonadLogger m) => HasJobRunner m 
   getRunnerEnv :: m RunnerEnv
   getConcurrencyControl :: m ConcurrencyControl
   getPidFile :: m (Maybe FilePath)
+  getJobToText :: m (Job -> Text)
 
 data Config = Config
   { cfgPollingInterval :: Seconds
@@ -104,6 +114,8 @@ data Config = Config
   , cfgDefaultMaxAttempts :: Int
   , cfgConcurrencyControl :: ConcurrencyControl
   , cfgPidFile :: Maybe FilePath
+  , cfgJobToText :: Job -> Text
+  , cfgJobType :: Job -> Text
   }
 
 data ConcurrencyControl = MaxConcurrentJobs Int
@@ -162,6 +174,7 @@ instance HasJobRunner RunnerM where
   getConcurrencyControl = (cfgConcurrencyControl . envConfig <$> ask)
 
   getPidFile = cfgPidFile . envConfig <$> ask
+  getJobToText = cfgJobToText . envConfig <$> ask
 
 
 
@@ -194,7 +207,22 @@ defaultConfig logger tname dbpool ccControl = Config
   , cfgOnJobTimeout = (const $ pure ())
   , cfgConcurrencyControl = ccControl
   , cfgPidFile = Nothing
+  , cfgJobToText = defaultJobToText
+  , cfgJobType = defaultJobType
   }
+
+defaultJobToText :: Job -> Text
+defaultJobToText job@Job{jobId} =
+  "JobId=" <> (toS $ show jobId) <> " JobType=" <> defaultJobType job
+
+defaultJobType :: Job -> Text
+defaultJobType Job{jobPayload} =
+  case jobPayload of
+    Aeson.Object hm -> case HM.lookup "tag" hm of
+      Just (Aeson.String t) -> t
+      _ -> "unknown"
+    _ -> "unknown"
+
 
 withConnectionPool :: (MonadUnliftIO m)
                    => Either BS.ByteString PGS.ConnectInfo
@@ -231,7 +259,7 @@ data Job = Job
   , jobUpdatedAt :: UTCTime
   , jobRunAt :: UTCTime
   , jobStatus :: Status
-  , jobPayload :: BSL.ByteString
+  , jobPayload :: Aeson.Value
   , jobLastError :: Maybe Value
   , jobAttempts :: Int
   , jobLockedAt :: Maybe UTCTime
@@ -392,31 +420,31 @@ runJobWithTimeout timeoutSec job = do
 
 
 runJob :: (HasJobRunner m) => JobId -> m ()
-runJob jid =
+runJob jid = do
   (findJobById jid) >>= \case
     Nothing -> Prelude.error $ "Could not find job id=" <> show jid
     Just job -> (flip catches) [Handler $ timeoutHandler job, Handler $ exceptionHandler job] $ do
       runJobWithTimeout lockTimeout job
       newJob <- saveJob job{jobStatus=Success, jobLockedBy=Nothing, jobLockedAt=Nothing}
-      logInfoN $ "Successfully completed JobId " <> humanReadableJob job
+      getJobToText >>= \jobToText -> logInfoN $ "Successfully completed JobId " <> jobToText job
       onJobSuccess newJob
       pure ()
   where
     timeoutHandler job (e :: TimeoutException) = retryOrFail (show e) job onJobTimeout onJobPermanentlyFailed
     exceptionHandler job (e :: SomeException) = retryOrFail (show e) job onJobFailed onJobPermanentlyFailed
-    humanReadableJob job@Job{jobId} = "JobId=" <> (toS $ show jobId) <> " JobType=" <> jobType job :: Text
     retryOrFail errStr job@Job{jobAttempts} onFail onPermanentFail = do
       defaultMaxAttempts <- getDefaultMaxAttempts
+      jobToText <- getJobToText
       let (newStatus, action, logAction) = if jobAttempts >= defaultMaxAttempts
                                            then ( Failed
                                                 , onPermanentFail
                                                 , logErrorN $ "FAILED attempts=" <> (toS $ show jobAttempts) <> " " <>
-                                                  humanReadableJob job
+                                                  jobToText job
                                                 )
                                            else ( Retry
                                                 , onFail
                                                 , logWarnN $ "RETRY attempts=" <> (toS $ show jobAttempts) <> " " <>
-                                                  humanReadableJob job
+                                                  jobToText job
                                                 )
       t <- liftIO getCurrentTime
       newJob <- saveJob job{ jobStatus=newStatus
@@ -673,16 +701,35 @@ scheduleJob conn tname payload runAt = do
     _ -> (Prelude.error . (<> "Not expecting multiple rows when creating a single job. Query=")) <$> queryFormatter 
 
 
-jobType :: Job -> T.Text
-jobType Job{jobPayload} = ""
-
-  -- case jobPayload of
-  -- Aeson.Object hm -> case HM.lookup "tag" hm of
-  --   Just (Aeson.String t) -> t
-  --   _ -> ""
-  -- _ -> ""
-
-
 -- getRunnerEnv :: (HasJobRunner m) => m RunnerEnv
 -- getRunnerEnv = ask
 
+eitherParsePayload :: (FromJSON a)
+                   => Job
+                   -> Either String a
+eitherParsePayload job =
+  eitherParsePayloadWith parseJSON job
+
+throwParsePayload :: (FromJSON a)
+                  => Job
+                  -> IO a
+throwParsePayload job =
+  throwParsePayloadWith parseJSON job
+
+eitherParsePayloadWith :: (Aeson.Value -> Aeson.Parser a)
+                       -> Job
+                       -> Either String a
+eitherParsePayloadWith parser Job{jobPayload} = do
+  case iparse parser jobPayload of
+    IError jpath e ->
+      -- TODO: throw a custom exception so that error reporting
+      -- is better
+      Left $ formatError jpath e
+    ISuccess r ->
+      Right r
+
+throwParsePayloadWith :: (Aeson.Value -> Aeson.Parser a)
+                      -> Job
+                      -> IO a
+throwParsePayloadWith parser job =
+  either throwString (pure . Prelude.id) (eitherParsePayloadWith parser job)

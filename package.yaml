@@ -81,6 +81,7 @@ library:
     - OddJobs.Web
     - OddJobs.Endpoints
     - OddJobs.Cli
+    - OddJobs.Types
     - DevelMain
 
 # executables:
