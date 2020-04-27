@@ -158,12 +158,18 @@ filterJobsQuery tname Filter{filterStatuses, filterCreatedBefore, filterCreatedA
 
     -- orderClause = _
 
-filterJobs :: (HasJobMonitor m) => Filter -> m [Job]
-filterJobs f = do
-  tname <- getTableName
+filterJobs :: Connection -> TableName -> Filter -> IO [Job]
+filterJobs conn tname f = do
   let (q, queryArgs) = filterJobsQuery tname f
-  pool <- getDbPool
-  Pool.withResource pool $ \conn -> liftIO $ PGS.query conn q queryArgs
+  PGS.query conn q queryArgs
+
+countJobs :: Connection -> TableName -> Filter -> IO Int
+countJobs conn tname f = do
+  let (q, queryArgs) = filterJobsQuery tname f
+      finalqry = "SELECT count(*) FROM (" <> q <> ") a"
+  [Only r] <- PGS.query conn finalqry queryArgs
+  pure r
+
 
 -- f = encode [FTStatuses [Job.Success, Queued], FTJobType "QueuedMail"]
 
