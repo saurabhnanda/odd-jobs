@@ -189,28 +189,30 @@ defaultConfig :: (Loc -> LogSource -> LogLevel -> LogStr -> IO ())
                   -> Pool Connection
                   -> ConcurrencyControl
                   -> Config
-defaultConfig logger tname dbpool ccControl = Config
-  { cfgPollingInterval = defaultPollingInterval
-  , cfgOnJobSuccess = (const $ pure ())
-  , cfgOnJobFailed = (const $ pure ())
-  , cfgOnJobPermanentlyFailed = (const $ pure ())
-  , cfgJobRunner = (const $ pure ())
-  , cfgMaxAttempts = 25
-  , cfgLogger = logger
-  , cfgDbPool = dbpool
-  , cfgOnJobStart = (const $ pure ())
-  , cfgDefaultMaxAttempts = 10
-  , cfgTableName = tname
-  , cfgOnJobTimeout = (const $ pure ())
-  , cfgConcurrencyControl = ccControl
-  , cfgPidFile = Nothing
-  , cfgJobToText = defaultJobToText
-  , cfgJobType = defaultJobType
-  }
+defaultConfig logger tname dbpool ccControl =
+  let cfg = Config
+            { cfgPollingInterval = defaultPollingInterval
+            , cfgOnJobSuccess = (const $ pure ())
+            , cfgOnJobFailed = (const $ pure ())
+            , cfgOnJobPermanentlyFailed = (const $ pure ())
+            , cfgJobRunner = (const $ pure ())
+            , cfgMaxAttempts = 25
+            , cfgLogger = logger
+            , cfgDbPool = dbpool
+            , cfgOnJobStart = (const $ pure ())
+            , cfgDefaultMaxAttempts = 10
+            , cfgTableName = tname
+            , cfgOnJobTimeout = (const $ pure ())
+            , cfgConcurrencyControl = ccControl
+            , cfgPidFile = Nothing
+            , cfgJobToText = defaultJobToText (cfgJobType cfg)
+            , cfgJobType = defaultJobType
+            }
+  in cfg
 
-defaultJobToText :: Job -> Text
-defaultJobToText job@Job{jobId} =
-  "JobId=" <> (toS $ show jobId) <> " JobType=" <> defaultJobType job
+defaultJobToText :: (Job -> Text) -> Job -> Text
+defaultJobToText jobTypeFn job@Job{jobId} =
+  "JobId=" <> (toS $ show jobId) <> " JobType=" <> jobTypeFn job
 
 defaultJobType :: Job -> Text
 defaultJobType Job{jobPayload} =
