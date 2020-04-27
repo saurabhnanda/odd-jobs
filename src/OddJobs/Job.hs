@@ -32,6 +32,8 @@ module OddJobs.Job
   , throwParsePayloadWith
   , defaultJobToText
   , defaultJobType
+  , defaultTimedLogger
+  , defaultLogStr
   )
 where
 
@@ -50,7 +52,7 @@ import System.Posix.Process (getProcessID)
 import Network.HostName (getHostName)
 import UnliftIO.MVar
 import Debug.Trace
-import Control.Monad.Logger as MLogger
+import Control.Monad.Logger as MLogger (LogLevel(..), LogStr(..), toLogStr)
 import UnliftIO.IORef
 import UnliftIO.Exception ( SomeException(..), try, catch, finally
                           , catchAny, bracket, Exception(..), throwIO
@@ -67,7 +69,7 @@ import qualified Data.Aeson.Types as Aeson (Parser, parseMaybe)
 import Data.String.Conv (StringConv(..), toS)
 import Data.Functor (void)
 import Control.Monad (forever)
-import Data.Maybe (isNothing)
+import Data.Maybe (isNothing, maybe, fromMaybe)
 import Data.Either (either)
 import Control.Monad.Reader
 import GHC.Generics
@@ -78,8 +80,10 @@ import qualified Data.ByteString.Lazy as BSL
 import System.FilePath (FilePath)
 import qualified System.Directory as Dir
 import Data.Aeson.Internal (iparse, IResult(..), formatError)
+import qualified System.Log.FastLogger as FLogger
+import Prelude hiding (log)
 
-class (MonadUnliftIO m, MonadBaseControl IO m, MonadLogger m) => HasJobRunner m where
+class (MonadUnliftIO m, MonadBaseControl IO m) => HasJobRunner m where
   getPollingInterval :: m Seconds
   onJobSuccess :: Job -> m ()
   onJobFailed :: Job -> m ()
@@ -95,6 +99,16 @@ class (MonadUnliftIO m, MonadBaseControl IO m, MonadLogger m) => HasJobRunner m 
   getConcurrencyControl :: m ConcurrencyControl
   getPidFile :: m (Maybe FilePath)
   getJobToText :: m (Job -> Text)
+  log :: LogLevel -> LogEvent -> m ()
+
+data LogEvent = LogJobStart !Job
+              | LogJobFailed !Job !NominalDiffTime
+              | LogJobSuccess !Job !NominalDiffTime
+              | LogJobPermanentlyFailed !Job !NominalDiffTime
+              | LogJobTimeout !Job
+              | LogPoll
+              | LogText !Text
+              deriving (Eq, Show, Generic)
 
 data Config = Config
   { cfgPollingInterval :: Seconds
@@ -105,7 +119,7 @@ data Config = Config
   , cfgOnJobTimeout :: Job -> IO ()
   , cfgJobRunner :: Job -> IO ()
   , cfgMaxAttempts :: Int
-  , cfgLogger :: Loc -> LogSource -> LogLevel -> LogStr -> IO ()
+  , cfgLogger :: LogLevel -> LogEvent -> IO ()
   , cfgDbPool :: Pool Connection
   , cfgTableName :: TableName
   , cfgDefaultMaxAttempts :: Int
@@ -132,14 +146,8 @@ data RunnerEnv = RunnerEnv
 
 type RunnerM = ReaderT RunnerEnv IO
 
-instance {-# OVERLAPS #-} MonadLogger RunnerM where
-  monadLoggerLog loc logsource loglevel msg = do
-    fn <- cfgLogger . envConfig <$> ask
-    liftIO $ fn loc logsource loglevel (toLogStr msg)
-
-
 logCallbackErrors :: (HasJobRunner m) => JobId -> Text -> m () -> m ()
-logCallbackErrors jid msg action = catchAny action $ \e -> logErrorN $ msg <> " Job ID=" <> toS (show jid) <> ": " <> toS (show e)
+logCallbackErrors jid msg action = catchAny action $ \e -> log LevelError $ LogText $ msg <> " Job ID=" <> toS (show jid) <> ": " <> toS (show e)
 
 instance HasJobRunner RunnerM where
   getPollingInterval = cfgPollingInterval . envConfig <$> ask
@@ -173,7 +181,9 @@ instance HasJobRunner RunnerM where
   getPidFile = cfgPidFile . envConfig <$> ask
   getJobToText = cfgJobToText . envConfig <$> ask
 
-
+  log logLevel logEvent = do
+    loggerFn <- cfgLogger . envConfig <$> ask
+    liftIO $ loggerFn logLevel logEvent
 
 startJobRunner :: Config -> IO ()
 startJobRunner jm = do
@@ -184,11 +194,11 @@ startJobRunner jm = do
                    }
   runReaderT jobMonitor monitorEnv
 
-defaultConfig :: (Loc -> LogSource -> LogLevel -> LogStr -> IO ())
-                  -> TableName
-                  -> Pool Connection
-                  -> ConcurrencyControl
-                  -> Config
+defaultConfig :: (LogLevel -> LogEvent -> IO ())
+              -> TableName
+              -> Pool Connection
+              -> ConcurrencyControl
+              -> Config
 defaultConfig logger tname dbpool ccControl =
   let cfg = Config
             { cfgPollingInterval = defaultPollingInterval
@@ -406,7 +416,7 @@ runJobWithTimeout timeoutSec job = do
 
   x <- atomicModifyIORef' threadsRef $ \threads -> (a:threads, DL.map asyncThreadId (a:threads))
   -- liftIO $ putStrLn $ "Threads: " <> show x
-  logDebugN $ toS $ "Spawned job in " <> show (asyncThreadId a)
+  log LevelDebug $ LogText $ toS $ "Spawned job in " <> show (asyncThreadId a)
 
   t <- async $ do
     delaySeconds timeoutSec
@@ -422,28 +432,31 @@ runJob :: (HasJobRunner m) => JobId -> m ()
 runJob jid = do
   (findJobById jid) >>= \case
     Nothing -> Prelude.error $ "Could not find job id=" <> show jid
-    Just job -> (flip catches) [Handler $ timeoutHandler job, Handler $ exceptionHandler job] $ do
-      runJobWithTimeout lockTimeout job
-      newJob <- saveJob job{jobStatus=Success, jobLockedBy=Nothing, jobLockedAt=Nothing}
-      getJobToText >>= \jobToText -> logInfoN $ "Successfully completed JobId " <> jobToText job
-      onJobSuccess newJob
-      pure ()
+    Just job -> do
+      startTime <- liftIO getCurrentTime
+      (flip catches) [Handler $ timeoutHandler job startTime, Handler $ exceptionHandler job startTime] $ do
+        runJobWithTimeout lockTimeout job
+        endTime <- liftIO getCurrentTime
+        newJob <- saveJob job{jobStatus=Success, jobLockedBy=Nothing, jobLockedAt=Nothing}
+        log LevelInfo $ LogJobSuccess newJob (diffUTCTime endTime startTime)
+        onJobSuccess newJob
+        pure ()
   where
-    timeoutHandler job (e :: TimeoutException) = retryOrFail (show e) job onJobTimeout onJobPermanentlyFailed
-    exceptionHandler job (e :: SomeException) = retryOrFail (show e) job onJobFailed onJobPermanentlyFailed
-    retryOrFail errStr job@Job{jobAttempts} onFail onPermanentFail = do
+    timeoutHandler job startTime (e :: TimeoutException) = retryOrFail (show e) job onJobTimeout onJobPermanentlyFailed startTime
+    exceptionHandler job startTime (e :: SomeException) = retryOrFail (show e) job onJobFailed onJobPermanentlyFailed startTime
+    retryOrFail errStr job@Job{jobAttempts} onFail onPermanentFail startTime = do
+      endTime <- liftIO getCurrentTime
       defaultMaxAttempts <- getDefaultMaxAttempts
       jobToText <- getJobToText
-      let (newStatus, action, logAction) = if jobAttempts >= defaultMaxAttempts
+      let runTime = diffUTCTime endTime startTime
+          (newStatus, action, logAction) = if jobAttempts >= defaultMaxAttempts
                                            then ( Failed
                                                 , onPermanentFail
-                                                , logErrorN $ "FAILED attempts=" <> (toS $ show jobAttempts) <> " " <>
-                                                  jobToText job
+                                                , log LevelError $ LogJobPermanentlyFailed job runTime
                                                 )
                                            else ( Retry
                                                 , onFail
-                                                , logWarnN $ "RETRY attempts=" <> (toS $ show jobAttempts) <> " " <>
-                                                  jobToText job
+                                                , log LevelWarn $ LogJobFailed job runTime
                                                 )
       t <- liftIO getCurrentTime
       newJob <- saveJob job{ jobStatus=newStatus
@@ -461,13 +474,13 @@ restartUponCrash :: (HasJobRunner m, Show a) => Text -> m a -> m ()
 restartUponCrash name_ action = do
   a <- async action
   finally (waitCatch a >>= fn) $ do
-    (logDebugN $ "Received shutdown: " <> toS name_)
+    (log LevelInfo $ LogText $ "Received shutdown: " <> toS name_)
     cancel a
   where
     fn x = do
       case x of
-        Left (e :: SomeException) -> logErrorN $ name_ <> " seems to have exited with an error. Restarting: " <> toS (show e)
-        Right r -> logErrorN $ name_ <> " seems to have exited with the folloing result: " <> toS (show r) <> ". Restaring."
+        Left (e :: SomeException) -> log LevelError $ LogText $ name_ <> " seems to have exited with an error. Restarting: " <> toS (show e)
+        Right r -> log LevelError $ LogText $ name_ <> " seems to have exited with the folloing result: " <> toS (show r) <> ". Restaring."
       restartUponCrash name_ action
 
 jobMonitor :: forall m . (HasJobRunner m) => m ()
@@ -475,15 +488,15 @@ jobMonitor = do
   a1 <- async $ restartUponCrash "Job poller" jobPoller
   a2 <- async $ restartUponCrash "Job event listener" jobEventListener
   finally (void $ waitAnyCatch [a1, a2]) $ do
-    logInfoN "Stopping jobPoller and jobEventListener threads."
+    log LevelInfo (LogText "Stopping jobPoller and jobEventListener threads.")
     cancel a2
     cancel a1
-    logInfoN "Waiting for jobs to complete."
+    log LevelInfo (LogText "Waiting for jobs to complete.")
     waitForJobs
     getPidFile >>= \case
       Nothing -> pure ()
       Just f -> do
-        logInfoN $ "Removing PID file: " <> toS f
+        log LevelInfo $ LogText $ "Removing PID file: " <> toS f
         liftIO $ Dir.removePathForcibly f
     -- liftIO $ putStrLn "STOPPED jobPoller and jobEventListener threads."
 
@@ -534,11 +547,11 @@ waitForJobs :: (HasJobRunner m)
 waitForJobs = do
   threadsRef <- envJobThreadsRef <$> getRunnerEnv
   readIORef threadsRef >>= \case
-    [] -> logInfoN "All job-threads exited"
+    [] -> log LevelInfo $ LogText "All job-threads exited"
     as -> do
       tid <- myThreadId
       (a, _) <- waitAnyCatch as
-      logDebugN $ toS $ "Waiting for " <> show (DL.length as) <> " jobs to complete before shutting down. myThreadId=" <> (show tid)
+      log LevelDebug $ LogText $ toS $ "Waiting for " <> show (DL.length as) <> " jobs to complete before shutting down. myThreadId=" <> (show tid)
       delaySeconds (Seconds 1)
       waitForJobs
 
@@ -599,13 +612,13 @@ jobPoller = do
   processName <- liftIO jobWorkerName
   pool <- getDbPool
   tname <- getTableName
-  logInfoN $ toS $ "Starting the job monitor via DB polling with processName=" <> processName
+  log LevelInfo $ LogText $ toS $ "Starting the job monitor via DB polling with processName=" <> processName
   concurrencyControlFn <- getConcurrencyControlFn
   withResource pool $ \pollerDbConn -> forever $ concurrencyControlFn >>= \case
-    False -> logInfoN $ "NOT polling the job queue due to concurrency control"
+    False -> log LevelWarn $ LogText $ "NOT polling the job queue due to concurrency control"
     True -> do
       nextAction <- mask_ $ do
-        logDebugN $ toS $ "[" <> processName <> "] Polling the job queue.."
+        log LevelDebug $ LogText $ toS $ "[" <> processName <> "] Polling the job queue.."
         t <- liftIO getCurrentTime
         r <- liftIO $
              PGS.query pollerDbConn (jobPollingSql tname)
@@ -628,7 +641,7 @@ jobPoller = do
 jobEventListener :: (HasJobRunner m)
                  => m ()
 jobEventListener = do
-  logInfoN "Starting the job monitor via LISTEN/NOTIFY..."
+  log LevelInfo $ LogText "Starting the job monitor via LISTEN/NOTIFY..."
   pool <- getDbPool
   tname <- getTableName
   jwName <- liftIO jobWorkerName
@@ -638,7 +651,7 @@ jobEventListener = do
         let q = "UPDATE " <> tname <> " SET status=?, locked_at=now(), locked_by=?, attempts=attempts+1 WHERE id=? AND status in ? RETURNING id"
         (withDbConnection $ \conn -> (liftIO $ PGS.query conn q (Locked, jwName, jid, In [Queued, Retry]))) >>= \case
           [] -> do
-            logDebugN $ toS $ "Job was locked by someone else before I could start. Skipping it. JobId=" <> show jid
+            log LevelDebug $ LogText $ toS $ "Job was locked by someone else before I could start. Skipping it. JobId=" <> show jid
             pure Nothing
           [Only (_ :: JobId)] -> pure $ Just jid
           x -> error $ "WTF just happned? Was expecting a single row to be returned, received " ++ (show x)
@@ -646,31 +659,31 @@ jobEventListener = do
   withResource pool $ \monitorDbConn -> do
     void $ liftIO $ PGS.execute monitorDbConn ("LISTEN " <> pgEventName tname) ()
     forever $ do
-      logDebugN "[LISTEN/NOFIFY] Event loop"
+      log LevelDebug $ LogText "[LISTEN/NOFIFY] Event loop"
       notif <- liftIO $ getNotification monitorDbConn
       concurrencyControlFn >>= \case
-        False -> logInfoN $ "Received job event, but ignoring it due to concurrency control"
+        False -> log LevelWarn $ LogText "Received job event, but ignoring it due to concurrency control"
         True -> do
           let pload = notificationData notif
-          logDebugN $ toS $ "NOTIFY | " <> show pload
+          log LevelDebug $ LogText $ toS $ "NOTIFY | " <> show pload
           case (eitherDecode $ toS pload) of
-            Left e -> logErrorN $ toS $  "Unable to decode notification payload received from Postgres. Payload=" <> show pload <> " Error=" <> show e
+            Left e -> log LevelError $ LogText $ toS $  "Unable to decode notification payload received from Postgres. Payload=" <> show pload <> " Error=" <> show e
 
             -- Checking if job needs to be fired immediately AND it is not already
             -- taken by some othe thread, by the time it got to us
             Right (v :: Value) -> case (Aeson.parseMaybe parser v) of
-              Nothing -> logErrorN $ toS $ "Unable to extract id/run_at/locked_at from " <> show pload
+              Nothing -> log LevelError $ LogText $ toS $ "Unable to extract id/run_at/locked_at from " <> show pload
               Just (jid, runAt_, mLockedAt_) -> do
                 t <- liftIO getCurrentTime
                 if (runAt_ <= t) && (isNothing mLockedAt_)
-                  then do logDebugN $ toS $ "Job needs needs to be run immediately. Attempting to fork in background. JobId=" <> show jid
+                  then do log LevelDebug $ LogText $ toS $ "Job needs needs to be run immediately. Attempting to fork in background. JobId=" <> show jid
                           void $ async $ do
                             -- Let's try to lock the job first... it is possible that it has already
                             -- been picked up by the poller by the time we get here.
                             tryLockingJob jid >>= \case
                               Nothing -> pure ()
                               Just lockedJid -> runJob lockedJid
-                  else logDebugN $ toS $ "Job is either for future, or is already locked. Skipping. JobId=" <> show jid
+                  else log LevelDebug $ LogText $ toS $ "Job is either for future, or is already locked. Skipping. JobId=" <> show jid
   where
     parser :: Value -> Aeson.Parser (JobId, UTCTime, Maybe UTCTime)
     parser = withObject "expecting an object to parse job.run_at and job.locked_at" $ \o -> do
@@ -729,3 +742,41 @@ throwParsePayloadWith :: (Aeson.Value -> Aeson.Parser a)
                       -> IO a
 throwParsePayloadWith parser job =
   either throwString (pure . Prelude.id) (eitherParsePayloadWith parser job)
+
+
+defaultTimedLogger :: FLogger.TimedFastLogger
+                   -> (LogLevel -> LogEvent -> LogStr)
+                   -> LogLevel
+                   -> LogEvent
+                   -> IO ()
+defaultTimedLogger logger logStrFn logLevel logEvent =
+  if logLevel == LevelDebug
+  then pure ()
+  else logger $ \t -> (toLogStr t) <> " | " <>
+                      (logStrFn logLevel logEvent) <>
+                      "\n"
+
+defaultLogStr :: (Job -> Text)
+              -> LogLevel
+              -> LogEvent
+              -> LogStr
+defaultLogStr jobToText logLevel logEvent =
+  (toLogStr $ show logLevel) <> " | " <> str
+  where
+    jobToLogStr j = toLogStr $ jobToText j
+    str = case logEvent of
+      LogJobStart j ->
+        "Started | " <> jobToLogStr j
+      LogJobFailed j t ->
+        "Failed (retry) | " <> jobToLogStr j <> " | runtime=" <> (toLogStr $ show t)
+      LogJobSuccess j t ->
+        "Success | " <> (jobToLogStr j) <> " | runtime=" <> (toLogStr $ show t)
+      LogJobPermanentlyFailed j t ->
+        "Failed (permanent) | " <> jobToLogStr j <> " | runtime=" <> (toLogStr $ show t)
+      LogJobTimeout j@Job{jobLockedAt, jobLockedBy} ->
+        "Timeout | " <> jobToLogStr j <> " | lockedBy=" <> (toLogStr $ fromMaybe "unknown" jobLockedBy) <>
+        " lockedAt=" <> (toLogStr $ maybe "unknown" show jobLockedAt)
+      LogPoll ->
+        "Polling jobs table"
+      LogText t ->
+        toLogStr t

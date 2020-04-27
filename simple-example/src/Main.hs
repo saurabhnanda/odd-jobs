@@ -6,10 +6,12 @@
 
 module Main where
 
-import OddJobs.Job (Job(..), defaultConfig, ConcurrencyControl(..), withConnectionPool, Config(..), throwParsePayload)
+import OddJobs.Job ( Job(..), defaultConfig, ConcurrencyControl(..), withConnectionPool, Config(..)
+                   , throwParsePayload, defaultTimedLogger, defaultLogStr, defaultJobToText, defaultJobType )
 import OddJobs.Cli (defaultMain)
-import Control.Monad.Logger(defaultLogStr, LogLevel(..))
-import System.Log.FastLogger(withFastLogger, LogType'(..), defaultBufSize)
+-- import Control.Monad.Logger(defaultLogStr, LogLevel(..))
+import System.Log.FastLogger(withTimedFastLogger, LogType'(..), defaultBufSize)
+import System.Log.FastLogger.Date (newTimeCache, simpleTimeFormat)
 
 import Data.Text (Text)
 import Data.Aeson as Aeson
@@ -27,7 +29,7 @@ myJobRunner :: Job -> IO ()
 myJobRunner job = do
   (throwParsePayload job) >>= \case
     SendWelcomeEmail userId -> do
-      putStrLn "This should call the function that actually sends the welcome email. " <>
+      putStrLn $ "This should call the function that actually sends the welcome email. " <>
         "\nWe are purposely waiting 60 seconds before completing this job so that graceful shutdown can be demonstrated."
       delaySeconds (Seconds 60)
       putStrLn "60 second wait is now over..."
@@ -42,9 +44,8 @@ main = do
   where
     startJobMonitor callback = do
       withConnectionPool (Left "dbname=jobs_test user=jobs_test password=jobs_test host=localhost")$ \dbPool -> do
-        withFastLogger (LogFileNoRotate "oddjobs.log" defaultBufSize) $ \logger -> do
-          let loggerIO loc logSource logLevel logStr = if logLevel==LevelDebug
-                                                       then pure ()
-                                                       else logger $ defaultLogStr loc logSource logLevel logStr
-              jm = defaultConfig loggerIO "jobs_aqgrqtaowi" dbPool (MaxConcurrentJobs 50)
+        tcache <- newTimeCache simpleTimeFormat
+        withTimedFastLogger tcache (LogFileNoRotate "oddjobs.log" defaultBufSize) $ \logger -> do
+          let jobLogger = defaultTimedLogger logger (defaultLogStr (defaultJobToText defaultJobType))
+              jm = defaultConfig jobLogger "jobs_aqgrqtaowi" dbPool (MaxConcurrentJobs 50)
           callback jm{cfgJobRunner=myJobRunner}

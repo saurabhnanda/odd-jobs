@@ -67,7 +67,7 @@ startApp = do
 
   tcache <- FLogger.newTimeCache FLogger.simpleTimeFormat'
   (tlogger, cleanup) <- FLogger.newTimedFastLogger tcache (FLogger.LogStdout FLogger.defaultBufSize)
-  let flogger loc lsource llevel lstr = tlogger $ \t -> FLogger.toLogStr t <> " | " <> defaultLogStr loc lsource llevel lstr
+  let flogger = Job.defaultTimedLogger tlogger (Job.defaultLogStr (Job.defaultJobToText Job.defaultJobType))
       jm = Job.defaultConfig flogger tname dbPool Job.UnlimitedConcurrentJobs
 
   let nt :: ReaderT Job.Config IO a -> Servant.Handler a
