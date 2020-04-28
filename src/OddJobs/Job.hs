@@ -128,7 +128,7 @@ import Prelude hiding (log)
 -- an enviroment for a 'ReaderT', and almost all functions are written in this
 -- 'ReaderT' monad which impleents an instance of the 'HasJobRunner' type-class.
 --
--- **In future,** this /internal/ implementation detail will allow us to offer a
+-- __In future,__ this /internal/ implementation detail will allow us to offer a
 -- type-class based interface as well (similar to what
 -- 'Yesod.JobQueue.YesodJobQueue' provides).
 class (MonadUnliftIO m, MonadBaseControl IO m) => HasJobRunner m where
@@ -181,7 +181,7 @@ data LogEvent
 -- config parameters on a case-by-case basis.
 data Config = Config
   { -- | The DB table which holds your jobs. Please note, this should have been
-    -- created by the 'OddJobs.Migrations.createJobsTable' function.
+    -- created by the 'OddJobs.Migrations.createJobTable' function.
     cfgTableName :: TableName
 
     -- | The actualy "job-runner" that __you__ need to provide. Please look at
@@ -207,7 +207,7 @@ data Config = Config
     -- | The DB connection-pool to use for the job-runner. __Note:__ in case
     -- your jobs require a DB connection, please create a separate
     -- connection-pool for them. This pool will be used ONLY for monitoring jobs
-    -- and changing their status. We need to have _at least 4 connections__ in
+    -- and changing their status. We need to have __at least 4 connections__ in
     -- this connection-pool for the job-runner to work as expected. (TODO:
     -- Link-off to tutorial)
   , cfgDbPool :: Pool Connection

@@ -28,12 +28,14 @@ import qualified UnliftIO.Async as Async
 -- you cannot reuse those, then it would be best to write your CLI from scratch
 -- instead of force-fitting whatever has been provided here.
 --
--- It is __highly recommended__ that you read the \"Deployment\"
--- section in the tutorial before you put odd-jobs into production.
+-- It is __highly recommended__ that you read the following links before putting
+-- odd-jobs into production.
 --
---   * TODO: link-off to tutorial
+--   * A [simple-example](https://github.com/saurabhnanda/odd-jobs/blob/master/simple-example/src/Main.hs)
+--     of how to use the 'defaultMain' function, that should make the callback-within-callback
+--     more understandable.
 --
---   * TODO: link-off to @simple-example@
+--   * TODO: link-off to \"Deployment\" in the tutorial
 
 -- * Default behaviour
 --

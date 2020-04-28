@@ -1,20 +1,25 @@
 name:                odd-jobs
-version:             0.1.0.0
+version:             0.1.0
 synopsis: A full-featured PostgreSQL-backed job queue (with an admin UI)
 description: |
   - Background jobs library for Haskell.
+  - Extracted from production code at [Vacation Labs](https://www.vacationlabs.com).
   - Inspired by the Delayed Jobs library in Rails.
   - Queue backend is a Postgres table.
   - Queue is monitored using, both, LISTEN/NOTIFY and polling the DB.
-  - Comes with an in-built admin UI.
-homepage:            https://github.com/saurabhnanda/odd-jobs/
+  - Comes with an in-built admin UI (WIP).
+  - Comes with utilities to help you built a CLI for your job-queue.
+  - Highly configurable and monitorable
+homepage:            https://www.haskelltutorials.com/odd-jobs
+bug-reports:         https://github.com/saurabhnanda/odd-jobs/issues
 license:             BSD3
 author:              Saurabh Nanda
 maintainer:          saurabhnanda@gmail.com
-copyright:           2019 Saurabh Nanda
+copyright:           2016-2020 Saurabh Nanda
 category:            Web
 extra-source-files:
 - README.md
+- CHANGELOG.md
 
 ghc-options: 
   - -Wall 
@@ -80,11 +85,10 @@ library:
 executables:
   devel:
     source-dirs:      dev
-    main:             DevelMain.hs
+    main:             DevelMain
     ghc-options:
       - -threaded
       - -with-rtsopts=-N
-      - -main-is DevelMain
     dependencies:
       - foreign-store
       - odd-jobs
@@ -93,6 +97,7 @@ tests:
   jobrunner:
     ghc-options:
       - -threaded
+      - -with-rtsopts=-N
     main: Test
     source-dirs: test
     dependencies:

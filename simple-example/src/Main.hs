@@ -47,5 +47,5 @@ main = do
         tcache <- newTimeCache simpleTimeFormat
         withTimedFastLogger tcache (LogFileNoRotate "oddjobs.log" defaultBufSize) $ \logger -> do
           let jobLogger = defaultTimedLogger logger (defaultLogStr (defaultJobToText defaultJobType))
-              jm = defaultConfig jobLogger "jobs_aqgrqtaowi" dbPool (MaxConcurrentJobs 50)
-          callback jm{cfgJobRunner=myJobRunner}
+              jm = defaultConfig jobLogger "jobs_aqgrqtaowi" dbPool (MaxConcurrentJobs 50) myJobRunner
+          callback jm
