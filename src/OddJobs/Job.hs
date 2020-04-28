@@ -1,39 +1,77 @@
 {-# LANGUAGE RankNTypes, FlexibleInstances, FlexibleContexts, PartialTypeSignatures, TupleSections, DeriveGeneric, UndecidableInstances #-}
 module OddJobs.Job
-  ( jobMonitor
-  , jobEventListener
-  , jobPoller
-  , createJob
-  , scheduleJob
-  , Job(..)
-  , JobRunner
-  , HasJobRunner (..)
-  , Status(..)
-  , findJobById
-  , findJobByIdIO
-  , JobId
-  , saveJob
-  , saveJobIO
-  , defaultPollingInterval
-  , Config(..)
-  , defaultConfig
-  , startJobRunner
-  , TableName
-  , jobDbColumns
-  , concatJobDbColumns
-  , delaySeconds
-  , Seconds(..)
+  (
+    -- * Starting the job-runner
+    --
+    -- $startRunner
+    startJobRunner
+
+    -- * Configuring the job-runner
+    --
+    -- $config
+  ,  Config(..)
   , ConcurrencyControl(..)
-  , withConnectionPool
-  , lockTimeout
-  , eitherParsePayload
-  , throwParsePayload
-  , eitherParsePayloadWith
-  , throwParsePayloadWith
+
+    -- ** Configuration helpers
+    --
+    -- $configHelpers
+  , defaultConfig
   , defaultJobToText
   , defaultJobType
   , defaultTimedLogger
   , defaultLogStr
+  , defaultPollingInterval
+  , defaultLockTimeout
+  , withConnectionPool
+
+  -- * Creating/scheduling jobs
+  --
+  -- $createJobs
+  , createJob
+  , scheduleJob
+
+  -- * @Job@ and associated data-types
+  --
+  -- $dataTypes
+  , Job(..)
+  , JobId
+  , Status(..)
+  , TableName
+  , delaySeconds
+  , Seconds(..)
+  -- ** Structured logging
+  --
+  -- $logging
+  , LogEvent(..)
+  , LogLevel(..)
+
+  -- * Job-runner interals
+  --
+  -- $internals
+  , jobMonitor
+  , jobEventListener
+  , jobPoller
+  , jobPollingSql
+  , JobRunner
+  , HasJobRunner (..)
+
+  -- * Database helpers
+  --
+  -- $dbHelpers
+  , findJobById
+  , findJobByIdIO
+  , saveJob
+  , saveJobIO
+  , jobDbColumns
+  , concatJobDbColumns
+
+  -- * JSON helpers
+  --
+  -- $jsonHelpers
+  , eitherParsePayload
+  , throwParsePayload
+  , eitherParsePayloadWith
+  , throwParsePayloadWith
   )
 where
 
@@ -83,13 +121,22 @@ import Data.Aeson.Internal (iparse, IResult(..), formatError)
 import qualified System.Log.FastLogger as FLogger
 import Prelude hiding (log)
 
+
+-- | The documentation of odd-jobs currently promotes 'startJobRunner', which
+-- expects a fairly detailed 'Config' record, as a top-level function for
+-- initiating a job-runner. However, internally, this 'Config' record is used as
+-- an enviroment for a 'ReaderT', and almost all functions are written in this
+-- 'ReaderT' monad which impleents an instance of the 'HasJobRunner' type-class.
+--
+-- **In future,** this /internal/ implementation detail will allow us to offer a
+-- type-class based interface as well (similar to what
+-- 'Yesod.JobQueue.YesodJobQueue' provides).
 class (MonadUnliftIO m, MonadBaseControl IO m) => HasJobRunner m where
   getPollingInterval :: m Seconds
   onJobSuccess :: Job -> m ()
   onJobFailed :: Job -> m ()
   onJobPermanentlyFailed :: Job -> m ()
   getJobRunner :: m (Job -> IO ())
-  getMaxAttempts :: m Int
   getDbPool :: m (Pool Connection)
   getTableName :: m TableName
   onJobStart :: Job -> m ()
@@ -101,43 +148,216 @@ class (MonadUnliftIO m, MonadBaseControl IO m) => HasJobRunner m where
   getJobToText :: m (Job -> Text)
   log :: LogLevel -> LogEvent -> m ()
 
-data LogEvent = LogJobStart !Job
-              | LogJobFailed !Job !NominalDiffTime
-              | LogJobSuccess !Job !NominalDiffTime
-              | LogJobPermanentlyFailed !Job !NominalDiffTime
-              | LogJobTimeout !Job
-              | LogPoll
-              | LogText !Text
-              deriving (Eq, Show, Generic)
 
+-- $logging
+--
+-- TODO: Complete the prose here
+
+
+data LogEvent
+  -- | Emitted when a job starts execution
+  = LogJobStart !Job
+  -- | Emitted when a job succeeds along with the time taken for execution.
+  | LogJobSuccess !Job !NominalDiffTime
+  -- | Emitted when a job fails (but will be retried) along with the time taken for
+  -- /this/ attempt
+  | LogJobFailed !Job !NominalDiffTime
+  -- | Emitted when a job fails permanently (and will no longer be retried) along
+  -- with the time taken for /this/ attempt (i.e. final attempt)
+  | LogJobPermanentlyFailed !Job !NominalDiffTime
+  -- | Emitted when a job times out and is picked-up again for execution
+  | LogJobTimeout !Job
+  -- | Emitted whenever 'jobPoller' polls the DB table
+  | LogPoll
+  -- | Emitted whenever any other event occurs
+  | LogText !Text
+  deriving (Eq, Show, Generic)
+
+
+-- | While odd-jobs is highly configurable and the 'Config' data-type might seem
+-- daunting at first, it is not necessary to tweak every single configuration
+-- parameter by hand. Please start-off by using the sensible defaults provided
+-- by the [configuration helpers](#configHelpers), and tweaking
+-- config parameters on a case-by-case basis.
 data Config = Config
-  { cfgPollingInterval :: Seconds
-  , cfgOnJobSuccess :: Job -> IO ()
-  , cfgOnJobFailed :: Job -> IO ()
-  , cfgOnJobPermanentlyFailed :: Job -> IO ()
-  , cfgOnJobStart :: Job -> IO ()
-  , cfgOnJobTimeout :: Job -> IO ()
+  { -- | The DB table which holds your jobs. Please note, this should have been
+    -- created by the 'OddJobs.Migrations.createJobsTable' function.
+    cfgTableName :: TableName
+
+    -- | The actualy "job-runner" that __you__ need to provide. Please look at
+    -- the examples/tutorials if your applicaton's code is not in the @IO@
+    -- monad.
   , cfgJobRunner :: Job -> IO ()
-  , cfgMaxAttempts :: Int
-  , cfgLogger :: LogLevel -> LogEvent -> IO ()
-  , cfgDbPool :: Pool Connection
-  , cfgTableName :: TableName
+
+    -- | The number of times a failing job is retried before it is considered is
+    -- "permanently failed" and ignored by the job-runner. This config parameter
+    -- is called "/default/ max attempts" because, in the future, it would be
+    -- possible to specify the number of retry-attemps on a per-job basis
+    -- (__Note:__ per-job retry-attempts has not been implemented yet)
   , cfgDefaultMaxAttempts :: Int
+
+    -- | Controls how many jobs can be run concurrently by /this instance/ of
+    -- the job-runner. __Please note,__ this is NOT the global concurrency of
+    -- entire job-queue. It is possible to have job-runners running on multiple
+    -- machines, and each will apply the concurrency control independnt of other
+    -- job-runners. TODO: Link-off to relevant section in the tutorial.
   , cfgConcurrencyControl :: ConcurrencyControl
+
+
+    -- | The DB connection-pool to use for the job-runner. __Note:__ in case
+    -- your jobs require a DB connection, please create a separate
+    -- connection-pool for them. This pool will be used ONLY for monitoring jobs
+    -- and changing their status. We need to have _at least 4 connections__ in
+    -- this connection-pool for the job-runner to work as expected. (TODO:
+    -- Link-off to tutorial)
+  , cfgDbPool :: Pool Connection
+
+    -- | How frequently should the 'jobPoller' check for jobs where the Job's
+    -- 'jobRunAt' field indicates that it's time for the job to be executed.
+    -- TODO: link-off to the tutorial.
+  , cfgPollingInterval :: Seconds
+
+  -- | User-defined callback function that is called whenever a job succeeds.
+  , cfgOnJobSuccess :: Job -> IO ()
+
+  -- | User-defined callback function that is called whenever a job fails. This
+  -- does not indicate permanent failure and means the job will be retried. It
+  -- is a good idea to log the failures to Airbrake, NewRelic, Sentry, or some
+  -- other error monitoring tool.
+  , cfgOnJobFailed :: Job -> IO ()
+
+    -- | User-defined callback function that is called whenever a job fails
+    -- /permanently/ (i.e. number of retry-attempts have crossed the configured
+    -- threshold). It is a good idea to log the failures to Airbrake, NewRelic,
+    -- Sentry, or some other error monitoring tool.
+  , cfgOnJobPermanentlyFailed :: Job -> IO ()
+
+  -- | User-defined callback function that is called whenever a job starts
+  -- execution.
+  , cfgOnJobStart :: Job -> IO ()
+
+  -- | User-defined callback function that is called whenever a job times-out.
+  , cfgOnJobTimeout :: Job -> IO ()
+
+  -- | File to store the PID of the job-runner process. This is used only when
+  -- invoking the job-runner as an independent background deemon (the usual mode
+  -- of deployment). (TODO: Link-off to tutorial).
   , cfgPidFile :: Maybe FilePath
+
+  -- | A "structured logging" function that __you__ need to provide. The
+  -- @odd-jobs@ library does NOT use the standard logging interface provided by
+  -- 'monad-logger' on purpose. TODO: link-off to tutorial. Please also read
+  -- 'cfgJobToText' and 'cfgJobType'
+  , cfgLogger :: LogLevel -> LogEvent -> IO ()
+
+  -- | When emitting certain text messages in logs, how should the 'Job' be
+  -- summarized in a textual format? Related: 'defaultJobToText'
   , cfgJobToText :: Job -> Text
+
+  -- | How to extract the "job type" from a 'Job'. Related: 'defaultJobType'
   , cfgJobType :: Job -> Text
   }
 
-data ConcurrencyControl = MaxConcurrentJobs Int
-                        | UnlimitedConcurrentJobs
-                        | DynamicConcurrency (IO Bool)
+data ConcurrencyControl
+  -- | The maximum number of concurrent jobs that /this instance/ of the
+  -- job-runner can execute. TODO: Link-off to tutorial.
+  = MaxConcurrentJobs Int
+  -- | __Not recommended:__ Please do not use this in production unless you know
+  -- what you're doing. No machine can support unlimited concurrency. If your
+  -- jobs are doing anything worthwhile, running a sufficiently large number
+  -- concurrently is going to max-out /some/ resource of the underlying machine,
+  -- such as, CPU, memory, disk IOPS, or network bandwidth.
+  | UnlimitedConcurrentJobs
+
+  -- | Use this to dynamically determine if the next job should be picked-up, or
+  -- not. This is useful to write custom-logic to determine whether a limited
+  -- resource is below a certain usage threshold (eg. CPU usage is below 80%).
+  -- __Caveat:__ This feature has not been tested in production, yet. TODO:
+  -- Link-off to tutorial.
+  | DynamicConcurrency (IO Bool)
 
 instance Show ConcurrencyControl where
   show cc = case cc of
     MaxConcurrentJobs n -> "MaxConcurrentJobs " <> show n
     UnlimitedConcurrentJobs -> "UnlimitedConcurrentJobs"
     DynamicConcurrency _ -> "DynamicConcurrency (IO Bool)"
+
+
+-- $configHelpers
+--
+-- #configHelpers#
+
+-- | This function gives you a 'Config' with a bunch of sensible defaults
+-- already applied. It requies the bare minimum arguments that this library
+-- cannot assume on your behalf.
+--
+-- It makes a few __important assumptions__ about your 'jobPayload 'JSON, which
+-- are documented in 'defaultJobType'.
+defaultConfig :: (LogLevel -> LogEvent -> IO ())  -- ^ "Structured logging" function. Ref: 'cfgLogger'
+              -> TableName                        -- ^ DB table which holds your jobs. Ref: 'cfgTableName'
+              -> Pool Connection                  -- ^ DB connection-pool to be used by job-runner. Ref: 'cfgDbPool'
+              -> ConcurrencyControl               -- ^ Concurrency configuration. Ref: 'cfgConcurrencyControl'
+              -> (Job -> IO ())                   -- ^ The actual "job runner" which contains your application code. Ref: 'cfgJobRunner'
+              -> Config
+defaultConfig logger tname dbpool ccControl jrunner =
+  let cfg = Config
+            { cfgPollingInterval = defaultPollingInterval
+            , cfgOnJobSuccess = (const $ pure ())
+            , cfgOnJobFailed = (const $ pure ())
+            , cfgOnJobPermanentlyFailed = (const $ pure ())
+            , cfgJobRunner = jrunner
+            , cfgLogger = logger
+            , cfgDbPool = dbpool
+            , cfgOnJobStart = (const $ pure ())
+            , cfgDefaultMaxAttempts = 10
+            , cfgTableName = tname
+            , cfgOnJobTimeout = (const $ pure ())
+            , cfgConcurrencyControl = ccControl
+            , cfgPidFile = Nothing
+            , cfgJobToText = defaultJobToText (cfgJobType cfg)
+            , cfgJobType = defaultJobType
+            }
+  in cfg
+
+-- | Used only by 'defaultLogStr' now. TODO: Is this even required anymore?
+-- Should this be removed?
+defaultJobToText :: (Job -> Text) -> Job -> Text
+defaultJobToText jobTypeFn job@Job{jobId} =
+  "JobId=" <> (toS $ show jobId) <> " JobType=" <> jobTypeFn job
+
+-- | This makes __two important assumptions__. First, this /assumes/ that jobs
+-- in your app are represented by a sum-type. For example:
+--
+-- @
+-- data MyJob = SendWelcomeEmail Int
+--            | SendPasswordResetEmail Text
+--            | SetupSampleData Int
+-- @
+--
+-- Second, it /assumes/ that the JSON representatin of this sum-type is
+-- "tagged". For example, the following...
+--
+-- > let pload = SendWelcomeEmail 10
+--
+-- ...when converted to JSON, would look like...
+--
+-- > {"tag":"SendWelcomeEmail", "contents":10}
+--
+-- It uses this assumption to extract the "job type" from a 'Data.Aeson.Value'
+-- (which would be @SendWelcomeEmail@ in the example given above). This is used
+-- in logging and the admin UI.
+--
+-- Even if tihs assumption is violated, the job-runner /should/ continue to
+-- function. It's just that you won't get very useful log messages.
+defaultJobType :: Job -> Text
+defaultJobType Job{jobPayload} =
+  case jobPayload of
+    Aeson.Object hm -> case HM.lookup "tag" hm of
+      Just (Aeson.String t) -> t
+      _ -> "unknown"
+    _ -> "unknown"
+
+
 
 data RunnerEnv = RunnerEnv
   { envConfig :: !Config
@@ -161,7 +381,6 @@ instance HasJobRunner RunnerM where
     fn <- cfgOnJobPermanentlyFailed . envConfig <$> ask
     logCallbackErrors (jobId job) "onJobPermanentlyFailed" $ liftIO $ fn job
   getJobRunner = cfgJobRunner . envConfig <$> ask
-  getMaxAttempts = cfgMaxAttempts . envConfig <$> ask
   getDbPool = cfgDbPool . envConfig <$> ask
   getTableName = cfgTableName . envConfig <$> ask
   onJobStart job = do
@@ -185,6 +404,10 @@ instance HasJobRunner RunnerM where
     loggerFn <- cfgLogger . envConfig <$> ask
     liftIO $ loggerFn logLevel logEvent
 
+-- | Start the job-runner in the /current/ thread, i.e. you'll need to use
+-- 'forkIO' or 'async' manually, if you want the job-runner to run in the
+-- background. Consider using 'OddJobs.Cli' to rapidly build your own
+-- standalone daemon.
 startJobRunner :: Config -> IO ()
 startJobRunner jm = do
   r <- newIORef []
@@ -194,45 +417,9 @@ startJobRunner jm = do
                    }
   runReaderT jobMonitor monitorEnv
 
-defaultConfig :: (LogLevel -> LogEvent -> IO ())
-              -> TableName
-              -> Pool Connection
-              -> ConcurrencyControl
-              -> Config
-defaultConfig logger tname dbpool ccControl =
-  let cfg = Config
-            { cfgPollingInterval = defaultPollingInterval
-            , cfgOnJobSuccess = (const $ pure ())
-            , cfgOnJobFailed = (const $ pure ())
-            , cfgOnJobPermanentlyFailed = (const $ pure ())
-            , cfgJobRunner = (const $ pure ())
-            , cfgMaxAttempts = 25
-            , cfgLogger = logger
-            , cfgDbPool = dbpool
-            , cfgOnJobStart = (const $ pure ())
-            , cfgDefaultMaxAttempts = 10
-            , cfgTableName = tname
-            , cfgOnJobTimeout = (const $ pure ())
-            , cfgConcurrencyControl = ccControl
-            , cfgPidFile = Nothing
-            , cfgJobToText = defaultJobToText (cfgJobType cfg)
-            , cfgJobType = defaultJobType
-            }
-  in cfg
-
-defaultJobToText :: (Job -> Text) -> Job -> Text
-defaultJobToText jobTypeFn job@Job{jobId} =
-  "JobId=" <> (toS $ show jobId) <> " JobType=" <> jobTypeFn job
-
-defaultJobType :: Job -> Text
-defaultJobType Job{jobPayload} =
-  case jobPayload of
-    Aeson.Object hm -> case HM.lookup "tag" hm of
-      Just (Aeson.String t) -> t
-      _ -> "unknown"
-    _ -> "unknown"
-
-
+-- | Convenience function to create a DB connection-pool with some sensible
+-- defaults. Please see the source-code of this function to understand what it's
+-- doing. TODO: link-off to tutorial.
 withConnectionPool :: (MonadUnliftIO m)
                    => Either BS.ByteString PGS.ConnectInfo
                    -> (Pool PGS.Connection -> m a)
@@ -247,6 +434,7 @@ withConnectionPool connConfig action = withRunInIO $ \runInIO -> do
         Right connInfo ->
           createPool (PGS.connect connInfo) PGS.close 1 (fromIntegral $ 2 * (unSeconds defaultPollingInterval)) 5
 
+-- | As the name says. Ref: 'cfgPollingInterval'
 defaultPollingInterval :: Seconds
 defaultPollingInterval = Seconds 5
 
@@ -325,9 +513,10 @@ jobWorkerName = do
   hname <- getHostName
   pure $ hname ++ ":" ++ (show pid)
 
--- TODO: Make this configurable based on a per-job basis
-lockTimeout :: Seconds
-lockTimeout = Seconds 600
+-- | TODO: Make this configurable for the job-runner, why is this still
+-- hard-coded?
+defaultLockTimeout :: Seconds
+defaultLockTimeout = Seconds 600
 
 jobDbColumns :: (IsString s, Semigroup s) => [s]
 jobDbColumns =
@@ -435,7 +624,7 @@ runJob jid = do
     Just job -> do
       startTime <- liftIO getCurrentTime
       (flip catches) [Handler $ timeoutHandler job startTime, Handler $ exceptionHandler job startTime] $ do
-        runJobWithTimeout lockTimeout job
+        runJobWithTimeout defaultLockTimeout job
         endTime <- liftIO getCurrentTime
         newJob <- saveJob job{jobStatus=Success, jobLockedBy=Nothing, jobLockedAt=Nothing}
         log LevelInfo $ LogJobSuccess newJob (diffUTCTime endTime startTime)
@@ -483,6 +672,10 @@ restartUponCrash name_ action = do
         Right r -> log LevelError $ LogText $ name_ <> " seems to have exited with the folloing result: " <> toS (show r) <> ". Restaring."
       restartUponCrash name_ action
 
+-- | Spawns 'jobPoller' and 'jobEventListener' in separate threads and restarts
+-- them in the off-chance they happen to crash. Also responsible for
+-- implementing graceful shutdown, i.e. waiting for all jobs already being
+-- executed to finish execution before exiting the main thread.
 jobMonitor :: forall m . (HasJobRunner m) => m ()
 jobMonitor = do
   a1 <- async $ restartUponCrash "Job poller" jobPoller
@@ -498,47 +691,8 @@ jobMonitor = do
       Just f -> do
         log LevelInfo $ LogText $ "Removing PID file: " <> toS f
         liftIO $ Dir.removePathForcibly f
-    -- liftIO $ putStrLn "STOPPED jobPoller and jobEventListener threads."
 
-  -- threadsRef <- newIORef []
-  -- jobMonitor_ threadsRef Nothing Nothing Nothing
-  -- where
-  --   jobMonitor_ :: IORef [Async ()] -> Maybe (Async ()) -> Maybe (Async ()) -> Maybe (Async ()) -> m ()
-  --   jobMonitor_ threadsRef mPollerAsync mEventAsync mThreadMonitorAsync = do
-  --     pollerAsync <- maybe (async $ jobPoller threadsRef) pure mPollerAsync
-  --     eventAsync <- maybe (async $ jobEventListener threadsRef) pure mEventAsync
-  --     threadMonitorAsync <- maybe (async $ threadMonitor threadsRef) pure mThreadMonitorAsync
-  --     finally
-  --       (restartUponCrash threadsRef pollerAsync eventAsync threadMonitorAsync)
-  --       (do logInfoN "Received shutdown event. Cancelling job-poller and event-listener threads"
-  --           cancel eventAsync
-  --           cancel pollerAsync
-  --           cancel threadMonitorAsync
-  --       )
-
-
-  --   restartUponCrash threadsRef pollerAsync eventAsync threadMonitorAsync = do
-  --     (t, result) <- waitAnyCatch [pollerAsync, eventAsync, threadMonitorAsync]
-  --     if t==pollerAsync
-  --       then do either
-  --                 (\(SomeException e) -> logErrorN $ "Job poller seems to have crashed. Respawning: " <> toS (show e))
-  --                 (\x -> logErrorN $ "Job poller seems to have escaped the `forever` loop. Respawning: " <> toS (show x))
-  --                 result
-  --               jobMonitor_ threadsRef Nothing (Just eventAsync) (Just threadMonitorAsync)
-  --       else if t==eventAsync
-  --            then do either
-  --                      (\(SomeException e) -> logErrorN $ "Event listener seems to have crashed. Respawning: " <> toS (show e))
-  --                      (\x -> logErrorN $ "Event listener seems to have escaped the `forever` loop. Respawning: " <> toS (show x))
-  --                      result
-  --                    jobMonitor_ threadsRef (Just pollerAsync) Nothing (Just threadMonitorAsync)
-  --            else if t==threadMonitorAsync
-  --                 then do either
-  --                           (\(SomeException e) -> logErrorN $ "Thread monitor seems to have crashed. Respawning: " <> toS (show e))
-  --                           (\x -> logErrorN $ "Thread monitor seems to have escaped the `forever` loop. Respawning: " <> toS (show x))
-  --                           result
-  --                         jobMonitor_ threadsRef (Just pollerAsync) (Just eventAsync) Nothing
-  --                 else logErrorN "Impossible happened. One of the three top-level threads/asyncs crashed but we were unable to figure out which one."
-
+-- | Ref: 'jobPoller'
 jobPollingSql :: TableName -> Query
 jobPollingSql tname = "update " <> tname <> " set status = ?, locked_at = ?, locked_by = ?, attempts=attempts+1 WHERE id in (select id from " <> tname <> " where (run_at<=? AND ((status in ?) OR (status = ? and locked_at<?))) ORDER BY run_at ASC LIMIT 1 FOR UPDATE) RETURNING id"
 
@@ -555,49 +709,6 @@ waitForJobs = do
       delaySeconds (Seconds 1)
       waitForJobs
 
-
-  -- finally threadMonitor_ $ do
-  -- timeoutThread <- async timeout
-  -- waitForCompletion timeoutThread
-  -- where
-  --   waitForCompletion timeoutThread = readIORef threadsRef >>= \case
-  --     [] -> do
-  --       logDebugN "No job threads running."
-  --     threads -> do
-  --       logDebugN $ toS $ "Waiting for " <> show (DL.length threads) <> " to complete..."
-  --       (thread, _) <- waitAnyCatch threads
-  --       removeThreadRef thread
-  --       waitForCompletion timeoutThread
-
-  --   timeout = do
-  --     delaySeconds lockTimeout
-  --     logDebugN "===> Timeout has expired. Forcefulling cancelling all job-threads now. <==="
-  --     mapM_ uninterruptibleCancel =<< (readIORef threadsRef)
-
-  --   threadMonitor_ =  forever $ readIORef threadsRef >>= \case
-  --     [] -> delaySeconds =<< getPollingInterval
-  --     threads -> do
-  --       logDebugN $ toS $ "Waiting on job threads: " <> show (DL.length threads) <> " threads"
-  --       (thread, ret) <- waitAnyCatch threads
-  --       let tid = asyncThreadId thread
-  --       logDebugN $ toS $ "Thread finished " <> show tid <> ". Result: " <> show ret
-  --       removeThreadRef thread
-
-  --   removeThreadRef thread = atomicModifyIORef' threadsRef $ \threads -> (DL.delete thread threads, ())
-
--- withThreadAccounting :: (HasJobRunner m)
---                      => m a
---                      -> m (Async a)
--- withThreadAccounting action = do
---   threadsRef <- envJobThreadsRef <$> getRunnerEnv
---   mv <- newEmptyMVar
---   a <- async $ do
---     takeMVar mv
---     action
---   atomicModifyIORef' threadsRef $ \threads -> (a:threads, ())
---   putMVar mv ()
---   pure a
-
 getConcurrencyControlFn :: (HasJobRunner m)
                         => m (m Bool)
 getConcurrencyControlFn = getConcurrencyControl >>= \case
@@ -606,6 +717,21 @@ getConcurrencyControlFn = getConcurrencyControl >>= \case
     curJobs <- getRunnerEnv >>= (readIORef . envJobThreadsRef)
     pure $ (DL.length curJobs) < maxJobs
   DynamicConcurrency fn -> pure $ liftIO fn
+
+-- | Executes 'jobPollingSql' every 'cfgPollingInterval' seconds to pick up jobs
+-- for execution. Uses @UPDATE@ along with @SELECT...FOR UPDATE@ to efficiently
+-- find a job that matches /all/ of the following conditions:
+--
+--   * 'jobRunAt' should be in the past
+--   * /one of the following/ conditions match:
+--
+--       * 'jobStatus' should be 'Queued' or 'Retry'
+--
+--       * 'jobStatus' should be 'Locked' and 'jobLockedAt' should be
+--         'defaultLockTimeout' seconds in the past, thus indicating that the
+--         job was picked up execution, but didn't complete on time (possible
+--         because the thread/process executing it crashed without being able to
+--         update the DB)
 
 jobPoller :: (HasJobRunner m) => m ()
 jobPoller = do
@@ -622,7 +748,7 @@ jobPoller = do
         t <- liftIO getCurrentTime
         r <- liftIO $
              PGS.query pollerDbConn (jobPollingSql tname)
-             (Locked, t, processName, t, (In [Queued, Retry]), Locked, (addUTCTime (fromIntegral $ negate $ unSeconds lockTimeout) t))
+             (Locked, t, processName, t, (In [Queued, Retry]), Locked, (addUTCTime (fromIntegral $ negate $ unSeconds defaultLockTimeout) t))
         case r of
           -- When we don't have any jobs to run, we can relax a bit...
           [] -> pure delayAction
@@ -638,6 +764,8 @@ jobPoller = do
     delayAction = delaySeconds =<< getPollingInterval
     noDelayAction = pure ()
 
+-- | Uses PostgreSQL's LISTEN/NOTIFY to be immediately notified of newly created
+-- jobs.
 jobEventListener :: (HasJobRunner m)
                  => m ()
 jobEventListener = do
@@ -697,12 +825,42 @@ jobEventListener = do
 createJobQuery :: TableName -> PGS.Query
 createJobQuery tname = "INSERT INTO " <> tname <> "(run_at, status, payload, last_error, attempts, locked_at, locked_by) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING " <> concatJobDbColumns
 
-createJob :: ToJSON p => Connection -> TableName -> p -> IO Job
+-- $createJobs
+--
+-- Ideally you'd want to create wrappers for 'createJob' and 'scheduleJob' in
+-- your application so that instead of being in @IO@ they can be in your
+-- application's monad @m@ instead (this saving you from a @liftIO@ every time
+-- you want to enqueue a job
+
+-- | Create a job for immediate execution.
+--
+-- Internally calls 'scheduleJob' passing it the current time. Read
+-- 'scheduleJob' for further documentation.
+createJob :: ToJSON p
+          => Connection
+          -> TableName
+          -> p
+          -> IO Job
 createJob conn tname payload = do
   t <- getCurrentTime
   scheduleJob conn tname payload t
 
-scheduleJob :: ToJSON p => Connection -> TableName -> p -> UTCTime -> IO Job
+-- | Create a job for execution at the given time.
+--
+--  * If time has already past, 'jobEventListener' is going to pick this up
+--    for execution immediately.
+--
+--  * If time is in the future, 'jobPoller' is going to pick this up with an
+--    error of +/- 'cfgPollingInterval' seconds. Please do not expect very high
+--    accuracy of when the job is actually executed.
+scheduleJob :: ToJSON p
+            => Connection   -- ^ DB connection to use. __Note:__ This should
+                            -- /ideally/ come out of your application's DB pool,
+                            -- not the 'cfgDbPool' you used in the job-runner.
+            -> TableName    -- ^ DB-table which holds your jobs
+            -> p            -- ^ Job payload
+            -> UTCTime      -- ^ when should the job be executed
+            -> IO Job
 scheduleJob conn tname payload runAt = do
   let args = ( runAt, Queued, toJSON payload, Nothing :: Maybe Value, 0 :: Int, Nothing :: Maybe Text, Nothing :: Maybe Text )
       queryFormatter = toS <$> (PGS.formatQuery conn (createJobQuery tname) args)
@@ -744,6 +902,7 @@ throwParsePayloadWith parser job =
   either throwString (pure . Prelude.id) (eitherParsePayloadWith parser job)
 
 
+-- | TODO: Should the library be doing this?
 defaultTimedLogger :: FLogger.TimedFastLogger
                    -> (LogLevel -> LogEvent -> LogStr)
                    -> LogLevel
@@ -756,6 +915,7 @@ defaultTimedLogger logger logStrFn logLevel logEvent =
                       (logStrFn logLevel logEvent) <>
                       "\n"
 
+  -- TODO; Should the library be doing this?
 defaultLogStr :: (Job -> Text)
               -> LogLevel
               -> LogEvent

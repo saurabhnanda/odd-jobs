@@ -68,7 +68,7 @@ startApp = do
   tcache <- FLogger.newTimeCache FLogger.simpleTimeFormat'
   (tlogger, cleanup) <- FLogger.newTimedFastLogger tcache (FLogger.LogStdout FLogger.defaultBufSize)
   let flogger = Job.defaultTimedLogger tlogger (Job.defaultLogStr (Job.defaultJobToText Job.defaultJobType))
-      jm = Job.defaultConfig flogger tname dbPool Job.UnlimitedConcurrentJobs
+      jm = Job.defaultConfig flogger tname dbPool Job.UnlimitedConcurrentJobs (const $ pure ())
 
   let nt :: ReaderT Job.Config IO a -> Servant.Handler a
       nt action = (liftIO $ try $ runReaderT action jm) >>= \case
