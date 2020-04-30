@@ -1,4 +1,5 @@
 {-# LANGUAGE RankNTypes, FlexibleInstances, FlexibleContexts, PartialTypeSignatures, TupleSections, DeriveGeneric, UndecidableInstances #-}
+{-# LANGUAGE ExistentialQuantification #-}
 module OddJobs.Job
   (
     -- * Starting the job-runner
@@ -72,6 +73,8 @@ module OddJobs.Job
   , throwParsePayload
   , eitherParsePayloadWith
   , throwParsePayloadWith
+
+  , JobErrHandler(..)
   )
 where
 
@@ -90,7 +93,7 @@ import System.Posix.Process (getProcessID)
 import Network.HostName (getHostName)
 import UnliftIO.MVar
 import Debug.Trace
-import Control.Monad.Logger as MLogger (LogLevel(..), LogStr(..), toLogStr)
+import Control.Monad.Logger as MLogger (LogLevel(..), LogStr, toLogStr)
 import UnliftIO.IORef
 import UnliftIO.Exception ( SomeException(..), try, catch, finally
                           , catchAny, bracket, Exception(..), throwIO
@@ -134,14 +137,12 @@ import Prelude hiding (log)
 class (MonadUnliftIO m, MonadBaseControl IO m) => HasJobRunner m where
   getPollingInterval :: m Seconds
   onJobSuccess :: Job -> m ()
-  onJobFailed :: Job -> m ()
-  onJobPermanentlyFailed :: Job -> m ()
+  onJobFailed :: forall a . m [JobErrHandler a]
   getJobRunner :: m (Job -> IO ())
   getDbPool :: m (Pool Connection)
   getTableName :: m TableName
   onJobStart :: Job -> m ()
   getDefaultMaxAttempts :: m Int
-  onJobTimeout :: Job -> m ()
   getRunnerEnv :: m RunnerEnv
   getConcurrencyControl :: m ConcurrencyControl
   getPidFile :: m (Maybe FilePath)
@@ -161,18 +162,19 @@ data LogEvent
   | LogJobSuccess !Job !NominalDiffTime
   -- | Emitted when a job fails (but will be retried) along with the time taken for
   -- /this/ attempt
-  | LogJobFailed !Job !NominalDiffTime
-  -- | Emitted when a job fails permanently (and will no longer be retried) along
-  -- with the time taken for /this/ attempt (i.e. final attempt)
-  | LogJobPermanentlyFailed !Job !NominalDiffTime
+  | LogJobFailed !Job !SomeException !FailureMode !NominalDiffTime
   -- | Emitted when a job times out and is picked-up again for execution
   | LogJobTimeout !Job
   -- | Emitted whenever 'jobPoller' polls the DB table
   | LogPoll
   -- | Emitted whenever any other event occurs
   | LogText !Text
-  deriving (Eq, Show, Generic)
+  deriving (Show, Generic)
 
+
+data FailureMode = FailWithRetry | FailPermanent deriving (Eq, Show)
+
+data JobErrHandler a = forall e . (Exception e) => JobErrHandler (e -> Job -> FailureMode -> IO a)
 
 -- | While odd-jobs is highly configurable and the 'Config' data-type might seem
 -- daunting at first, it is not necessary to tweak every single configuration
@@ -224,13 +226,7 @@ data Config = Config
   -- does not indicate permanent failure and means the job will be retried. It
   -- is a good idea to log the failures to Airbrake, NewRelic, Sentry, or some
   -- other error monitoring tool.
-  , cfgOnJobFailed :: Job -> IO ()
-
-    -- | User-defined callback function that is called whenever a job fails
-    -- /permanently/ (i.e. number of retry-attempts have crossed the configured
-    -- threshold). It is a good idea to log the failures to Airbrake, NewRelic,
-    -- Sentry, or some other error monitoring tool.
-  , cfgOnJobPermanentlyFailed :: Job -> IO ()
+  , cfgOnJobFailed :: forall a . [JobErrHandler a]
 
   -- | User-defined callback function that is called whenever a job starts
   -- execution.
@@ -303,8 +299,7 @@ defaultConfig logger tname dbpool ccControl jrunner =
   let cfg = Config
             { cfgPollingInterval = defaultPollingInterval
             , cfgOnJobSuccess = (const $ pure ())
-            , cfgOnJobFailed = (const $ pure ())
-            , cfgOnJobPermanentlyFailed = (const $ pure ())
+            , cfgOnJobFailed = []
             , cfgJobRunner = jrunner
             , cfgLogger = logger
             , cfgDbPool = dbpool
@@ -371,25 +366,16 @@ logCallbackErrors jid msg action = catchAny action $ \e -> log LevelError $ LogT
 
 instance HasJobRunner RunnerM where
   getPollingInterval = cfgPollingInterval . envConfig <$> ask
-  onJobFailed job = do
-    fn <- cfgOnJobFailed . envConfig  <$> ask
-    logCallbackErrors (jobId job) "onJobFailed" $ liftIO $ fn job
+  onJobFailed = cfgOnJobFailed . envConfig  <$> ask
   onJobSuccess job = do
     fn <- cfgOnJobSuccess . envConfig <$> ask
     logCallbackErrors (jobId job) "onJobSuccess" $ liftIO $ fn job
-  onJobPermanentlyFailed job = do
-    fn <- cfgOnJobPermanentlyFailed . envConfig <$> ask
-    logCallbackErrors (jobId job) "onJobPermanentlyFailed" $ liftIO $ fn job
   getJobRunner = cfgJobRunner . envConfig <$> ask
   getDbPool = cfgDbPool . envConfig <$> ask
   getTableName = cfgTableName . envConfig <$> ask
   onJobStart job = do
     fn <- cfgOnJobStart . envConfig <$> ask
     logCallbackErrors (jobId job) "onJobStart" $ liftIO $ fn job
-
-  onJobTimeout job = do
-    fn <- cfgOnJobTimeout . envConfig <$> ask
-    logCallbackErrors (jobId job) "onJobTimeout" $ liftIO $ fn job
 
   getDefaultMaxAttempts = cfgDefaultMaxAttempts . envConfig <$> ask
 
@@ -631,33 +617,32 @@ runJob jid = do
         onJobSuccess newJob
         pure ()
   where
-    timeoutHandler job startTime (e :: TimeoutException) = retryOrFail (show e) job onJobTimeout onJobPermanentlyFailed startTime
-    exceptionHandler job startTime (e :: SomeException) = retryOrFail (show e) job onJobFailed onJobPermanentlyFailed startTime
-    retryOrFail errStr job@Job{jobAttempts} onFail onPermanentFail startTime = do
+    timeoutHandler job startTime (e :: TimeoutException) = retryOrFail (toException e) job startTime
+    exceptionHandler job startTime (e :: SomeException) = retryOrFail (toException e) job startTime
+    retryOrFail e job@Job{jobAttempts} startTime = do
       endTime <- liftIO getCurrentTime
       defaultMaxAttempts <- getDefaultMaxAttempts
-      jobToText <- getJobToText
       let runTime = diffUTCTime endTime startTime
-          (newStatus, action, logAction) = if jobAttempts >= defaultMaxAttempts
-                                           then ( Failed
-                                                , onPermanentFail
-                                                , log LevelError $ LogJobPermanentlyFailed job runTime
-                                                )
-                                           else ( Retry
-                                                , onFail
-                                                , log LevelWarn $ LogJobFailed job runTime
-                                                )
+          (newStatus, failureMode, logLevel) = if jobAttempts >= defaultMaxAttempts
+                                               then ( Failed, FailPermanent, LevelError )
+                                               else ( Retry, FailWithRetry, LevelWarn )
       t <- liftIO getCurrentTime
       newJob <- saveJob job{ jobStatus=newStatus
                            , jobLockedBy=Nothing
                            , jobLockedAt=Nothing
-                           , jobLastError=(Just $ toJSON errStr) -- TODO: convert errors to json properly
+                           , jobLastError=(Just $ toJSON $ show e) -- TODO: convert errors to json properly
                            , jobRunAt=(addUTCTime (fromIntegral $ (2::Int) ^ jobAttempts) t)
                            }
-      logAction
-      void $ action newJob
-      pure ()
+      case fromException e :: Maybe TimeoutException of
+        Nothing -> log logLevel $ LogJobFailed newJob e failureMode runTime
+        Just _ -> log logLevel $ LogJobTimeout newJob
 
+      let tryHandler (JobErrHandler handler) res = case fromException e of
+            Nothing -> res
+            Just e_ -> handler e_ newJob failureMode
+      handlers <- onJobFailed
+      liftIO $ void $ Prelude.foldr tryHandler (throwIO e) handlers
+      pure ()
 
 restartUponCrash :: (HasJobRunner m, Show a) => Text -> m a -> m ()
 restartUponCrash name_ action = do
@@ -704,7 +689,7 @@ waitForJobs = do
     [] -> log LevelInfo $ LogText "All job-threads exited"
     as -> do
       tid <- myThreadId
-      (a, _) <- waitAnyCatch as
+      void $ waitAnyCatch as
       log LevelDebug $ LogText $ toS $ "Waiting for " <> show (DL.length as) <> " jobs to complete before shutting down. myThreadId=" <> (show tid)
       delaySeconds (Seconds 1)
       waitForJobs
@@ -927,12 +912,13 @@ defaultLogStr jobToText logLevel logEvent =
     str = case logEvent of
       LogJobStart j ->
         "Started | " <> jobToLogStr j
-      LogJobFailed j t ->
-        "Failed (retry) | " <> jobToLogStr j <> " | runtime=" <> (toLogStr $ show t)
+      LogJobFailed j e fm t ->
+        let tag = case fm of
+                    FailWithRetry -> "Failed (retry)"
+                    FailPermanent -> "Failed (permanent)"
+        in tag <> " | " <> jobToLogStr j <> " | runtime=" <> (toLogStr $ show t) <> " | error=" <> (toLogStr $ show e)
       LogJobSuccess j t ->
         "Success | " <> (jobToLogStr j) <> " | runtime=" <> (toLogStr $ show t)
-      LogJobPermanentlyFailed j t ->
-        "Failed (permanent) | " <> jobToLogStr j <> " | runtime=" <> (toLogStr $ show t)
       LogJobTimeout j@Job{jobLockedAt, jobLockedBy} ->
         "Timeout | " <> jobToLogStr j <> " | lockedBy=" <> (toLogStr $ fromMaybe "unknown" jobLockedBy) <>
         " lockedAt=" <> (toLogStr $ maybe "unknown" show jobLockedAt)
