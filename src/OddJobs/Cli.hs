@@ -3,7 +3,7 @@ module OddJobs.Cli where
 
 import Options.Applicative as Opts
 import Data.Text
-import OddJobs.Job (startJobRunner, Config(..), defaultLockTimeout)
+import OddJobs.Job (startJobRunner, Config(..))
 import System.Daemonize (DaemonOptions(..), daemonize)
 import System.FilePath (FilePath)
 import System.Posix.Process (getProcessID)
@@ -72,7 +72,7 @@ defaultMain :: ((Config -> IO ()) -> IO ())
             -- forked into the background.
             -> IO ()
 defaultMain startFn = do
-  Args{argsCommand} <- customExecParser defaultCliParserPrefs (defaultCliInfo defaultLockTimeout)
+  Args{argsCommand} <- customExecParser defaultCliParserPrefs defaultCliInfo
   case argsCommand of
     Start cmdArgs -> do
       defaultStartCommand cmdArgs startFn
@@ -166,11 +166,8 @@ data Args = Args
 
 
 -- | The top-level command-line parser
-argParser :: Seconds
-          -- ^ the default value for 'shutTimeout'
-          -> Parser Args
-argParser defaultTimeout = Args
-  <$> (commandParser defaultTimeout)
+argParser :: Parser Args
+argParser = Args <$> commandParser
 
 -- ** Top-level command parser
 
@@ -182,11 +179,10 @@ data Command
   deriving (Eq, Show)
 
 -- Parser for 'argsCommand'
-commandParser :: Seconds          -- ^ default value for 'shutTimeout'
-              -> Parser Command
-commandParser defaultTimeout = hsubparser
+commandParser :: Parser Command
+commandParser = hsubparser
    ( command "start" (info startParser (progDesc "start the odd-jobs runner")) <>
-     command "stop" (info (stopParser defaultTimeout) (progDesc "stop the odd-jobs runner")) <>
+     command "stop" (info stopParser (progDesc "stop the odd-jobs runner")) <>
      command "status" (info statusParser (progDesc "print status of all active jobs"))
    )
 
@@ -219,9 +215,8 @@ startParser = fmap Start $ StartArgs
 
 -- | @stop@ command is parsed into this data-structure by 'stopParser'. Please
 -- note, that this command first sends a @SIGINT@ to the daemon and waits for
--- 'shutTimeout' seconds (which defaults to 'defaultLockTimeout'). If the daemon
--- doesn't shut down cleanly within that time, it sends a @SIGKILL@ to kill
--- immediately.
+-- 'shutTimeout' seconds. If the daemon doesn't shut down cleanly within that
+-- time, it sends a @SIGKILL@ to kill immediately.
 data StopArgs = StopArgs
   { -- | After sending a @SIGINT@, how many seconds to wait before sending a
     -- @SIGKILL@
@@ -230,13 +225,13 @@ data StopArgs = StopArgs
   , shutPidFile :: !FilePath
   } deriving (Eq, Show)
 
-stopParser :: Seconds -> Parser Command
-stopParser defaultTimeout = fmap Stop $ StopArgs
+stopParser :: Parser Command
+stopParser = fmap Stop $ StopArgs
   <$> option (Seconds <$> auto) ( long "timeout" <>
                                   metavar "TIMEOUT" <>
-                                  help "Maximum seconds to wait before force-killing the background daemon." <>
-                                  value defaultTimeout <>
-                                  showDefaultWith (show . unSeconds)
+                                  help "Maximum seconds to wait before force-killing the background daemon."
+                                  -- value defaultTimeout <>
+                                  -- showDefaultWith (show . unSeconds)
                                 )
   <*> pidFileParser
 
@@ -265,11 +260,9 @@ defaultCliParserPrefs = prefs $
   showHelpOnError <>
   showHelpOnEmpty
 
-defaultCliInfo :: Seconds
-               -- ^ default value for 'shutTimeout'
-               -> ParserInfo Args
-defaultCliInfo defaultTimeout =
-  info ((argParser defaultTimeout)  <**> helper) fullDesc
+defaultCliInfo :: ParserInfo Args
+defaultCliInfo =
+  info (argParser  <**> helper) fullDesc
 
 defaultDaemonOptions :: DaemonOptions
 defaultDaemonOptions = DaemonOptions

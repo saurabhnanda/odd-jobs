@@ -22,7 +22,6 @@ module OddJobs.Job
   , defaultTimedLogger
   , defaultLogStr
   , defaultPollingInterval
-  , defaultLockTimeout
   , withConnectionPool
 
   -- * Creating/scheduling jobs
@@ -148,6 +147,7 @@ class (MonadUnliftIO m, MonadBaseControl IO m) => HasJobRunner m where
   getPidFile :: m (Maybe FilePath)
   getJobToText :: m (Job -> Text)
   log :: LogLevel -> LogEvent -> m ()
+  getDefaultJobTimeout :: m Seconds
 
 
 -- $logging
@@ -205,7 +205,6 @@ data Config = Config
     -- job-runners. TODO: Link-off to relevant section in the tutorial.
   , cfgConcurrencyControl :: ConcurrencyControl
 
-
     -- | The DB connection-pool to use for the job-runner. __Note:__ in case
     -- your jobs require a DB connection, please create a separate
     -- connection-pool for them. This pool will be used ONLY for monitoring jobs
@@ -233,6 +232,7 @@ data Config = Config
   , cfgOnJobStart :: Job -> IO ()
 
   -- | User-defined callback function that is called whenever a job times-out.
+  -- Also check 'cfgDefaultJobTimeout'
   , cfgOnJobTimeout :: Job -> IO ()
 
   -- | File to store the PID of the job-runner process. This is used only when
@@ -242,8 +242,8 @@ data Config = Config
 
   -- | A "structured logging" function that __you__ need to provide. The
   -- @odd-jobs@ library does NOT use the standard logging interface provided by
-  -- 'monad-logger' on purpose. TODO: link-off to tutorial. Please also read
-  -- 'cfgJobToText' and 'cfgJobType'
+  -- 'monad-logger' on purpose. TODO: link-off to tutorial. Also look at
+  -- 'cffJobType' and 'defaultLogStr'
   , cfgLogger :: LogLevel -> LogEvent -> IO ()
 
   -- | When emitting certain text messages in logs, how should the 'Job' be
@@ -252,6 +252,10 @@ data Config = Config
 
   -- | How to extract the "job type" from a 'Job'. Related: 'defaultJobType'
   , cfgJobType :: Job -> Text
+
+    -- | How long can a job run after which it is considered to be "crashed" and
+    -- picked up for execution again
+  , cfgDefaultJobTimeout :: Seconds
   }
 
 data ConcurrencyControl
@@ -311,6 +315,7 @@ defaultConfig logger tname dbpool ccControl jrunner =
             , cfgPidFile = Nothing
             , cfgJobToText = defaultJobToText (cfgJobType cfg)
             , cfgJobType = defaultJobType
+            , cfgDefaultJobTimeout = Seconds 600
             }
   in cfg
 
@@ -499,11 +504,6 @@ jobWorkerName = do
   hname <- getHostName
   pure $ hname ++ ":" ++ (show pid)
 
--- | TODO: Make this configurable for the job-runner, why is this still
--- hard-coded?
-defaultLockTimeout :: Seconds
-defaultLockTimeout = Seconds 600
-
 jobDbColumns :: (IsString s, Semigroup s) => [s]
 jobDbColumns =
   [ "id"
@@ -609,8 +609,9 @@ runJob jid = do
     Nothing -> Prelude.error $ "Could not find job id=" <> show jid
     Just job -> do
       startTime <- liftIO getCurrentTime
+      lockTimeout <- getDefaultJobTimeout
       (flip catches) [Handler $ timeoutHandler job startTime, Handler $ exceptionHandler job startTime] $ do
-        runJobWithTimeout defaultLockTimeout job
+        runJobWithTimeout lockTimeout job
         endTime <- liftIO getCurrentTime
         newJob <- saveJob job{jobStatus=Success, jobLockedBy=Nothing, jobLockedAt=Nothing}
         log LevelInfo $ LogJobSuccess newJob (diffUTCTime endTime startTime)
@@ -723,6 +724,7 @@ jobPoller = do
   processName <- liftIO jobWorkerName
   pool <- getDbPool
   tname <- getTableName
+  lockTimeout <- getDefaultJobTimeout
   log LevelInfo $ LogText $ toS $ "Starting the job monitor via DB polling with processName=" <> processName
   concurrencyControlFn <- getConcurrencyControlFn
   withResource pool $ \pollerDbConn -> forever $ concurrencyControlFn >>= \case
@@ -733,7 +735,7 @@ jobPoller = do
         t <- liftIO getCurrentTime
         r <- liftIO $
              PGS.query pollerDbConn (jobPollingSql tname)
-             (Locked, t, processName, t, (In [Queued, Retry]), Locked, (addUTCTime (fromIntegral $ negate $ unSeconds defaultLockTimeout) t))
+             (Locked, t, processName, t, (In [Queued, Retry]), Locked, (addUTCTime (fromIntegral $ negate $ unSeconds lockTimeout) t))
         case r of
           -- When we don't have any jobs to run, we can relax a bit...
           [] -> pure delayAction
