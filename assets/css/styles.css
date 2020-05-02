@@ -126,3 +126,7 @@ body {
 abbr[title] {
     border-bottom: inherit;
 }
+
+.list-group-item.active-nav {
+    border-left: 3px solid #28a745;
+}
