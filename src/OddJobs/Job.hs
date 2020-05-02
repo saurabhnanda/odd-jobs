@@ -436,7 +436,7 @@ data Status = Success
             | Failed
             | Retry
             | Locked
-            deriving (Eq, Show, Generic, Enum)
+            deriving (Eq, Show, Generic, Enum, Bounded)
 
 instance Ord Status where
   compare x y = compare (toText x) (toText y)
