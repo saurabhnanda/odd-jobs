@@ -39,6 +39,7 @@ import qualified System.Log.FastLogger as FLogger
 import qualified System.Log.FastLogger.Date as FLogger
 import Control.Monad.Logger as MLogger
 import qualified Data.ByteString.Lazy as BSL
+import qualified Data.List as DL
 
 -- startApp :: IO ()
 -- startApp = undefined
@@ -70,43 +71,70 @@ startApp = do
   let flogger = Job.defaultTimedLogger tlogger (Job.defaultLogStr (Job.defaultJobToText Job.defaultJobType))
       jm = Job.defaultConfig flogger tname dbPool Job.UnlimitedConcurrentJobs (const $ pure ())
 
-  let nt :: ReaderT Job.Config IO a -> Servant.Handler a
-      nt action = (liftIO $ try $ runReaderT action jm) >>= \case
-        Left (e :: SomeException) -> Servant.Handler  $ ExceptT $ pure $ Left $ err500 { errBody = toS $ show e }
-        Right a -> Servant.Handler $ ExceptT $ pure $ Right a
-      appProxy = (Proxy :: Proxy (ToServant Routes AsApi))
+  -- let nt :: ReaderT Job.Config IO a -> Servant.Handler a
+  --     nt action = (liftIO $ try $ runReaderT action jm) >>= \case
+  --       Left (e :: SomeException) -> Servant.Handler  $ ExceptT $ pure $ Left $ err500 { errBody = toS $ show e }
+  --       Right a -> Servant.Handler $ ExceptT $ pure $ Right a
+  --     appProxy = (Proxy :: Proxy (ToServant Routes AsApi))
 
   finally
-    (run 8080 $ genericServe (server dbPool))
+    (run 8080 $ genericServe (server jm dbPool))
     (cleanup >> (Pool.destroyAllResources dbPool))
 
 stopApp :: IO ()
 stopApp = pure ()
 
-server :: Pool Connection
+server :: Config
+       -> Pool Connection
        -> Routes AsServer
-server dbPool = Routes
-  { rFilterResults = (\mFilter -> filterResults dbPool mFilter)
+server config dbPool = Routes
+  { rFilterResults = (\mFilter -> filterResults config dbPool mFilter)
   , rStaticAssets = serveDirectoryFileServer "assets"
+  , rEnqueue = enqueueJob config dbPool
+  , rRunNow = runJobNow config dbPool
   }
 
+runJobNow :: Config
+          -> Pool Connection
+          -> JobId
+          -> Handler NoContent
+runJobNow cfg dbPool jid = do
+  updateHelper cfg dbPool (Queued, jid, In [Queued, Retry])
 
--- withDbConnection :: HasJobMonitor m
---                  => (Connection -> m a)
---                  -> m a
--- withDbConnection fn = getDbPool >>= \pool -> Pool.withResource pool fn
 
-filterResults :: Pool Connection
+enqueueJob :: Config
+           -> Pool Connection
+           -> JobId
+           -> Handler NoContent
+enqueueJob cfg dbPool jid = do
+  updateHelper cfg dbPool (Queued, jid, In [Locked, Failed])
+
+updateHelper :: Config
+             -> Pool Connection
+             -> (Status, JobId, In [Status])
+             -> Handler NoContent
+updateHelper Config{cfgTableName} dbPool  args = do
+  liftIO $ void $ withResource dbPool $ \conn -> do
+    PGS.execute conn (updateQuery tname) args
+  throwError $ err301{errHeaders=[("Location", toS $ Links.rFilterResults Nothing)]}
+
+
+updateQuery :: TableName -> PGS.Query
+updateQuery tname = "update " <> tname <> " set locked_at=null, locked_by=null, attempts=0, status=?, run_at=now() where id=? and status in ?"
+
+filterResults :: Config
+              -> Pool Connection
               -> Maybe Filter
               -> Handler (Html ())
-filterResults dbPool mFilter = do
+filterResults Config{cfgJobToHtml} dbPool mFilter = do
   let filters = fromMaybe mempty mFilter
   (jobs, runningCount) <- liftIO $ Pool.withResource dbPool $ \conn -> (,)
     <$> (filterJobs conn tname filters)
     <*> (countJobs conn tname filters{ filterStatuses = [Job.Locked] })
   t <- liftIO getCurrentTime
+  js <- liftIO $ fmap (DL.zip jobs) $ cfgJobToHtml jobs
   let navHtml = sideNav t filters
-      bodyHtml = resultsPanel t filters jobs runningCount
+      bodyHtml = resultsPanel t filters js runningCount
   pure $ pageLayout navHtml bodyHtml
 
 
@@ -160,21 +188,21 @@ sideNav :: UTCTime -> Filter -> Html ()
 sideNav t filter@Filter{..} = do
   div_ [ class_ "filters mt-3" ] $ do
     jobStatusFilters
-    jobRunnerFilters
     jobTypeFilters
+    jobRunnerFilters
   where
     jobStatusFilters = do
       h6_ "Filter by job status"
       div_ [ class_ "card" ] $ do
         ul_ [ class_ "list-group list-group-flush" ] $ do
           li_ [ class_ ("list-group-item " <> if filterStatuses == [] then "active-nav" else "") ] $ do
-            let lnk = (Links.rFilterResults $ Just filter{filterStatuses = []})
+            let lnk = (Links.rFilterResults $ Just filter{filterStatuses = [], filterPage = Nothing})
             a_ [ href_ lnk ] $ do
               "all"
               span_ [ class_ "badge badge-pill badge-secondary float-right" ] "12"
           forM_ ((\\) (enumFrom minBound) [Job.Success]) $ \st -> do
             li_ [ class_ ("list-group-item " <> if (st `elem` filterStatuses) then "active-nav" else "") ] $ do
-              let lnk = (Links.rFilterResults $ Just filter{filterStatuses = [st]})
+              let lnk = (Links.rFilterResults $ Just filter{filterStatuses = [st], filterPage = Nothing})
               a_ [ href_ lnk ] $ do
                 toHtml $ toText st
                 span_ [ class_ "badge badge-pill badge-secondary float-right" ] "12"
@@ -258,213 +286,94 @@ jobContent v = case v of
     Just c -> c
   _ -> v
 
-rowSuccess :: UTCTime -> Job -> Html ()
-rowSuccess t job@Job{jobStatus, jobCreatedAt, jobUpdatedAt, jobPayload, jobAttempts, jobRunAt} = do
+jobRow :: UTCTime -> (Job, Html ()) -> Html ()
+jobRow t (job@Job{..}, jobHtml) = do
   tr_ $ do
-    td_ [ class_ "job-type" ] $ case jobStatus of
-      Job.Success -> statusSuccess
-      Job.Failed -> statusFailed
-      Job.Queued -> if jobRunAt > t
-                    then statusFuture
-                    else statusWaiting
-      Job.Retry -> statusRetry
-      Job.Locked -> statusLocked
+    td_ [ class_ "job-type" ] $ do
+      let statusFn = case jobStatus of
+            Job.Success -> statusSuccess
+            Job.Failed -> statusFailed
+            Job.Queued -> if jobRunAt > t
+                          then statusFuture
+                          else statusWaiting
+            Job.Retry -> statusRetry
+            Job.Locked -> statusLocked
+      statusFn t job
+
+    td_ jobHtml
+    td_ $ do
+      let actionsFn = case jobStatus of
+            Job.Success -> (const mempty)
+            Job.Failed -> actionsFailed
+            Job.Queued -> if jobRunAt > t
+                          then actionsFuture
+                          else actionsWaiting
+            Job.Retry -> actionsRetry
+            Job.Locked -> (const mempty)
+      actionsFn job
 
 
-      -- span_ [ class_ "label label-success" ] $ "Success"
-      -- span_ [ class_ "job-run-time" ] $ "Completed 23h ago. Took 3 sec."
+actionsFailed :: Job -> Html ()
+actionsFailed Job{..} = do
+  form_ [ action_ (Links.rEnqueue jobId), method_ "post" ] $ do
+    button_ [ class_ "btn btn-secondary", type_ "submit" ] $ "Enqueue again"
 
-    td_ $ toHtml $ Job.defaultJobType job -- TODO: this needs to be changed
-    td_ $ div_ [ class_ "job-payload" ] $ payloadToHtml $ jobContent jobPayload
-      -- span_ [ class_ "key-value-pair" ] $ do
-      --   span_ [ class_ "key" ] $ "args"
-      --   span_ [ class_ "value" ] $ do
-      --     "[\"flexi_payment_reminder\", 3432423,"
-      --     a_ [ href_ "#", class_ "json-ellipsis" ] $ "\8230"
-      --     "]"
-    td_ "Text"
-    td_ $ case jobStatus of
-      Job.Success -> mempty
-      Job.Failed -> actionsFailed
-      Job.Queued -> if jobRunAt > t
-                    then actionsFuture
-                    else mempty
-      Job.Retry -> actionsRetry
-      Job.Locked -> mempty
-  where
+actionsRetry :: Job -> Html ()
+actionsRetry Job{..} = do
+  form_ [ action_ (Links.rRunNow jobId), method_ "post" ] $ do
+    button_ [ class_ "btn btn-secondary", type_ "submit" ] $ "Run now"
 
-    actionsFailed = do
-      button_ [ class_ "btn btn-default", type_ "button" ] $ "Retry again"
+actionsFuture :: Job -> Html ()
+actionsFuture Job{..} = do
+  form_ [ action_ (Links.rRunNow jobId), method_ "post" ] $ do
+    button_ [ class_ "btn btn-seconday", type_ "submit" ] $ "Run now"
 
-    actionsRetry = do
-      button_ [ class_ "btn btn-default", type_ "button" ] $ "Retry now"
+actionsWaiting :: Job -> Html ()
+actionsWaiting Job{..} = do
+  form_ [ action_ "#", method_ "post" ] $ do
+    button_ [ class_ "btn btn-danger", type_ "submit" ] $ "Cancel"
 
-    actionsFuture = do
-      button_ [ class_ "btn btn-default", type_ "button" ] $ "Run now"
+statusSuccess :: UTCTime -> Job -> Html ()
+statusSuccess t Job{..} = do
+  span_ [ class_ "badge badge-success" ] $ "Success"
+  span_ [ class_ "job-run-time" ] $ do
+    let (d, s) = timeDuration jobCreatedAt jobUpdatedAt
+    abbr_ [ title_ (showText jobUpdatedAt) ] $ toHtml $ "Completed " <> humanReadableTime' t jobUpdatedAt <> ". "
+    abbr_ [ title_ (showText d <> " seconds")] $ toHtml $ "Took " <> s
 
-    payloadToHtml :: Value -> Html ()
-    payloadToHtml v = case v of
-      Aeson.Object o -> do
-        toHtml ("{ " :: Text)
-        forM_ (HM.toList o) $ \(k, v) -> do
-          span_ [ class_ " key-value-pair " ] $ do
-            span_ [ class_ "key" ] $ toHtml $ k <> ":"
-            span_ [ class_ "value" ] $ payloadToHtml v
-        toHtml (" }" :: Text)
-      Aeson.Array a -> do
-        toHtml ("[" :: Text)
-        forM_ (toList a) $ \x -> do
-          payloadToHtml x
-          toHtml (", " :: Text)
-        toHtml ("]" :: Text)
-      Aeson.String t -> toHtml t
-      Aeson.Number n -> toHtml $ show n
-      Aeson.Bool b -> toHtml $ show b
-      Aeson.Null -> toHtml ("null" :: Text)
+statusFailed :: UTCTime -> Job -> Html ()
+statusFailed t Job{..} = do
+  span_ [ class_ "badge badge-danger" ] $ "Failed"
+  span_ [ class_ "job-run-time" ] $ do
+    abbr_ [ title_ (showText jobUpdatedAt) ] $ toHtml $ "Failed " <> humanReadableTime' t jobUpdatedAt <> " after " <> show jobAttempts <> " attempts"
 
-    statusSuccess = do
-      span_ [ class_ "badge badge-success" ] $ "Success"
-      span_ [ class_ "job-run-time" ] $ do
-        let (d, s) = timeDuration jobCreatedAt jobUpdatedAt
-        abbr_ [ title_ (showText jobUpdatedAt) ] $ toHtml $ "Completed " <> humanReadableTime' t jobUpdatedAt <> ". "
-        abbr_ [ title_ (showText d <> " seconds")] $ toHtml $ "Took " <> s
+statusFuture :: UTCTime -> Job -> Html ()
+statusFuture t Job{..} = do
+  span_ [ class_ "badge badge-secondary" ] $ "Future"
+  span_ [ class_ "job-run-time" ] $ do
+    abbr_ [ title_ (showText jobRunAt) ] $ toHtml $ humanReadableTime' t jobRunAt
 
-    statusFailed = do
-      span_ [ class_ "badge badge-danger" ] $ "Failed"
-      span_ [ class_ "job-run-time" ] $ do
-        abbr_ [ title_ (showText jobUpdatedAt) ] $ toHtml $ "Failed " <> humanReadableTime' t jobUpdatedAt <> " after " <> show jobAttempts <> " attempts"
-
-    statusFuture = do
-      span_ [ class_ "badge badge-secondary" ] $ "Future"
-      span_ [ class_ "job-run-time" ] $ do
-        abbr_ [ title_ (showText jobRunAt) ] $ toHtml $ humanReadableTime' t jobRunAt
-
-    statusWaiting = do
-      span_ [ class_ "label label-warning" ] $ "Waiting"
+statusWaiting :: UTCTime -> Job -> Html ()
+statusWaiting t Job{..} = do
+      span_ [ class_ "badge badge-warning" ] $ "Waiting"
       -- span_ [ class_ "job-run-time" ] ("Waiting to be picked up" :: Text)
 
-    statusRetry = do
-      span_ [ class_ "badge badge-warning" ] $ toHtml $ "Retries (" <> show jobAttempts <> ")"
-      span_ [ class_ "job-run-time" ] $ do
-        abbr_ [ title_ (showText jobUpdatedAt) ] $ toHtml $ "Retried " <> humanReadableTime' t jobUpdatedAt <> ". "
-        abbr_ [ title_ (showText jobRunAt)] $ toHtml $ "Next retry in " <> humanReadableTime' t jobRunAt
+statusRetry :: UTCTime -> Job -> Html ()
+statusRetry t Job{..} = do
+  span_ [ class_ "badge badge-warning" ] $ toHtml $ "Retries (" <> show jobAttempts <> ")"
+  span_ [ class_ "job-run-time" ] $ do
+    abbr_ [ title_ (showText jobUpdatedAt) ] $ toHtml $ "Retried " <> humanReadableTime' t jobUpdatedAt <> ". "
+    abbr_ [ title_ (showText jobRunAt)] $ toHtml $ "Next retry in " <> humanReadableTime' t jobRunAt
 
-    statusLocked = do
-      span_ [ class_ "badge badge-info" ] $ toHtml ("Locked"  :: Text)
-      -- span_ [ class_ "job-run-time" ] $ do
-      --   abbr_ [ title_ (showText jobUpdatedAt) ] $ toHtml $ "Retried " <> humanReadableTime' t jobUpdatedAt <> ". "
-      --   abbr_ [ title_ (showText jobRunAt)] $ toHtml $ "Next retry in " <> humanReadableTime' t jobRunAt
+statusLocked :: UTCTime -> Job -> Html ()
+statusLocked t Job{..} = do
+  span_ [ class_ "badge badge-info" ] $ toHtml ("Locked"  :: Text)
+  -- span_ [ class_ "job-run-time" ] $ do
+  --   abbr_ [ title_ (showText jobUpdatedAt) ] $ toHtml $ "Retried " <> humanReadableTime' t jobUpdatedAt <> ". "
+  --   abbr_ [ title_ (showText jobRunAt)] $ toHtml $ "Next retry in " <> humanReadableTime' t jobRunAt
 
-
-rowRetry :: Html ()
-rowRetry = do
-  tr_ $ do
-    td_ [ class_ "job-type" ] $ do
-      span_ [ class_ "label label-info" ] $ "Retried (5)"
-      span_ [ class_ "job-run-time" ] $ "23 mins ago. Next retry in 90 min."
-    td_ "Queued Mail"
-    td_ $ div_ [ class_ "job-payload" ] $ do
-      span_ [ class_ "key-value-pair" ] $ do
-        span_ [ class_ "key" ] $ "client_id"
-        span_ [ class_ "value" ] $ "456"
-      span_ [ class_ "key-value-pair" ] $ do
-        span_ [ class_ "key" ] $ "user_id"
-        span_ [ class_ "value" ] $ "123"
-      span_ [ class_ "key-value-pair" ] $ do
-        span_ [ class_ "key" ] $ "args"
-        span_ [ class_ "value" ] $ do
-          "[\"flexi_payment_reminder\", 3432423,"
-          a_ [ href_ "#", class_ "json-ellipsis" ] $ "\8230"
-          "]"
-    td_ "Text"
-    td_ $ div_ [ class_ "btn-group" ] $ do
-      button_ [ class_ "btn btn-default", type_ "button" ] $ "Retry now"
-      button_ [ class_ "btn btn-default dropdown-toggle", data_ "toggle" "dropdown", ariaExpanded_ "false", type_ "button" ] $ span_ [ class_ "caret" ] $ ""
-      ul_ [ class_ "dropdown-menu", role_ "menu" ] $ do
-        li_ [ role_ "presentation" ] $ a_ [ href_ "#" ] $ "First Item"
-        li_ [ role_ "presentation" ] $ a_ [ href_ "#" ] $ "Second Item"
-        li_ [ role_ "presentation" ] $ a_ [ href_ "#" ] $ "Third Item"
-
-
-rowFailed :: Html ()
-rowFailed = do
-  tr_ $ do
-    td_ [ class_ "job-type" ] $ do
-      span_ [ class_ "label label-danger" ] $ "Failed"
-      span_ [ class_ "job-run-time" ] $ "23 mins ago. After 25 attempts."
-    td_ "Queued Mail"
-    td_ $ div_ [ class_ "job-payload" ] $ do
-      span_ [ class_ "key-value-pair" ] $ do
-        span_ [ class_ "key" ] $ "client_id"
-        span_ [ class_ "value" ] $ "456"
-      span_ [ class_ "key-value-pair" ] $ do
-        span_ [ class_ "key" ] $ "user_id"
-        span_ [ class_ "value" ] $ "123"
-      span_ [ class_ "key-value-pair" ] $ do
-        span_ [ class_ "key" ] $ "args"
-        span_ [ class_ "value" ] $ do
-          "[\"flexi_payment_reminder\", 3432423,"
-          a_ [ href_ "#", class_ "json-ellipsis" ] $ "\8230"
-          "]"
-    td_ "Text"
-    td_ $ button_ [ class_ "btn btn-default", type_ "button" ] $ "Retry again"
-
-rowFuture :: Html ()
-rowFuture = do
-  tr_ $ do
-    td_ [ class_ "job-type" ] $ do
-      span_ [ class_ "label label-default" ] $ "Future"
-      span_ [ class_ "job-run-time" ] $ "37 mins from now"
-    td_ "Queued Mail"
-    td_ $ div_ [ class_ "job-payload" ] $ do
-      span_ [ class_ "key-value-pair" ] $ do
-        span_ [ class_ "key" ] $ "client_id"
-        span_ [ class_ "value" ] $ "456"
-      span_ [ class_ "key-value-pair" ] $ do
-        span_ [ class_ "key" ] $ "user_id"
-        span_ [ class_ "value" ] $ "123"
-      span_ [ class_ "key-value-pair" ] $ do
-        span_ [ class_ "key" ] $ "args"
-        span_ [ class_ "value" ] $ do
-          "[\"flexi_payment_reminder\", 3432423,"
-          a_ [ href_ "#", class_ "json-ellipsis" ] $ "\8230"
-          "]"
-    td_ "Text"
-    td_ $ div_ [ class_ "btn-group" ] $ do
-      button_ [ class_ "btn btn-default", type_ "button" ] $ "Run now"
-      button_ [ class_ "btn btn-default dropdown-toggle", data_ "toggle" "dropdown", ariaExpanded_ "false", type_ "button" ] $ span_ [ class_ "caret" ] $ ""
-      ul_ [ class_ "dropdown-menu", role_ "menu" ] $ do
-        li_ [ role_ "presentation" ] $ a_ [ href_ "#" ] $ "First Item"
-        li_ [ role_ "presentation" ] $ a_ [ href_ "#" ] $ "Second Item"
-        li_ [ role_ "presentation" ] $ a_ [ href_ "#" ] $ "Third Item"
-
-
-rowLocked :: Html ()
-rowLocked = do
-  tr_ $ do
-    td_ [ class_ "job-type" ] $ do
-      span_ [ class_ "label label-warning" ] $ "Locked"
-      span_ [ class_ "job-run-time" ] $ "Since 2min by"
-      span_ [ class_ "job-runner-name" ] $ "hostname:3242"
-    td_ "Queued Mail"
-    td_ $ div_ [ class_ "job-payload" ] $ do
-      span_ [ class_ "key-value-pair" ] $ do
-        span_ [ class_ "key" ] $ "client_id"
-        span_ [ class_ "value" ] $ "456"
-      span_ [ class_ "key-value-pair" ] $ do
-        span_ [ class_ "key" ] $ "user_id"
-        span_ [ class_ "value" ] $ "123"
-      span_ [ class_ "key-value-pair" ] $ do
-        span_ [ class_ "key" ] $ "args"
-        span_ [ class_ "value" ] $ do
-          "[\"flexi_payment_reminder\", 3432423,"
-          a_ [ href_ "#", class_ "json-ellipsis" ] $ "\8230"
-          "]"
-    td_ "Text"
-    td_ $ button_ [ class_ "btn btn-default", type_ "button" ] $ "Unlock"
-
-resultsPanel :: UTCTime -> Filter -> [Job] -> Int -> Html ()
-resultsPanel t filter@Filter{filterPage} jobs runningCount = do
+resultsPanel :: UTCTime -> Filter -> [(Job, Html ())] -> Int -> Html ()
+resultsPanel t filter@Filter{filterPage} js runningCount = do
   div_ [ class_ "card mt-3" ] $ do
     div_ [ class_ "card-header bg-secondary text-white" ] $ do
       "Currently running "
@@ -473,19 +382,10 @@ resultsPanel t filter@Filter{filterPage} jobs runningCount = do
       thead_ [ class_ "thead-dark"] $ do
         tr_ $ do
           th_ "Job status"
-          th_ "Job type"
-          th_ "Job payload"
-          th_ "Last error"
-          th_ "Actions"
+          th_ "Job"
+          th_ [ style_ "min-width: 12em;" ] "Actions"
       tbody_ $ do
-        forM_ jobs $ \j -> case jobStatus j of
-          Job.Success -> rowSuccess t j
-          _ -> rowSuccess t j
-        -- rowLocked
-        -- rowSuccess
-        -- rowFuture
-        -- rowRetry
-        -- rowFailed
+        forM_ js (jobRow t)
     div_ [ class_ "card-footer" ] $ do
       nav_ $ do
         ul_ [ class_ "pagination" ] $ do
@@ -502,10 +402,17 @@ resultsPanel t filter@Filter{filterPage} jobs runningCount = do
 
     nextLink = do
       let (extraClass, lnk) = case filterPage of
-            Nothing -> ("", (Links.rFilterResults $ Just $ filter {filterPage = Just (10, 10)}))
-            Just (l, o) -> ("", (Links.rFilterResults $ Just $ filter {filterPage = Just (l, o + l)}))
-      li_ [ class_ ("page-item next" <> extraClass) ] $ do
+            Nothing ->
+              if (DL.length js) == 0
+              then ("disabled", "")
+              else ("", (Links.rFilterResults $ Just $ filter {filterPage = Just (10, 10)}))
+            Just (l, o) ->
+              if (DL.length js) < l
+              then ("disabled", "")
+              else ("", (Links.rFilterResults $ Just $ filter {filterPage = Just (l, o + l)}))
+      li_ [ class_ ("page-item next " <> extraClass) ] $ do
         a_ [ class_ "page-link", href_ lnk ] $ "Next"
 
 ariaExpanded_ :: Text -> Attribute
 ariaExpanded_ v = makeAttribute "aria-expanded" v
+

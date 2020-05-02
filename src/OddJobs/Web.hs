@@ -21,6 +21,7 @@ import Servant.API.Generic
 import Servant.HTML.Lucid
 import Lucid
 import Data.String.Conv
+import qualified Data.HashMap.Strict as HM
 
 data OrderDirection = Asc | Desc deriving (Eq, Show, Generic, Enum)
 
@@ -98,6 +99,8 @@ instance ToHttpApiData Filter where
 data Routes route = Routes
   { rFilterResults :: route :- QueryParam "filters" Filter :> Get '[HTML] (Html ())
   , rStaticAssets :: route :- "assets" :> Raw
+  , rEnqueue :: route :- "enqueue" :> Capture "jobId" JobId :> Post '[HTML] NoContent
+  , rRunNow :: route :- "run" :> Capture "jobId" JobId :> Post '[HTML] NoContent
   } deriving (Generic)
 
 
@@ -177,3 +180,5 @@ countJobs conn tname f = do
 --   { filterStatuses = [Job.Success, Queued]
 --   , filterJobTypes = ["QueuedMail", "ConfirmBooking"]
 --   }
+
+
