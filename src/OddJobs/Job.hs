@@ -122,6 +122,8 @@ import qualified System.Directory as Dir
 import Data.Aeson.Internal (iparse, IResult(..), formatError)
 import qualified System.Log.FastLogger as FLogger
 import Prelude hiding (log)
+import Lucid (Html(..), toHtml, class_, div_, span_, br_)
+import GHC.Exts (toList)
 
 
 -- | The documentation of odd-jobs currently promotes 'startJobRunner', which
@@ -145,7 +147,6 @@ class (MonadUnliftIO m, MonadBaseControl IO m) => HasJobRunner m where
   getRunnerEnv :: m RunnerEnv
   getConcurrencyControl :: m ConcurrencyControl
   getPidFile :: m (Maybe FilePath)
-  getJobToText :: m (Job -> Text)
   log :: LogLevel -> LogEvent -> m ()
   getDefaultJobTimeout :: m Seconds
 
@@ -246,16 +247,20 @@ data Config = Config
   -- 'cffJobType' and 'defaultLogStr'
   , cfgLogger :: LogLevel -> LogEvent -> IO ()
 
-  -- | When emitting certain text messages in logs, how should the 'Job' be
-  -- summarized in a textual format? Related: 'defaultJobToText'
-  , cfgJobToText :: Job -> Text
-
   -- | How to extract the "job type" from a 'Job'. Related: 'defaultJobType'
   , cfgJobType :: Job -> Text
 
     -- | How long can a job run after which it is considered to be "crashed" and
     -- picked up for execution again
   , cfgDefaultJobTimeout :: Seconds
+
+    -- | How to convert a list of 'Job's to a list of HTML fragments. This is
+    -- used in the Web\/Admin UI. This function accepts a /list/ of jobs and
+    -- returns a /list/ of 'Html' fragments is because, in case, you need to
+    -- query another table to fetch some metadata (eg. convert a primary-key to
+    -- a human-readable name), you can do it efficiently instead of resulting in
+    -- an N+1 SQL bug. Ref: defaultJobToHtml
+  , cfgJobToHtml :: [Job] -> IO [Html ()]
   }
 
 data ConcurrencyControl
@@ -313,9 +318,9 @@ defaultConfig logger tname dbpool ccControl jrunner =
             , cfgOnJobTimeout = (const $ pure ())
             , cfgConcurrencyControl = ccControl
             , cfgPidFile = Nothing
-            , cfgJobToText = defaultJobToText (cfgJobType cfg)
             , cfgJobType = defaultJobType
             , cfgDefaultJobTimeout = Seconds 600
+            , cfgJobToHtml = defaultJobToHtml (cfgJobType cfg)
             }
   in cfg
 
@@ -358,7 +363,6 @@ defaultJobType Job{jobPayload} =
     _ -> "unknown"
 
 
-
 data RunnerEnv = RunnerEnv
   { envConfig :: !Config
   , envJobThreadsRef :: !(IORef [Async ()])
@@ -389,7 +393,6 @@ instance HasJobRunner RunnerM where
   getConcurrencyControl = (cfgConcurrencyControl . envConfig <$> ask)
 
   getPidFile = cfgPidFile . envConfig <$> ask
-  getJobToText = cfgJobToText . envConfig <$> ask
 
   log logLevel logEvent = do
     loggerFn <- cfgLogger . envConfig <$> ask
@@ -940,3 +943,67 @@ defaultLogStr jobToText logLevel logEvent =
         "Polling jobs table"
       LogText t ->
         toLogStr t
+
+defaultJobToHtml :: (Job -> Text)
+                 -> [Job]
+                 -> IO [Html ()]
+defaultJobToHtml jobType js =
+  pure $ DL.map jobToHtml js
+  where
+    jobToHtml :: Job -> Html ()
+    jobToHtml j = do
+      div_ [ class_ "job" ] $ do
+        div_ [ class_ "job-type" ] $ do
+          toHtml $ jobType j
+        div_ [ class_ "job-payload" ] $ do
+          defaultPayloadToHtml $ defaultJobContent $ jobPayload j
+        case jobLastError j of
+          Nothing -> mempty
+          Just e -> do
+            div_ [ class_ "job-error" ] $ do
+              span_ [ class_ "badge badge-secondary" ] "Last error"
+              " "
+              defaultErrorToHtml e
+
+
+defaultErrorToHtml :: Value -> Html ()
+defaultErrorToHtml e =
+  case e of
+    Aeson.String s -> handleLineBreaks s
+    Aeson.Bool b -> toHtml $ show b
+    Aeson.Number n -> toHtml $ show n
+    Aeson.Null -> toHtml ("(null)" :: Text)
+    Aeson.Object o -> toHtml $ show o -- TODO: handle this properly
+    Aeson.Array a -> toHtml $ show a -- TODO: handle this properly
+  where
+    handleLineBreaks s = do
+      forM_ (T.splitOn "\n" s) $ \x -> do
+        toHtml x
+        br_ []
+
+defaultJobContent :: Value -> Value
+defaultJobContent v = case v of
+  Aeson.Object o -> case HM.lookup "contents" o of
+    Nothing -> v
+    Just c -> c
+  _ -> v
+
+defaultPayloadToHtml :: Value -> Html ()
+defaultPayloadToHtml v = case v of
+  Aeson.Object o -> do
+    toHtml ("{ " :: Text)
+    forM_ (HM.toList o) $ \(k, v) -> do
+      span_ [ class_ " key-value-pair " ] $ do
+        span_ [ class_ "key" ] $ toHtml $ k <> ":"
+        span_ [ class_ "value" ] $ defaultPayloadToHtml v
+    toHtml (" }" :: Text)
+  Aeson.Array a -> do
+    toHtml ("[" :: Text)
+    forM_ (toList a) $ \x -> do
+      defaultPayloadToHtml x
+      toHtml (", " :: Text)
+    toHtml ("]" :: Text)
+  Aeson.String t -> toHtml t
+  Aeson.Number n -> toHtml $ show n
+  Aeson.Bool b -> toHtml $ show b
+  Aeson.Null -> toHtml ("null" :: Text)
