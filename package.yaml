@@ -84,7 +84,9 @@ library:
 
 executables:
   devel:
-    source-dirs:      dev
+    source-dirs:
+      - dev
+      - src
     main:             DevelMain
     ghc-options:
       - -threaded

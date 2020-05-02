@@ -112,9 +112,9 @@ filterResults dbPool mFilter = do
 
 pageNav :: Html ()
 pageNav = do
-  div_ $ nav_ [ class_ "navbar navbar-default navigation-clean" ] $ div_ [ class_ "container" ] $ do
+  div_ $ nav_ [ class_ "navbar navbar-default navigation-clean" ] $ div_ [ class_ "container-fluid" ] $ do
     div_ [ class_ "navbar-header" ] $ do
-      a_ [ class_ "navbar-brand navbar-link", href_ "#", style_ "padding: 0px;" ] $ img_ [ src_ "/assets/odd-jobs-color-logo.png", title_ "Odd Jobs Logo" ]
+      a_ [ class_ "navbar-brand navbar-link", href_ "#", style_ "margin-left: 2px; padding: 0px;" ] $ img_ [ src_ "/assets/odd-jobs-color-logo.png", title_ "Odd Jobs Logo" ]
       button_ [ class_ "navbar-toggle collapsed", data_ "toggle" "collapse", data_ "target" "#navcol-1" ] $ do
         span_ [ class_ "sr-only" ] $ "Toggle navigation"
         span_ [ class_ "icon-bar" ] $ ""
@@ -143,17 +143,55 @@ pageLayout inner = do
       title_ "haskell-pg-queue"
       link_ [ rel_ "stylesheet", href_ "assets/bootstrap/css/bootstrap.min.css" ]
       link_ [ rel_ "stylesheet", href_ "https://fonts.googleapis.com/css?family=Lato:100i,300,300i,400,700,900" ]
-      link_ [ rel_ "stylesheet", href_ "assets/css/logo-slider.css" ]
-      link_ [ rel_ "stylesheet", href_ "assets/css/Navigation-Clean1.css" ]
+      -- link_ [ rel_ "stylesheet", href_ "assets/css/logo-slider.css" ]
+      -- link_ [ rel_ "stylesheet", href_ "assets/css/Navigation-Clean1.css" ]
       link_ [ rel_ "stylesheet", href_ "assets/css/styles.css" ]
     body_ $ do
       pageNav
-      div_ $ div_ [ class_ "container", style_ "/*background-color:#f2f2f2;*/" ] $ div_ [ class_ "row" ] $ div_ [ class_ "col-md-12" ] $ do
-        inner
+      div_ $ div_ [ class_ "container-fluid", style_ "/*background-color:#f2f2f2;*/" ] $ div_ [ class_ "row" ] $ do
+        div_ [ class_ "d-none d-md-block col-md-2" ] sideNav
+        div_ [ class_ "col-12 col-md-10" ] inner
       script_ [ src_ "assets/js/jquery.min.js" ] $ ("" :: Text)
       script_ [ src_ "assets/bootstrap/js/bootstrap.min.js" ] $ ("" :: Text)
-      script_ [ src_ "https://cdnjs.cloudflare.com/ajax/libs/slick-carousel/1.6.0/slick.js" ] $ ("" :: Text)
-      script_ [ src_ "assets/js/logo-slider.js" ] $ ("" :: Text)
+      -- script_ [ src_ "https://cdnjs.cloudflare.com/ajax/libs/slick-carousel/1.6.0/slick.js" ] $ ("" :: Text)
+      -- script_ [ src_ "assets/js/logo-slider.js" ] $ ("" :: Text)
+
+sideNav :: Html ()
+sideNav = do
+  div_ [ style_ "padding-top: 2em;", class_ "filters" ] $ do
+    jobStatusFilters
+    jobRunnerFilters
+    jobTypeFilters
+  where
+    jobStatusFilters = do
+      h6_ "Filter by job status"
+      div_ [ class_ "card" ] $ do
+        ul_ [ class_ "list-group list-group-flush" ] $ do
+          li_ [ class_ "list-group-item active-nav" ] $ do
+            "Link 1 "
+            span_ [ class_ "badge badge-pill badge-secondary float-right" ] "12"
+          li_ [ class_ "list-group-item" ] $ toHtml $ ("Link 1 " :: Text)
+          li_ [ class_ "list-group-item" ] $ toHtml $ ("Link 1 " :: Text)
+
+    jobRunnerFilters = do
+      h6_ [ class_ "mt-3" ] "Filter by job runner"
+      div_ [ class_ "card" ] $ do
+        ul_ [ class_ "list-group list-group-flush" ] $ do
+          li_ [ class_ "list-group-item active-nav" ] $ do
+            "Link 1 "
+            span_ [ class_ "badge badge-pill badge-secondary float-right" ] "12"
+          li_ [ class_ "list-group-item" ] $ toHtml $ ("Link 1 " :: Text)
+          li_ [ class_ "list-group-item" ] $ toHtml $ ("Link 1 " :: Text)
+
+    jobTypeFilters = do
+      h6_ [ class_ "mt-3" ] "Filter by job-type"
+      div_ [ class_ "card" ] $ do
+        ul_ [ class_ "list-group list-group-flush" ] $ do
+          li_ [ class_ "list-group-item active-nav" ] $ do
+            "Link 1 "
+            span_ [ class_ "badge badge-pill badge-secondary float-right" ] "12"
+          li_ [ class_ "list-group-item" ] $ toHtml $ ("Link 1 " :: Text)
+          li_ [ class_ "list-group-item" ] $ toHtml $ ("Link 1 " :: Text)
 
 searchBar :: UTCTime -> Filter -> Html ()
 searchBar t filter@Filter{filterStatuses, filterCreatedAfter, filterCreatedBefore, filterUpdatedAfter, filterUpdatedBefore, filterJobTypes, filterRunAfter} = do
@@ -170,17 +208,17 @@ searchBar t filter@Filter{filterStatuses, filterCreatedAfter, filterCreatedBefor
           forM_ filterJobTypes $ \x -> renderFilter "Job type" x (Links.rFilterResults $ Just filter{filterJobTypes = filterJobTypes \\ [x]})
 
         button_ [ class_ "btn btn-default search-button", type_ "button" ] $ "Search"
-      ul_ [ class_ "list-inline" ] $ do
-        li_ $ span_ $ strong_ "Common searches:"
-        li_ $ a_ [ href_ (Links.rFilterResults $ Just mempty) ] $ "All jobs"
-        li_ $ a_ [ href_ (Links.rFilterResults $ Just $ filter{ filterStatuses = [Job.Locked] }) ] $ "Currently running"
-        li_ $ a_ [ href_ (Links.rFilterResults $ Just $ filter{ filterStatuses = [Job.Success] }) ] $ "Successful"
-        li_ $ a_ [ href_ (Links.rFilterResults $ Just $ filter{ filterStatuses = [Job.Failed] }) ] $ "Failed"
-        li_ $ a_ [ href_ (Links.rFilterResults $ Just $ filter{ filterRunAfter = Just t }) ] $ "Future"
-        -- li_ $ a_ [ href_ "#" ] $ "Retried"
-        li_ $ a_ [ href_ (Links.rFilterResults $ Just $ filter{ filterStatuses = [Job.Queued] }) ] $ "Queued"
-        li_ $ a_ [ href_ (Links.rFilterResults $ Just $ filter{ filterUpdatedAfter = Just $ timeSince t 10 Minutes Ago }) ] $ "Last 10 mins"
-        li_ $ a_ [ href_ (Links.rFilterResults $ Just $ filter{ filterCreatedAfter = Just $ timeSince t 10 Minutes Ago }) ] $ "Recently created"
+      -- ul_ [ class_ "list-inline" ] $ do
+      --   li_ $ span_ $ strong_ "Common searches:"
+      --   li_ $ a_ [ href_ (Links.rFilterResults $ Just mempty) ] $ "All jobs"
+      --   li_ $ a_ [ href_ (Links.rFilterResults $ Just $ filter{ filterStatuses = [Job.Locked] }) ] $ "Currently running"
+      --   li_ $ a_ [ href_ (Links.rFilterResults $ Just $ filter{ filterStatuses = [Job.Success] }) ] $ "Successful"
+      --   li_ $ a_ [ href_ (Links.rFilterResults $ Just $ filter{ filterStatuses = [Job.Failed] }) ] $ "Failed"
+      --   li_ $ a_ [ href_ (Links.rFilterResults $ Just $ filter{ filterRunAfter = Just t }) ] $ "Future"
+      --   -- li_ $ a_ [ href_ "#" ] $ "Retried"
+      --   li_ $ a_ [ href_ (Links.rFilterResults $ Just $ filter{ filterStatuses = [Job.Queued] }) ] $ "Queued"
+      --   li_ $ a_ [ href_ (Links.rFilterResults $ Just $ filter{ filterUpdatedAfter = Just $ timeSince t 10 Minutes Ago }) ] $ "Last 10 mins"
+      --   li_ $ a_ [ href_ (Links.rFilterResults $ Just $ filter{ filterCreatedAfter = Just $ timeSince t 10 Minutes Ago }) ] $ "Recently created"
   where
     renderFilter :: Text -> Text -> Text -> Html ()
     renderFilter k v u = do
@@ -421,17 +459,18 @@ rowLocked = do
 
 resultsPanel :: UTCTime -> Filter -> [Job] -> Int -> Html ()
 resultsPanel t filter@Filter{filterPage} jobs runningCount = do
-  div_ [ class_ "panel panel-default" ] $ do
-    div_ [ class_ "panel-heading" ] $ h3_ [ class_ "panel-title" ] $ do
+  div_ [ class_ "card" ] $ do
+    div_ [ class_ "card-header bg-secondary text-white" ] $ do
       "Currently running "
-      span_ [ class_ "badge" ] $ toHtml (show runningCount)
-    div_ [ class_ "panel-body" ] $ div_ [ class_ "currently-running" ] $ div_ [ class_ "table-responsive" ] $ table_ [ class_ "table" ] $ do
-      thead_ $ tr_ $ do
-        th_ "Job status"
-        th_ "Job type"
-        th_ "Job payload"
-        th_ "Last error"
-        th_ "Actions"
+      span_ [ class_ "badge badge-primary badge-primary" ] $ toHtml (show runningCount)
+    div_ [ class_ "currently-running" ] $ div_ [ class_ "" ] $ table_ [ class_ "table table-responsive table-striped table-hover" ] $ do
+      thead_ [ class_ "thead-dark"] $ do
+        tr_ $ do
+          th_ "Job status"
+          th_ "Job type"
+          th_ "Job payload"
+          th_ "Last error"
+          th_ "Actions"
       tbody_ $ do
         forM_ jobs $ \j -> case jobStatus j of
           Job.Success -> rowSuccess t j
@@ -441,15 +480,26 @@ resultsPanel t filter@Filter{filterPage} jobs runningCount = do
         -- rowFuture
         -- rowRetry
         -- rowFailed
-    div_ [ class_ "panel-footer" ] $ nav_ $ ul_ [ class_ "pager", style_ "margin:0px;" ] $ do
-      li_ [ class_ "previous" ] $ case filterPage of
-        Nothing -> a_ [ disabled_ "disabled" ] $ "Prev"
-        Just (l, 0) -> a_ [ disabled_ "disabled" ] $ "Prev"
-        Just (l, o) -> a_ [ href_ (Links.rFilterResults $ Just $ filter {filterPage = Just (l, max 0 $ o - l)}) ] $ "Prev"
-      li_ [ class_ "next" ] $ case filterPage of
-        Nothing -> a_ [ href_ (Links.rFilterResults $ Just $ filter {filterPage = Just (10, 10)}) ] $ "Next"
-        Just (l, o) -> a_ [ href_ (Links.rFilterResults $ Just $ filter {filterPage = Just (l, o + l)}) ] $ "Next"
+    div_ [ class_ "card-footer" ] $ do
+      nav_ $ do
+        ul_ [ class_ "pagination" ] $ do
+          prevLink
+          nextLink
+  where
+    prevLink = do
+      let (extraClass, lnk) = case filterPage of
+            Nothing -> ("disabled", "")
+            Just (l, 0) -> ("disabled", "")
+            Just (l, o) -> ("", Links.rFilterResults $ Just $ filter {filterPage = Just (l, max 0 $ o - l)})
+      li_ [ class_ ("page-item previous " <> extraClass) ] $ do
+        a_ [ class_ "page-link", href_ lnk ] $ "Prev"
 
+    nextLink = do
+      let (extraClass, lnk) = case filterPage of
+            Nothing -> ("", (Links.rFilterResults $ Just $ filter {filterPage = Just (10, 10)}))
+            Just (l, o) -> ("", (Links.rFilterResults $ Just $ filter {filterPage = Just (l, o + l)}))
+      li_ [ class_ ("page-item next" <> extraClass) ] $ do
+        a_ [ class_ "page-link", href_ lnk ] $ "Next"
 
 ariaExpanded_ :: Text -> Attribute
 ariaExpanded_ v = makeAttribute "aria-expanded" v
