@@ -1,4 +1,4 @@
-{-# LANGUAGE TypeOperators, DeriveGeneric, NamedFieldPuns, DataKinds, StandaloneDeriving, FlexibleContexts #-}
+{-# LANGUAGE TypeOperators, DeriveGeneric, NamedFieldPuns, DataKinds, StandaloneDeriving, FlexibleContexts, RecordWildCards #-}
 
 module OddJobs.Endpoints where
 
@@ -105,9 +105,9 @@ filterResults dbPool mFilter = do
     <$> (filterJobs conn tname filters)
     <*> (countJobs conn tname filters{ filterStatuses = [Job.Locked] })
   t <- liftIO getCurrentTime
-  pure $ pageLayout $ do
-    searchBar t filters
-    resultsPanel t filters jobs runningCount
+  let navHtml = sideNav t filters
+      bodyHtml = resultsPanel t filters jobs runningCount
+  pure $ pageLayout navHtml bodyHtml
 
 
 pageNav :: Html ()
@@ -133,8 +133,8 @@ pageNav = do
     --       li_ [ role_ "presentation" ] $ a_ [ href_ "#" ] $ "Second Item"
     --       li_ [ role_ "presentation" ] $ a_ [ href_ "#" ] $ "Third Item"
 
-pageLayout :: Html () -> Html ()
-pageLayout inner = do
+pageLayout :: Html() -> Html () -> Html ()
+pageLayout navHtml bodyHtml = do
   doctype_
   html_ $ do
     head_ $ do
@@ -149,16 +149,16 @@ pageLayout inner = do
     body_ $ do
       pageNav
       div_ $ div_ [ class_ "container-fluid", style_ "/*background-color:#f2f2f2;*/" ] $ div_ [ class_ "row" ] $ do
-        div_ [ class_ "d-none d-md-block col-md-2" ] sideNav
-        div_ [ class_ "col-12 col-md-10" ] inner
+        div_ [ class_ "d-none d-md-block col-md-2" ] navHtml
+        div_ [ class_ "col-12 col-md-10" ] bodyHtml
       script_ [ src_ "assets/js/jquery.min.js" ] $ ("" :: Text)
       script_ [ src_ "assets/bootstrap/js/bootstrap.min.js" ] $ ("" :: Text)
       -- script_ [ src_ "https://cdnjs.cloudflare.com/ajax/libs/slick-carousel/1.6.0/slick.js" ] $ ("" :: Text)
       -- script_ [ src_ "assets/js/logo-slider.js" ] $ ("" :: Text)
 
-sideNav :: Html ()
-sideNav = do
-  div_ [ style_ "padding-top: 2em;", class_ "filters" ] $ do
+sideNav :: UTCTime -> Filter -> Html ()
+sideNav t filter@Filter{..} = do
+  div_ [ class_ "filters mt-3" ] $ do
     jobStatusFilters
     jobRunnerFilters
     jobTypeFilters
@@ -167,11 +167,17 @@ sideNav = do
       h6_ "Filter by job status"
       div_ [ class_ "card" ] $ do
         ul_ [ class_ "list-group list-group-flush" ] $ do
-          li_ [ class_ "list-group-item active-nav" ] $ do
-            "Link 1 "
-            span_ [ class_ "badge badge-pill badge-secondary float-right" ] "12"
-          li_ [ class_ "list-group-item" ] $ toHtml $ ("Link 1 " :: Text)
-          li_ [ class_ "list-group-item" ] $ toHtml $ ("Link 1 " :: Text)
+          li_ [ class_ ("list-group-item " <> if filterStatuses == [] then "active-nav" else "") ] $ do
+            let lnk = (Links.rFilterResults $ Just filter{filterStatuses = []})
+            a_ [ href_ lnk ] $ do
+              "all"
+              span_ [ class_ "badge badge-pill badge-secondary float-right" ] "12"
+          forM_ ((\\) (enumFrom minBound) [Job.Success]) $ \st -> do
+            li_ [ class_ ("list-group-item " <> if (st `elem` filterStatuses) then "active-nav" else "") ] $ do
+              let lnk = (Links.rFilterResults $ Just filter{filterStatuses = [st]})
+              a_ [ href_ lnk ] $ do
+                toHtml $ toText st
+                span_ [ class_ "badge badge-pill badge-secondary float-right" ] "12"
 
     jobRunnerFilters = do
       h6_ [ class_ "mt-3" ] "Filter by job runner"
@@ -317,19 +323,19 @@ rowSuccess t job@Job{jobStatus, jobCreatedAt, jobUpdatedAt, jobPayload, jobAttem
       Aeson.Null -> toHtml ("null" :: Text)
 
     statusSuccess = do
-      span_ [ class_ "label label-success" ] $ "Success"
+      span_ [ class_ "badge badge-success" ] $ "Success"
       span_ [ class_ "job-run-time" ] $ do
         let (d, s) = timeDuration jobCreatedAt jobUpdatedAt
         abbr_ [ title_ (showText jobUpdatedAt) ] $ toHtml $ "Completed " <> humanReadableTime' t jobUpdatedAt <> ". "
         abbr_ [ title_ (showText d <> " seconds")] $ toHtml $ "Took " <> s
 
     statusFailed = do
-      span_ [ class_ "label label-danger" ] $ "Failed"
+      span_ [ class_ "badge badge-danger" ] $ "Failed"
       span_ [ class_ "job-run-time" ] $ do
         abbr_ [ title_ (showText jobUpdatedAt) ] $ toHtml $ "Failed " <> humanReadableTime' t jobUpdatedAt <> " after " <> show jobAttempts <> " attempts"
 
     statusFuture = do
-      span_ [ class_ "label" ] $ "Future"
+      span_ [ class_ "badge badge-secondary" ] $ "Future"
       span_ [ class_ "job-run-time" ] $ do
         abbr_ [ title_ (showText jobRunAt) ] $ toHtml $ humanReadableTime' t jobRunAt
 
@@ -338,13 +344,13 @@ rowSuccess t job@Job{jobStatus, jobCreatedAt, jobUpdatedAt, jobPayload, jobAttem
       -- span_ [ class_ "job-run-time" ] ("Waiting to be picked up" :: Text)
 
     statusRetry = do
-      span_ [ class_ "label label-info" ] $ toHtml $ "Retries (" <> show jobAttempts <> ")"
+      span_ [ class_ "badge badge-warning" ] $ toHtml $ "Retries (" <> show jobAttempts <> ")"
       span_ [ class_ "job-run-time" ] $ do
         abbr_ [ title_ (showText jobUpdatedAt) ] $ toHtml $ "Retried " <> humanReadableTime' t jobUpdatedAt <> ". "
         abbr_ [ title_ (showText jobRunAt)] $ toHtml $ "Next retry in " <> humanReadableTime' t jobRunAt
 
     statusLocked = do
-      span_ [ class_ "label label-warning" ] $ toHtml ("Locked"  :: Text)
+      span_ [ class_ "badge badge-info" ] $ toHtml ("Locked"  :: Text)
       -- span_ [ class_ "job-run-time" ] $ do
       --   abbr_ [ title_ (showText jobUpdatedAt) ] $ toHtml $ "Retried " <> humanReadableTime' t jobUpdatedAt <> ". "
       --   abbr_ [ title_ (showText jobRunAt)] $ toHtml $ "Next retry in " <> humanReadableTime' t jobRunAt
@@ -459,7 +465,7 @@ rowLocked = do
 
 resultsPanel :: UTCTime -> Filter -> [Job] -> Int -> Html ()
 resultsPanel t filter@Filter{filterPage} jobs runningCount = do
-  div_ [ class_ "card" ] $ do
+  div_ [ class_ "card mt-3" ] $ do
     div_ [ class_ "card-header bg-secondary text-white" ] $ do
       "Currently running "
       span_ [ class_ "badge badge-primary badge-primary" ] $ toHtml (show runningCount)
