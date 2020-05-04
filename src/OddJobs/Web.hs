@@ -101,6 +101,7 @@ data Routes route = Routes
   , rStaticAssets :: route :- "assets" :> Raw
   , rEnqueue :: route :- "enqueue" :> Capture "jobId" JobId :> Post '[HTML] NoContent
   , rRunNow :: route :- "run" :> Capture "jobId" JobId :> Post '[HTML] NoContent
+  , rCancel :: route :- "cancel" :> Capture "jobId" JobId :> Post '[HTML] NoContent
   , rRefreshJobTypes :: route :- "refresh-job-types" :> Post '[HTML] NoContent
   } deriving (Generic)
 
