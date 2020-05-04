@@ -40,6 +40,11 @@ td.job-type {
   float:right;
 }
 
+.job .job-payload {
+    color: #777;
+    display: inline-block;
+}
+
 .job-payload .key {
   color:#8e44ad;
   display:inline-block;
@@ -129,4 +134,18 @@ abbr[title] {
 
 .list-group-item.active-nav {
     border-left: 3px solid #28a745;
+}
+
+.job .job-type {
+    font-weight: bold;
+    display: inline-block;
+    margin-right: 0.75rem;
+}
+
+.job .job-error {
+    height: 1.5em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: no-wrap;
+    color: #777;
 }
