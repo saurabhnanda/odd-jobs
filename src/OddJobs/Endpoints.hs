@@ -97,6 +97,7 @@ server config dbPool jobTypesRef = Routes
   { rFilterResults = (\mFilter -> filterResults config dbPool jobTypesRef mFilter)
   , rStaticAssets = serveDirectoryFileServer "assets"
   , rEnqueue = enqueueJob config dbPool
+  , rCancel = cancelJob config dbPool
   , rRunNow = runJobNow config dbPool
   , rRefreshJobTypes = refreshJobTypes config dbPool jobTypesRef
   }
@@ -109,6 +110,13 @@ refreshJobTypes cfg dbPool jobTypesRef = do
   allJobTypes <- fetchAllJobTypes cfg dbPool
   atomicModifyIORef' jobTypesRef (\_ -> (allJobTypes, ()))
   throwError $ err301{errHeaders=[("Location", toS $ Links.rFilterResults Nothing)]}
+
+cancelJob :: Config
+          -> Pool Connection
+          -> JobId
+          -> Handler NoContent
+cancelJob cfg dbPool jid = do
+  updateHelper cfg dbPool (Failed, jid, In [Queued, Retry])
 
 runJobNow :: Config
           -> Pool Connection
@@ -364,7 +372,7 @@ actionsFuture Job{..} = do
 
 actionsWaiting :: Job -> Html ()
 actionsWaiting Job{..} = do
-  form_ [ action_ "#", method_ "post" ] $ do
+  form_ [ action_ (Links.rCancel jobId), method_ "post" ] $ do
     button_ [ class_ "btn btn-danger", type_ "submit" ] $ "Cancel"
 
 statusSuccess :: UTCTime -> Job -> Html ()
@@ -412,7 +420,7 @@ resultsPanel t filter@Filter{filterPage} js runningCount = do
     div_ [ class_ "card-header bg-secondary text-white" ] $ do
       "Currently running "
       span_ [ class_ "badge badge-primary badge-primary" ] $ toHtml (show runningCount)
-    div_ [ class_ "currently-running" ] $ div_ [ class_ "" ] $ table_ [ class_ "table table-responsive table-striped table-hover" ] $ do
+    div_ [ class_ "currently-running" ] $ div_ [ class_ "" ] $ table_ [ class_ "table table-striped table-hover" ] $ do
       thead_ [ class_ "thead-dark"] $ do
         tr_ $ do
           th_ "Job status"
