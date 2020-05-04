@@ -1,5 +1,7 @@
 {-# LANGUAGE RankNTypes, FlexibleInstances, FlexibleContexts, PartialTypeSignatures, TupleSections, DeriveGeneric, UndecidableInstances #-}
 {-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+
 module OddJobs.Job
   (
     -- * Starting the job-runner
@@ -74,6 +76,7 @@ module OddJobs.Job
   , throwParsePayloadWith
 
   , JobErrHandler(..)
+  , AllJobTypes(..)
   )
 where
 
@@ -124,6 +127,7 @@ import qualified System.Log.FastLogger as FLogger
 import Prelude hiding (log)
 import Lucid (Html(..), toHtml, class_, div_, span_, br_)
 import GHC.Exts (toList)
+import Generics.Deriving.ConNames
 
 
 -- | The documentation of odd-jobs currently promotes 'startJobRunner', which
@@ -261,6 +265,12 @@ data Config = Config
     -- a human-readable name), you can do it efficiently instead of resulting in
     -- an N+1 SQL bug. Ref: defaultJobToHtml
   , cfgJobToHtml :: [Job] -> IO [Html ()]
+
+    -- | How to get a list of all known job-types?
+  , cfgAllJobTypes :: AllJobTypes
+
+    -- | TODO
+  , cfgJobTypeSql :: PGS.Query
   }
 
 data ConcurrencyControl
@@ -321,6 +331,8 @@ defaultConfig logger tname dbpool ccControl jrunner =
             , cfgJobType = defaultJobType
             , cfgDefaultJobTimeout = Seconds 600
             , cfgJobToHtml = defaultJobToHtml (cfgJobType cfg)
+            , cfgAllJobTypes = defaultDynamicJobTypes (cfgTableName cfg)
+            , cfgJobTypeSql = defaultJobTypeSql
             }
   in cfg
 
@@ -660,6 +672,7 @@ runJob jid = do
       liftIO $ void $ Prelude.foldr tryHandler (throwIO e) handlers
       pure ()
 
+-- TODO: This might have a resource leak.
 restartUponCrash :: (HasJobRunner m, Show a) => Text -> m a -> m ()
 restartUponCrash name_ action = do
   a <- async action
@@ -1007,3 +1020,22 @@ defaultPayloadToHtml v = case v of
   Aeson.Number n -> toHtml $ show n
   Aeson.Bool b -> toHtml $ show b
   Aeson.Null -> toHtml ("null" :: Text)
+
+defaultJobTypeSql :: PGS.Query
+defaultJobTypeSql = "payload->>'tag'"
+
+data AllJobTypes
+  = AJTFixed [Text]
+  | AJTSql (Connection -> IO [Text])
+  | AJTCustom (IO [Text])
+
+defaultConstantJobTypes :: forall a . (Generic a, ConNames (Rep a))
+                         => Proxy a
+                         -> AllJobTypes
+defaultConstantJobTypes _ =
+  AJTFixed $ DL.map toS $ conNames (undefined :: a)
+
+defaultDynamicJobTypes :: TableName
+                       -> AllJobTypes
+defaultDynamicJobTypes tname = AJTSql $ \conn -> do
+  fmap (DL.map ((fromMaybe "(unknown)") . fromOnly)) $ PGS.query_ conn $ "select distinct(payload->>'tag') from " <> tname

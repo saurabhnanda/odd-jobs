@@ -40,6 +40,8 @@ import qualified System.Log.FastLogger.Date as FLogger
 import Control.Monad.Logger as MLogger
 import qualified Data.ByteString.Lazy as BSL
 import qualified Data.List as DL
+import UnliftIO.IORef
+import Debug.Trace
 
 -- startApp :: IO ()
 -- startApp = undefined
@@ -71,6 +73,9 @@ startApp = do
   let flogger = Job.defaultTimedLogger tlogger (Job.defaultLogStr (Job.defaultJobToText Job.defaultJobType))
       jm = Job.defaultConfig flogger tname dbPool Job.UnlimitedConcurrentJobs (const $ pure ())
 
+  allJobTypes <- fetchAllJobTypes jm dbPool
+  jobTypesRef <- newIORef allJobTypes
+
   -- let nt :: ReaderT Job.Config IO a -> Servant.Handler a
   --     nt action = (liftIO $ try $ runReaderT action jm) >>= \case
   --       Left (e :: SomeException) -> Servant.Handler  $ ExceptT $ pure $ Left $ err500 { errBody = toS $ show e }
@@ -78,7 +83,7 @@ startApp = do
   --     appProxy = (Proxy :: Proxy (ToServant Routes AsApi))
 
   finally
-    (run 8080 $ genericServe (server jm dbPool))
+    (run 8080 $ genericServe (server jm dbPool jobTypesRef))
     (cleanup >> (Pool.destroyAllResources dbPool))
 
 stopApp :: IO ()
@@ -86,13 +91,24 @@ stopApp = pure ()
 
 server :: Config
        -> Pool Connection
+       -> IORef [Text]
        -> Routes AsServer
-server config dbPool = Routes
-  { rFilterResults = (\mFilter -> filterResults config dbPool mFilter)
+server config dbPool jobTypesRef = Routes
+  { rFilterResults = (\mFilter -> filterResults config dbPool jobTypesRef mFilter)
   , rStaticAssets = serveDirectoryFileServer "assets"
   , rEnqueue = enqueueJob config dbPool
   , rRunNow = runJobNow config dbPool
+  , rRefreshJobTypes = refreshJobTypes config dbPool jobTypesRef
   }
+
+refreshJobTypes :: Config
+                -> Pool Connection
+                -> IORef [Text]
+                -> Handler NoContent
+refreshJobTypes cfg dbPool jobTypesRef = do
+  allJobTypes <- fetchAllJobTypes cfg dbPool
+  atomicModifyIORef' jobTypesRef (\_ -> (allJobTypes, ()))
+  throwError $ err301{errHeaders=[("Location", toS $ Links.rFilterResults Nothing)]}
 
 runJobNow :: Config
           -> Pool Connection
@@ -119,21 +135,33 @@ updateHelper Config{cfgTableName} dbPool  args = do
   throwError $ err301{errHeaders=[("Location", toS $ Links.rFilterResults Nothing)]}
 
 
+fetchAllJobTypes :: (MonadIO m)
+                 => Config
+                 -> Pool Connection
+                 -> m [Text]
+fetchAllJobTypes Config{cfgAllJobTypes} dbPool = liftIO $ do
+  case cfgAllJobTypes of
+    AJTFixed jts -> pure jts
+    AJTSql fn -> withResource dbPool fn
+    AJTCustom fn -> fn
+
 updateQuery :: TableName -> PGS.Query
 updateQuery tname = "update " <> tname <> " set locked_at=null, locked_by=null, attempts=0, status=?, run_at=now() where id=? and status in ?"
 
 filterResults :: Config
               -> Pool Connection
+              -> IORef [Text]
               -> Maybe Filter
               -> Handler (Html ())
-filterResults Config{cfgJobToHtml} dbPool mFilter = do
+filterResults cfg@Config{cfgJobToHtml} dbPool jobTypesRef mFilter = do
   let filters = fromMaybe mempty mFilter
   (jobs, runningCount) <- liftIO $ Pool.withResource dbPool $ \conn -> (,)
-    <$> (filterJobs conn tname filters)
-    <*> (countJobs conn tname filters{ filterStatuses = [Job.Locked] })
+    <$> (filterJobs cfg conn filters)
+    <*> (countJobs cfg conn filters{ filterStatuses = [Job.Locked] })
   t <- liftIO getCurrentTime
   js <- liftIO $ fmap (DL.zip jobs) $ cfgJobToHtml jobs
-  let navHtml = sideNav t filters
+  allJobTypes <- readIORef jobTypesRef
+  let navHtml = sideNav allJobTypes t filters
       bodyHtml = resultsPanel t filters js runningCount
   pure $ pageLayout navHtml bodyHtml
 
@@ -184,8 +212,8 @@ pageLayout navHtml bodyHtml = do
       -- script_ [ src_ "https://cdnjs.cloudflare.com/ajax/libs/slick-carousel/1.6.0/slick.js" ] $ ("" :: Text)
       -- script_ [ src_ "assets/js/logo-slider.js" ] $ ("" :: Text)
 
-sideNav :: UTCTime -> Filter -> Html ()
-sideNav t filter@Filter{..} = do
+sideNav :: [Text] -> UTCTime -> Filter -> Html ()
+sideNav jobTypes t filter@Filter{..} = do
   div_ [ class_ "filters mt-3" ] $ do
     jobStatusFilters
     jobTypeFilters
@@ -196,7 +224,7 @@ sideNav t filter@Filter{..} = do
       div_ [ class_ "card" ] $ do
         ul_ [ class_ "list-group list-group-flush" ] $ do
           li_ [ class_ ("list-group-item " <> if filterStatuses == [] then "active-nav" else "") ] $ do
-            let lnk = (Links.rFilterResults $ Just filter{filterStatuses = [], filterPage = Nothing})
+            let lnk = (Links.rFilterResults $ Just filter{filterStatuses = [], filterPage = (Web.filterPage blankFilter)})
             a_ [ href_ lnk ] $ do
               "all"
               span_ [ class_ "badge badge-pill badge-secondary float-right" ] "12"
@@ -218,14 +246,20 @@ sideNav t filter@Filter{..} = do
           li_ [ class_ "list-group-item" ] $ toHtml $ ("Link 1 " :: Text)
 
     jobTypeFilters = do
-      h6_ [ class_ "mt-3" ] "Filter by job-type"
+      h6_ [ class_ "mt-3" ] $ do
+        "Filter by job-type"
+        form_ [ method_ "post", action_ Links.rRefreshJobTypes, class_ "d-inline"] $ do
+          button_ [ type_ "submit", class_ "btn btn-link m-0 p-0 ml-1 float-right"] $ do
+            small_ "refresh"
+
       div_ [ class_ "card" ] $ do
         ul_ [ class_ "list-group list-group-flush" ] $ do
-          li_ [ class_ "list-group-item active-nav" ] $ do
-            "Link 1 "
-            span_ [ class_ "badge badge-pill badge-secondary float-right" ] "12"
-          li_ [ class_ "list-group-item" ] $ toHtml $ ("Link 1 " :: Text)
-          li_ [ class_ "list-group-item" ] $ toHtml $ ("Link 1 " :: Text)
+          li_ [ class_ ("list-group-item " <> if filterJobTypes == [] then "active-nav" else "") ] $ do
+            let lnk = (Links.rFilterResults $ Just filter{filterJobTypes = [], filterPage = (Web.filterPage blankFilter)})
+            a_ [ href_ lnk ] "all"
+          forM_ jobTypes $ \jt -> do
+            li_ [ class_ ("list-group-item" <> if (jt `elem` filterJobTypes) then " active-nav" else "")] $ do
+              a_ [ href_ (Links.rFilterResults $ Just filter{filterJobTypes=[jt]}) ] $ toHtml jt
 
 searchBar :: UTCTime -> Filter -> Html ()
 searchBar t filter@Filter{filterStatuses, filterCreatedAfter, filterCreatedBefore, filterUpdatedAfter, filterUpdatedBefore, filterJobTypes, filterRunAfter} = do

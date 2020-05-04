@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveGeneric, NamedFieldPuns, TypeOperators, DataKinds #-}
+{-# LANGUAGE DeriveGeneric, NamedFieldPuns, TypeOperators, DataKinds, RecordWildCards #-}
 module OddJobs.Web where
 
 import OddJobs.Types
@@ -101,12 +101,13 @@ data Routes route = Routes
   , rStaticAssets :: route :- "assets" :> Raw
   , rEnqueue :: route :- "enqueue" :> Capture "jobId" JobId :> Post '[HTML] NoContent
   , rRunNow :: route :- "run" :> Capture "jobId" JobId :> Post '[HTML] NoContent
+  , rRefreshJobTypes :: route :- "refresh-job-types" :> Post '[HTML] NoContent
   } deriving (Generic)
 
 
-filterJobsQuery :: TableName -> Filter -> (PGS.Query, [Action])
-filterJobsQuery tname Filter{filterStatuses, filterCreatedBefore, filterCreatedAfter, filterUpdatedBefore, filterUpdatedAfter, filterJobTypes, filterOrder, filterPage, filterRunAfter} =
-  ( "SELECT " <> Job.concatJobDbColumns <> " FROM " <> tname <> whereClause <> " " <> (orderClause $ fromMaybe (OrdUpdatedAt, Desc) filterOrder) <> " " <> limitOffsetClause
+filterJobsQuery :: Config -> Filter -> (PGS.Query, [Action])
+filterJobsQuery Config{cfgTableName, cfgJobTypeSql} Filter{..} =
+  ( "SELECT " <> Job.concatJobDbColumns <> " FROM " <> cfgTableName <> whereClause <> " " <> (orderClause $ fromMaybe (OrdUpdatedAt, Desc) filterOrder) <> " " <> limitOffsetClause
   , whereActions
   )
   where
@@ -145,12 +146,11 @@ filterJobsQuery tname Filter{filterStatuses, filterCreatedBefore, filterCreatedA
     jobTypeClause = case filterJobTypes of
       [] -> Nothing
       xs ->
-        let qFragment = "payload @> ?"
-            valBuilder v = toField $ Aeson.object ["tag" .= v]
+        let qFragment = "(" <> cfgJobTypeSql <> ")=?"
             build ys (q, vs) = case ys of
               [] -> (q, vs)
-              (y:[]) -> (qFragment <> q, (valBuilder y):vs)
-              (y:ys_) -> build ys_ (" OR " <> qFragment <> q, (valBuilder y):vs)
+              (y:[]) -> (qFragment <> q, (toField y):vs)
+              (y:ys_) -> build ys_ (" OR " <> qFragment <> q, (toField y):vs)
         in Just $ build xs (mempty, [])
 
     and :: Maybe (Query, [PGS.Action]) -> Maybe (Query, [PGS.Action]) -> Maybe (Query, [PGS.Action])
@@ -161,14 +161,14 @@ filterJobsQuery tname Filter{filterStatuses, filterCreatedBefore, filterCreatedA
 
     -- orderClause = _
 
-filterJobs :: Connection -> TableName -> Filter -> IO [Job]
-filterJobs conn tname f = do
-  let (q, queryArgs) = filterJobsQuery tname f
+filterJobs :: Config -> Connection -> Filter -> IO [Job]
+filterJobs cfg conn f = do
+  let (q, queryArgs) = filterJobsQuery cfg f
   PGS.query conn q queryArgs
 
-countJobs :: Connection -> TableName -> Filter -> IO Int
-countJobs conn tname f = do
-  let (q, queryArgs) = filterJobsQuery tname f
+countJobs :: Config -> Connection -> Filter -> IO Int
+countJobs cfg conn f = do
+  let (q, queryArgs) = filterJobsQuery cfg f
       finalqry = "SELECT count(*) FROM (" <> q <> ") a"
   [Only r] <- PGS.query conn finalqry queryArgs
   pure r

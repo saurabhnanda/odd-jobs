@@ -69,6 +69,7 @@ dependencies:
   - direct-daemonize
   - filepath
   - directory
+  - generic-deriving
 
 
 library:
