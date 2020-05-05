@@ -38,6 +38,7 @@ module OddJobs.Job
   , Job(..)
   , JobId
   , Status(..)
+  , JobRunnerName(..)
   , TableName
   , delaySeconds
   , Seconds(..)
@@ -456,6 +457,8 @@ data Status = Success
 instance Ord Status where
   compare x y = compare (toText x) (toText y)
 
+newtype JobRunnerName = JobRunnerName { unJobRunnerName :: Text } deriving (Eq, Show, FromField, ToField, Generic, ToJSON, FromJSON)
+
 data Job = Job
   { jobId :: JobId
   , jobCreatedAt :: UTCTime
@@ -466,7 +469,7 @@ data Job = Job
   , jobLastError :: Maybe Value
   , jobAttempts :: Int
   , jobLockedAt :: Maybe UTCTime
-  , jobLockedBy :: Maybe Text
+  , jobLockedBy :: Maybe JobRunnerName
   } deriving (Eq, Show)
 
 instance ToText Status where
@@ -950,7 +953,7 @@ defaultLogStr jobToText logLevel logEvent =
       LogJobSuccess j t ->
         "Success | " <> (jobToLogStr j) <> " | runtime=" <> (toLogStr $ show t)
       LogJobTimeout j@Job{jobLockedAt, jobLockedBy} ->
-        "Timeout | " <> jobToLogStr j <> " | lockedBy=" <> (toLogStr $ fromMaybe "unknown" jobLockedBy) <>
+        "Timeout | " <> jobToLogStr j <> " | lockedBy=" <> (toLogStr $ maybe  "unknown" unJobRunnerName jobLockedBy) <>
         " lockedAt=" <> (toLogStr $ maybe "unknown" show jobLockedAt)
       LogPoll ->
         "Polling jobs table"
@@ -1038,4 +1041,4 @@ defaultConstantJobTypes _ =
 defaultDynamicJobTypes :: TableName
                        -> AllJobTypes
 defaultDynamicJobTypes tname = AJTSql $ \conn -> do
-  fmap (DL.map ((fromMaybe "(unknown)") . fromOnly)) $ PGS.query_ conn $ "select distinct(payload->>'tag') from " <> tname
+  fmap (DL.map ((fromMaybe "(unknown)") . fromOnly)) $ PGS.query_ conn $ "select distinct(payload->>'tag') from " <> tname <> " order by 1 nulls last"

@@ -29,7 +29,7 @@ import Data.Time.Format.Human (humanReadableTime')
 import Data.Aeson as Aeson
 import qualified Data.HashMap.Strict as HM
 import GHC.Exts (toList)
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, mapMaybe)
 import Data.Text.Conversions (fromText, toText)
 import Control.Applicative ((<|>))
 import Data.Time.Convenience (timeSince, Unit(..), Direction(..))
@@ -74,7 +74,9 @@ startApp = do
       jm = Job.defaultConfig flogger tname dbPool Job.UnlimitedConcurrentJobs (const $ pure ())
 
   allJobTypes <- fetchAllJobTypes jm dbPool
+  allJobRunners <- fetchAllJobRunners jm dbPool
   jobTypesRef <- newIORef allJobTypes
+  jobRunnerRef <- newIORef allJobRunners
 
   -- let nt :: ReaderT Job.Config IO a -> Servant.Handler a
   --     nt action = (liftIO $ try $ runReaderT action jm) >>= \case
@@ -83,7 +85,7 @@ startApp = do
   --     appProxy = (Proxy :: Proxy (ToServant Routes AsApi))
 
   finally
-    (run 8080 $ genericServe (server jm dbPool jobTypesRef))
+    (run 8080 $ genericServe (server jm dbPool jobTypesRef jobRunnerRef))
     (cleanup >> (Pool.destroyAllResources dbPool))
 
 stopApp :: IO ()
@@ -92,15 +94,26 @@ stopApp = pure ()
 server :: Config
        -> Pool Connection
        -> IORef [Text]
+       -> IORef [JobRunnerName]
        -> Routes AsServer
-server config dbPool jobTypesRef = Routes
+server config dbPool jobTypesRef jobRunnerRef = Routes
   { rFilterResults = (\mFilter -> filterResults config dbPool jobTypesRef mFilter)
   , rStaticAssets = serveDirectoryFileServer "assets"
   , rEnqueue = enqueueJob config dbPool
   , rCancel = cancelJob config dbPool
   , rRunNow = runJobNow config dbPool
   , rRefreshJobTypes = refreshJobTypes config dbPool jobTypesRef
+  , rRefreshJobRunners = refreshJobRunners config dbPool jobRunnerRef
   }
+
+refreshJobRunners :: Config
+                  -> Pool Connection
+                  -> IORef [JobRunnerName]
+                  -> Handler NoContent
+refreshJobRunners cfg dbPool jobRunnerRef = do
+  allJobRunners <- fetchAllJobRunners cfg dbPool
+  atomicModifyIORef' jobRunnerRef (\_ -> (allJobRunners, ()))
+  throwError $ err301{errHeaders=[("Location", toS $ Links.rFilterResults Nothing)]}
 
 refreshJobTypes :: Config
                 -> Pool Connection
@@ -153,6 +166,14 @@ fetchAllJobTypes Config{cfgAllJobTypes} dbPool = liftIO $ do
     AJTSql fn -> withResource dbPool fn
     AJTCustom fn -> fn
 
+fetchAllJobRunners :: (MonadIO m)
+                   => Config
+                   -> Pool Connection
+                   -> m [JobRunnerName]
+fetchAllJobRunners Config{cfgTableName} dbPool = liftIO $ withResource dbPool $ \conn -> do
+  fmap (mapMaybe fromOnly) $ PGS.query_ conn $ "select distinct locked_by from " <> cfgTableName
+
+
 updateQuery :: TableName -> PGS.Query
 updateQuery tname = "update " <> tname <> " set locked_at=null, locked_by=null, attempts=0, status=?, run_at=now() where id=? and status in ?"
 
@@ -169,7 +190,7 @@ filterResults cfg@Config{cfgJobToHtml} dbPool jobTypesRef mFilter = do
   t <- liftIO getCurrentTime
   js <- liftIO $ fmap (DL.zip jobs) $ cfgJobToHtml jobs
   allJobTypes <- readIORef jobTypesRef
-  let navHtml = sideNav allJobTypes t filters
+  let navHtml = sideNav allJobTypes [] t filters
       bodyHtml = resultsPanel t filters js runningCount
   pure $ pageLayout navHtml bodyHtml
 
@@ -220,8 +241,8 @@ pageLayout navHtml bodyHtml = do
       -- script_ [ src_ "https://cdnjs.cloudflare.com/ajax/libs/slick-carousel/1.6.0/slick.js" ] $ ("" :: Text)
       -- script_ [ src_ "assets/js/logo-slider.js" ] $ ("" :: Text)
 
-sideNav :: [Text] -> UTCTime -> Filter -> Html ()
-sideNav jobTypes t filter@Filter{..} = do
+sideNav :: [Text] -> [JobRunnerName] -> UTCTime -> Filter -> Html ()
+sideNav jobTypes jobRunnerNames t filter@Filter{..} = do
   div_ [ class_ "filters mt-3" ] $ do
     jobStatusFilters
     jobTypeFilters
@@ -244,14 +265,20 @@ sideNav jobTypes t filter@Filter{..} = do
                 span_ [ class_ "badge badge-pill badge-secondary float-right" ] "12"
 
     jobRunnerFilters = do
-      h6_ [ class_ "mt-3" ] "Filter by job runner"
+      h6_ [ class_ "mt-3" ] $ do
+        "Filter by job-runner"
+        form_ [ method_ "post", action_ Links.rRefreshJobRunners, class_ "d-inline"] $ do
+          button_ [ type_ "submit", class_ "btn btn-link m-0 p-0 ml-1 float-right"] $ do
+            small_ "refresh"
+
       div_ [ class_ "card" ] $ do
         ul_ [ class_ "list-group list-group-flush" ] $ do
-          li_ [ class_ "list-group-item active-nav" ] $ do
-            "Link 1 "
-            span_ [ class_ "badge badge-pill badge-secondary float-right" ] "12"
-          li_ [ class_ "list-group-item" ] $ toHtml $ ("Link 1 " :: Text)
-          li_ [ class_ "list-group-item" ] $ toHtml $ ("Link 1 " :: Text)
+          li_ [ class_ ("list-group-item " <> if filterJobRunner == [] then "active-nav" else "") ] $ do
+            let lnk = (Links.rFilterResults $ Just filter{filterJobRunner = [], filterPage = (Web.filterPage blankFilter)})
+            a_ [ href_ lnk ] "all"
+          forM_ jobRunnerNames $ \jr -> do
+            li_ [ class_ ("list-group-item" <> if (jr `elem` filterJobRunner) then " active-nav" else "")] $ do
+              a_ [ href_ "#" ] $ toHtml $ unJobRunnerName jr
 
     jobTypeFilters = do
       h6_ [ class_ "mt-3" ] $ do
@@ -445,7 +472,7 @@ resultsPanel t filter@Filter{filterPage} js runningCount = do
     nextLink = do
       let (extraClass, lnk) = case filterPage of
             Nothing ->
-              if (DL.length js) == 0
+              if (DL.length js) < 10
               then ("disabled", "")
               else ("", (Links.rFilterResults $ Just $ filter {filterPage = Just (10, 10)}))
             Just (l, o) ->

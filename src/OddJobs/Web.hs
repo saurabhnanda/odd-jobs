@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveGeneric, NamedFieldPuns, TypeOperators, DataKinds, RecordWildCards #-}
+{-# LANGUAGE DeriveGeneric, NamedFieldPuns, TypeOperators, DataKinds, RecordWildCards, DeriveAnyClass #-}
 module OddJobs.Web where
 
 import OddJobs.Types
@@ -42,6 +42,7 @@ data Filter = Filter
   , filterOrder :: Maybe (OrderByField, OrderDirection)
   , filterPage :: Maybe (Int, Int)
   , filterRunAfter :: Maybe UTCTime
+  , filterJobRunner :: [JobRunnerName]
   } deriving (Eq, Show, Generic)
 
 instance Semigroup Filter where
@@ -55,6 +56,7 @@ instance Semigroup Filter where
     , filterOrder = filterOrder b <|> filterOrder a
     , filterPage = filterPage b <|> filterPage a
     , filterRunAfter = filterRunAfter b <|> filterRunAfter a
+    , filterJobRunner = nub (filterJobRunner b <> filterJobRunner a)
     }
 
 instance Monoid Filter where
@@ -71,6 +73,7 @@ blankFilter = Filter
   , filterOrder = Nothing
   , filterPage = Just (10, 0)
   , filterRunAfter = Nothing
+  , filterJobRunner = []
   }
 
 
@@ -103,6 +106,7 @@ data Routes route = Routes
   , rRunNow :: route :- "run" :> Capture "jobId" JobId :> Post '[HTML] NoContent
   , rCancel :: route :- "cancel" :> Capture "jobId" JobId :> Post '[HTML] NoContent
   , rRefreshJobTypes :: route :- "refresh-job-types" :> Post '[HTML] NoContent
+  , rRefreshJobRunners :: route :- "refresh-job-runners" :> Post '[HTML] NoContent
   } deriving (Generic)
 
 
@@ -129,9 +133,14 @@ filterJobsQuery Config{cfgTableName, cfgJobTypeSql} Filter{..} =
       Nothing -> mempty
       Just (l, o) -> "LIMIT " <> fromString (show l) <> " OFFSET " <> fromString (show o)
 
-    (whereClause, whereActions) = case statusClause `and` createdAfterClause `and` createdBeforeClause `and` updatedBeforeClause `and` updatedAfterClause `and` jobTypeClause `and` runAfterClause of
-      Nothing -> (mempty, toRow ())
-      Just (q, as) -> (" WHERE " <> q, as)
+    (whereClause, whereActions) =
+      let finalClause = statusClause `and` createdAfterClause `and`
+                       createdBeforeClause `and` updatedBeforeClause `and`
+                       updatedAfterClause `and` jobTypeClause `and`
+                       runAfterClause `and` jobRunnerClause
+      in case finalClause  of
+        Nothing -> (mempty, toRow ())
+        Just (q, as) -> (" WHERE " <> q, as)
 
     statusClause = if Prelude.null filterStatuses
                    then Nothing
@@ -153,6 +162,11 @@ filterJobsQuery Config{cfgTableName, cfgJobTypeSql} Filter{..} =
               (y:[]) -> (qFragment <> q, (toField y):vs)
               (y:ys_) -> build ys_ (" OR " <> qFragment <> q, (toField y):vs)
         in Just $ build xs (mempty, [])
+
+    jobRunnerClause :: Maybe (Query, [Action])
+    jobRunnerClause = case filterJobRunner of
+      [] -> Nothing
+      xs -> Just ("locked_by in ?", toRow $ Only $ In xs)
 
     and :: Maybe (Query, [PGS.Action]) -> Maybe (Query, [PGS.Action]) -> Maybe (Query, [PGS.Action])
     and Nothing Nothing = Nothing
