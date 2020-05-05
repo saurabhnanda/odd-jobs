@@ -142,10 +142,11 @@ abbr[title] {
     margin-right: 0.75rem;
 }
 
-.job .job-error {
+.job .job-error.collapsed {
     height: 1.5em;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: no-wrap;
     color: #777;
 }
+
