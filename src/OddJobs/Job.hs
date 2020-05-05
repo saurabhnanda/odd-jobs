@@ -126,7 +126,7 @@ import qualified System.Directory as Dir
 import Data.Aeson.Internal (iparse, IResult(..), formatError)
 import qualified System.Log.FastLogger as FLogger
 import Prelude hiding (log)
-import Lucid (Html(..), toHtml, class_, div_, span_, br_)
+import Lucid (Html(..), toHtml, class_, div_, span_, br_, button_, a_, href_, onclick_)
 import GHC.Exts (toList)
 import Generics.Deriving.ConNames
 
@@ -976,8 +976,10 @@ defaultJobToHtml jobType js =
         case jobLastError j of
           Nothing -> mempty
           Just e -> do
-            div_ [ class_ "job-error" ] $ do
-              span_ [ class_ "badge badge-secondary" ] "Last error"
+            div_ [ class_ "job-error collapsed" ] $ do
+              a_ [ href_ "javascript: void(0);", onclick_ "toggleError(this)" ] $ do
+                span_ [ class_ "badge badge-secondary error-expand" ] "+ Last error"
+                span_ [ class_ "badge badge-secondary error-collapse d-none" ] "- Last error"
               " "
               defaultErrorToHtml e
 

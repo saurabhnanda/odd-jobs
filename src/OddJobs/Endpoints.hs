@@ -238,6 +238,7 @@ pageLayout navHtml bodyHtml = do
         div_ [ class_ "col-12 col-md-10" ] bodyHtml
       script_ [ src_ "assets/js/jquery.min.js" ] $ ("" :: Text)
       script_ [ src_ "assets/bootstrap/js/bootstrap.min.js" ] $ ("" :: Text)
+      script_ [ src_ "assets/js/custom.js" ] $ ("" :: Text)
       -- script_ [ src_ "https://cdnjs.cloudflare.com/ajax/libs/slick-carousel/1.6.0/slick.js" ] $ ("" :: Text)
       -- script_ [ src_ "assets/js/logo-slider.js" ] $ ("" :: Text)
 
