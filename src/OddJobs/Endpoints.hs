@@ -42,6 +42,7 @@ import qualified Data.ByteString.Lazy as BSL
 import qualified Data.List as DL
 import UnliftIO.IORef
 import Debug.Trace
+import qualified OddJobs.ConfigBuilder as Builder
 
 -- startApp :: IO ()
 -- startApp = undefined
@@ -70,8 +71,8 @@ startApp = do
 
   tcache <- FLogger.newTimeCache FLogger.simpleTimeFormat'
   (tlogger, cleanup) <- FLogger.newTimedFastLogger tcache (FLogger.LogStdout FLogger.defaultBufSize)
-  let flogger = Job.defaultTimedLogger tlogger (Job.defaultLogStr (Job.defaultJobToText Job.defaultJobType))
-      jm = Job.defaultConfig flogger tname dbPool Job.UnlimitedConcurrentJobs (const $ pure ())
+  let flogger = Builder.defaultTimedLogger tlogger (Builder.defaultLogStr (Builder.defaultJobToText Builder.defaultJobType))
+      jm = Builder.finalizeConfig $ Builder.defaultConfigBuilder flogger tname dbPool Job.UnlimitedConcurrentJobs (const $ pure ())
 
   allJobTypes <- fetchAllJobTypes jm dbPool
   allJobRunners <- fetchAllJobRunners jm dbPool
