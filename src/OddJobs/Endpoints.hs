@@ -397,7 +397,7 @@ actionsRetry Job{..} = do
 actionsFuture :: Job -> Html ()
 actionsFuture Job{..} = do
   form_ [ action_ (Links.rRunNow jobId), method_ "post" ] $ do
-    button_ [ class_ "btn btn-seconday", type_ "submit" ] $ "Run now"
+    button_ [ class_ "btn btn-secondary", type_ "submit" ] $ "Run now"
 
 actionsWaiting :: Job -> Html ()
 actionsWaiting Job{..} = do
