@@ -54,6 +54,9 @@ module OddJobs.Job
   , findJobByIdIO
   , saveJob
   , saveJobIO
+  , runJobNowIO
+  , unlockJobIO
+  , cancelJobIO
   , jobDbColumns
   , concatJobDbColumns
 
@@ -67,6 +70,8 @@ module OddJobs.Job
 
   , JobErrHandler(..)
   , AllJobTypes(..)
+  , fetchAllJobTypes
+  , fetchAllJobRunners
   )
 where
 
@@ -99,7 +104,7 @@ import qualified Data.Aeson.Types as Aeson (Parser, parseMaybe)
 import Data.String.Conv (StringConv(..), toS)
 import Data.Functor (void)
 import Control.Monad (forever)
-import Data.Maybe (isNothing, maybe, fromMaybe)
+import Data.Maybe (isNothing, maybe, fromMaybe, listToMaybe, mapMaybe)
 import Data.Either (either)
 import Control.Monad.Reader
 import GHC.Generics
@@ -112,6 +117,8 @@ import qualified System.Directory as Dir
 import Data.Aeson.Internal (iparse, IResult(..), formatError)
 import Prelude hiding (log)
 import GHC.Exts (toList)
+import Database.PostgreSQL.Simple.Types as PGS (Identifier(..))
+import Database.PostgreSQL.Simple.ToField as PGS (toField)
 
 -- | The documentation of odd-jobs currently promotes 'startJobRunner', which
 -- expects a fairly detailed 'Config' record, as a top-level function for
@@ -292,6 +299,36 @@ deleteJob jid = do
 deleteJobIO :: Connection -> TableName -> JobId -> IO ()
 deleteJobIO conn tname jid = do
   void $ PGS.execute conn (deleteJobQuery tname) (Only jid)
+
+runJobNowIO :: Connection -> TableName -> JobId -> IO (Maybe Job)
+runJobNowIO conn tname jid = do
+  t <- getCurrentTime
+  updateJobHelper tname conn (Queued, [Queued, Retry, Failed], Just t, jid)
+
+-- | TODO: First check in all job-runners if this job is still running, or not,
+-- and somehow send an uninterruptibleCancel to that thread.
+unlockJobIO :: Connection -> TableName -> JobId -> IO (Maybe Job)
+unlockJobIO conn tname jid = do
+  fmap listToMaybe $ PGS.query conn q (Retry, jid, In [Locked])
+  where
+    q = "update " <> tname <> " set status=?, run_at=now(), locked_at=null, locked_by=null where id=? and status in ? returning " <> concatJobDbColumns
+
+cancelJobIO :: Connection -> TableName -> JobId -> IO (Maybe Job)
+cancelJobIO conn tname jid =
+  updateJobHelper tname conn (Failed, [Queued, Retry], Nothing, jid)
+
+updateJobHelper :: TableName
+                -> Connection
+                -> (Status, [Status], Maybe UTCTime, JobId)
+                -> IO (Maybe Job)
+updateJobHelper tname conn (newStatus, existingStates, mRunAt, jid) =
+  fmap listToMaybe $ PGS.query conn q (newStatus, runAt, jid, PGS.In existingStates)
+  where
+    q = "update " <> tname <> " set attempts=0, status=?, run_at=? where id=? and status in ? returning " <> concatJobDbColumns
+    runAt = case mRunAt of
+      Nothing -> PGS.toField $ PGS.Identifier "run_at"
+      Just t -> PGS.toField t
+
 
 data TimeoutException = TimeoutException deriving (Eq, Show)
 instance Exception TimeoutException
@@ -608,4 +645,21 @@ throwParsePayloadWith parser job =
   either throwString (pure . Prelude.id) (eitherParsePayloadWith parser job)
 
 
+
+fetchAllJobTypes :: (MonadIO m)
+                 => Config
+                 -> Pool Connection
+                 -> m [Text]
+fetchAllJobTypes Config{cfgAllJobTypes} dbPool = liftIO $ do
+  case cfgAllJobTypes of
+    AJTFixed jts -> pure jts
+    AJTSql fn -> withResource dbPool fn
+    AJTCustom fn -> fn
+
+fetchAllJobRunners :: (MonadIO m)
+                   => Config
+                   -> Pool Connection
+                   -> m [JobRunnerName]
+fetchAllJobRunners Config{cfgTableName} dbPool = liftIO $ withResource dbPool $ \conn -> do
+  fmap (mapMaybe fromOnly) $ PGS.query_ conn $ "select distinct locked_by from " <> cfgTableName
 
