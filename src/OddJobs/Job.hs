@@ -648,18 +648,16 @@ throwParsePayloadWith parser job =
 
 fetchAllJobTypes :: (MonadIO m)
                  => Config
-                 -> Pool Connection
                  -> m [Text]
-fetchAllJobTypes Config{cfgAllJobTypes} dbPool = liftIO $ do
+fetchAllJobTypes Config{cfgAllJobTypes, cfgDbPool} = liftIO $ do
   case cfgAllJobTypes of
     AJTFixed jts -> pure jts
-    AJTSql fn -> withResource dbPool fn
+    AJTSql fn -> withResource cfgDbPool fn
     AJTCustom fn -> fn
 
 fetchAllJobRunners :: (MonadIO m)
                    => Config
-                   -> Pool Connection
                    -> m [JobRunnerName]
-fetchAllJobRunners Config{cfgTableName} dbPool = liftIO $ withResource dbPool $ \conn -> do
+fetchAllJobRunners Config{cfgTableName, cfgDbPool} = liftIO $ withResource cfgDbPool $ \conn -> do
   fmap (mapMaybe fromOnly) $ PGS.query_ conn $ "select distinct locked_by from " <> cfgTableName
 
