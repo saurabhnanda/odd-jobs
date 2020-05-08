@@ -86,8 +86,6 @@ blankFilter = Filter
   }
 
 
-instance ToJSON Status
-instance FromJSON Status
 
 instance ToJSON OrderDirection
 instance FromJSON OrderDirection

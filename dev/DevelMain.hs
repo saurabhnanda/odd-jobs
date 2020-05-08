@@ -30,47 +30,48 @@ import           GHC.Word                 (Word32)
 import           Network.Wai.Handler.Warp (defaultSettings, runSettings,
                                            setPort)
 
-import           OddJobs.Endpoints                     (startApp, stopApp)
+-- import           OddJobs.Endpoints                     (startApp, stopApp)
 -- import qualified ElmCodeGen
 
 -- | Start or restart the server.
 -- newStore is from foreign-store.
 -- A Store holds onto some data across ghci reloads
 update :: IO ()
-update = do
-    mtidStore <- lookupStore tidStoreNum
-    case mtidStore of
-      -- no server running
-      Nothing -> do
-          done <- storeAction doneStore newEmptyMVar
-          tid <- start done
-          _ <- storeAction (Store tidStoreNum) (newIORef tid)
-          return ()
-      -- server is already running
-      Just tidStore -> restartAppInNewThread tidStore
-  where
-    doneStore :: Store (MVar ())
-    doneStore = Store 0
+update = undefined
+-- update = do
+--     mtidStore <- lookupStore tidStoreNum
+--     case mtidStore of
+--       -- no server running
+--       Nothing -> do
+--           done <- storeAction doneStore newEmptyMVar
+--           tid <- start done
+--           _ <- storeAction (Store tidStoreNum) (newIORef tid)
+--           return ()
+--       -- server is already running
+--       Just tidStore -> restartAppInNewThread tidStore
+--   where
+--     doneStore :: Store (MVar ())
+--     doneStore = Store 0
 
-    -- shut the server down with killThread and wait for the done signal
-    restartAppInNewThread :: Store (IORef ThreadId) -> IO ()
-    restartAppInNewThread tidStore = modifyStoredIORef tidStore $ \tid -> do
-        killThread tid
-        withStore doneStore takeMVar
-        readStore doneStore >>= start
+--     -- shut the server down with killThread and wait for the done signal
+--     restartAppInNewThread :: Store (IORef ThreadId) -> IO ()
+--     restartAppInNewThread tidStore = modifyStoredIORef tidStore $ \tid -> do
+--         killThread tid
+--         withStore doneStore takeMVar
+--         readStore doneStore >>= start
 
 
-    -- | Start the server in a separate thread.
-    start :: MVar () -- ^ Written to when the thread is killed.
-          -> IO ThreadId
-    start done = do
-        -- (port, config, app) <- initialize
-        -- ElmCodeGen.updatea
-        forkIO (finally startApp
-                        -- Note that this implies concurrency
-                        -- between shutdownApp and the next app that is starting.
-                        -- Normally this should be fine
-                        (putMVar done () >> stopApp))
+--     -- | Start the server in a separate thread.
+--     start :: MVar () -- ^ Written to when the thread is killed.
+--           -> IO ThreadId
+--     start done = do
+--         -- (port, config, app) <- initialize
+--         -- ElmCodeGen.updatea
+--         forkIO (finally startApp
+--                         -- Note that this implies concurrency
+--                         -- between shutdownApp and the next app that is starting.
+--                         -- Normally this should be fine
+--                         (putMVar done () >> stopApp))
 
 -- | kill the server
 shutdown :: IO ()

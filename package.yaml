@@ -71,7 +71,6 @@ dependencies:
   - directory
   - generic-deriving
 
-
 library:
   source-dirs:
     - src
@@ -82,6 +81,7 @@ library:
     - OddJobs.Endpoints
     - OddJobs.Cli
     - OddJobs.Types
+    - OddJobs.ConfigBuilder
 
 executables:
   devel:

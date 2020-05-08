@@ -106,6 +106,16 @@ data Status = Success
 instance Ord Status where
   compare x y = compare (toText x) (toText y)
 
+instance ToJSON Status where
+  toJSON s = toJSON $ toText s
+
+instance FromJSON Status where
+  parseJSON = withText "Expecting text to convert into Job.Status" $ \t -> do
+    case (fromText t :: Either String Status) of
+      Left e -> fail e
+      Right r -> pure r
+
+
 newtype JobRunnerName = JobRunnerName { unJobRunnerName :: Text } deriving (Eq, Show, FromField, ToField, Generic, ToJSON, FromJSON)
 
 data Job = Job
