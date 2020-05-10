@@ -553,6 +553,8 @@ findJobByIdIO conn tname jid = PGS.query conn (findJobByIdQuery tname) (Only jid
 saveJobQuery :: TableName -> PGS.Query
 saveJobQuery tname = "UPDATE " <> tname <> " set run_at = ?, status = ?, payload = ?, last_error = ?, attempts = ?, locked_at = ?, locked_by = ? WHERE id = ? RETURNING " <> concatJobDbColumns
 
+deleteJobQuery :: TableName -> PGS.Query
+deleteJobQuery tname = "delete " <> tname <> " Where id = ?"
 
 saveJob :: (HasJobRunner m) => Job -> m Job
 saveJob j = do
@@ -575,6 +577,15 @@ saveJobIO conn tname Job{jobRunAt, jobStatus, jobPayload, jobLastError, jobAttem
     [] -> Prelude.error $ "Could not find job while updating it id=" <> (show jobId)
     [j] -> pure j
     js -> Prelude.error $ "Not expecting multiple rows to ber returned when updating job id=" <> (show jobId)
+
+deleteJob :: (HasJobRunner m) => JobId -> m ()
+deleteJob jid = do
+  tname <- getTableName
+  withDbConnection $ \conn -> liftIO $ deleteJobIO conn tname jid
+
+deleteJobIO :: Connection -> TableName -> JobId -> IO ()
+deleteJobIO conn tname jid = do
+  void $ PGS.execute conn (deleteJobQuery tname) (Only jid)
 
 data TimeoutException = TimeoutException deriving (Eq, Show)
 instance Exception TimeoutException
@@ -613,7 +624,8 @@ runJob jid = do
       (flip catches) [Handler $ timeoutHandler job startTime, Handler $ exceptionHandler job startTime] $ do
         runJobWithTimeout lockTimeout job
         endTime <- liftIO getCurrentTime
-        newJob <- saveJob job{jobStatus=Success, jobLockedBy=Nothing, jobLockedAt=Nothing}
+        deleteJob jid
+        let newJob = job{jobStatus=Success, jobLockedBy=Nothing, jobLockedAt=Nothing}
         log LevelInfo $ LogJobSuccess newJob (diffUTCTime endTime startTime)
         onJobSuccess newJob
         pure ()
