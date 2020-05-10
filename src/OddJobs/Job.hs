@@ -198,6 +198,8 @@ instance HasJobRunner RunnerM where
     loggerFn <- cfgLogger . envConfig <$> ask
     liftIO $ loggerFn logLevel logEvent
 
+  getDefaultJobTimeout = cfgDefaultJobTimeout . envConfig <$> ask
+
 -- | Start the job-runner in the /current/ thread, i.e. you'll need to use
 -- 'forkIO' or 'async' manually, if you want the job-runner to run in the
 -- background. Consider using 'OddJobs.Cli' to rapidly build your own

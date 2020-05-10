@@ -44,6 +44,7 @@ import qualified Data.List as DL
 import UnliftIO.IORef
 import Debug.Trace
 import qualified OddJobs.ConfigBuilder as Builder
+import Servant.Static.TH (createApiAndServerDecs)
 
 -- startApp :: IO ()
 -- startApp = undefined
@@ -51,9 +52,10 @@ import qualified OddJobs.ConfigBuilder as Builder
 -- stopApp :: IO ()
 -- stopApp = undefined
 
+$(createApiAndServerDecs "StaticAssetRoutes" "staticAssetServer" "assets")
+
 data Routes route = Routes
   { rFilterResults :: route :- QueryParam "filters" Web.Filter :> Get '[HTML] (Html ())
-  , rStaticAssets :: route :- "assets" :> Raw
   , rEnqueue :: route :- "enqueue" :> Capture "jobId" JobId :> Post '[HTML] NoContent
   , rRunNow :: route :- "run" :> Capture "jobId" JobId :> Post '[HTML] NoContent
   , rCancel :: route :- "cancel" :> Capture "jobId" JobId :> Post '[HTML] NoContent
@@ -62,13 +64,17 @@ data Routes route = Routes
   } deriving (Generic)
 
 
+type FinalAPI =
+  (ToServant Routes AsApi) :<|>
+  "assets" :> StaticAssetRoutes
+
 data Env = Env
   { envRoutes :: Web.Routes
   , envJobTypesRef :: IORef [Text]
   , envJobRunnersRef :: IORef [JobRunnerName]
   }
 
-mkEnv :: (MonadIO m) => Config -> (Link -> Text) -> m Env
+mkEnv :: (MonadIO m) => Config -> (Text -> Text) -> m Env
 mkEnv cfg@Config{..} linksFn = do
   allJobTypes <- fetchAllJobTypes cfg
   allJobRunners <- fetchAllJobRunners cfg
@@ -94,20 +100,36 @@ stopApp :: IO ()
 stopApp = pure ()
 
 
-server :: (MonadIO m)
+server :: forall m . (MonadIO m)
        => Config
        -> Env
        -> (forall a . Handler a -> m a)
-       -> Routes (AsServerT m)
-server cfg env nt = Routes
-  { rFilterResults = nt . (filterResults cfg env)
-  , rStaticAssets = serveDirectoryFileServer "assets"
-  , rEnqueue = nt . (enqueueJob cfg env)
-  , rCancel = nt . (cancelJob cfg env)
-  , rRunNow = nt . (runJobNow cfg env)
-  , rRefreshJobTypes = nt $ refreshJobTypes cfg env
-  , rRefreshJobRunners = nt $ refreshJobRunners cfg env
+       -> ServerT FinalAPI m
+server cfg env nt =
+  (toServant routeServer) :<|> staticAssetServer
+  where
+    routeServer :: Routes (AsServerT m)
+    routeServer = Routes
+      { rFilterResults = nt . (filterResults cfg env)
+      , rEnqueue = nt . (enqueueJob cfg env)
+      , rCancel = nt . (cancelJob cfg env)
+      , rRunNow = nt . (runJobNow cfg env)
+      , rRefreshJobTypes = nt $ refreshJobTypes cfg env
+      , rRefreshJobRunners = nt $ refreshJobRunners cfg env
+      }
+
+server2 :: Config
+        -> Env
+        -> Routes AsServer
+server2 cfg env = Routes
+  { rFilterResults = (filterResults cfg env)
+  , rEnqueue = (enqueueJob cfg env)
+  , rCancel = (cancelJob cfg env)
+  , rRunNow = (runJobNow cfg env)
+  , rRefreshJobTypes = refreshJobTypes cfg env
+  , rRefreshJobRunners = refreshJobRunners cfg env
   }
+
 
 refreshJobRunners :: Config
                   -> Env
@@ -170,20 +192,20 @@ filterResults cfg@Config{cfgJobToHtml, cfgDbPool} Env{..}  mFilter = do
   allJobTypes <- readIORef envJobTypesRef
   let navHtml = Web.sideNav envRoutes allJobTypes [] t filters
       bodyHtml = Web.resultsPanel envRoutes t filters js runningCount
-  pure $ Web.pageLayout navHtml bodyHtml
+  pure $ Web.pageLayout envRoutes navHtml bodyHtml
 
-routes :: (Link -> Text) -> Web.Routes
+routes :: (Text -> Text) -> Web.Routes
 routes linkFn = Web.Routes
   { Web.rFilterResults = rFilterResults
-  , Web.rStaticAssets = Prelude.id
   , Web.rEnqueue = rEnqueue
   , Web.rRunNow = rRunNow
   , Web.rCancel = rCancel
   , Web.rRefreshJobTypes = rRefreshJobTypes
   , Web.rRefreshJobRunners = rRefreshJobRunners
+  , Web.rStaticAsset = linkFn
   }
   where
-    OddJobs.Endpoints.Routes{..} = allFieldLinks' linkFn :: OddJobs.Endpoints.Routes (AsLink Text)
+    OddJobs.Endpoints.Routes{..} = allFieldLinks' (linkFn . toS . show . linkURI) :: OddJobs.Endpoints.Routes (AsLink Text)
 
 -- absText :: Link -> Text
 -- absText l = "/" <> (toS $ show $ linkURI l)

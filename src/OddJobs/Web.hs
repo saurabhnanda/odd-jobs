@@ -85,8 +85,6 @@ blankFilter = Filter
   , filterJobRunner = []
   }
 
-
-
 instance ToJSON OrderDirection
 instance FromJSON OrderDirection
 instance ToJSON OrderByField
@@ -119,12 +117,12 @@ instance ToHttpApiData Filter where
 
 data Routes = Routes
   { rFilterResults :: Maybe Filter -> Text
-  , rStaticAssets :: Text -> Text
   , rEnqueue :: JobId -> Text
   , rRunNow :: JobId -> Text
   , rCancel :: JobId -> Text
   , rRefreshJobTypes :: Text
   , rRefreshJobRunners :: Text
+  , rStaticAsset :: Text -> Text
   }
 
 
@@ -216,11 +214,11 @@ countJobs cfg conn f = do
 
 
 
-pageNav :: Html ()
-pageNav = do
+pageNav :: Routes -> Html ()
+pageNav Routes{..} = do
   div_ $ nav_ [ class_ "navbar navbar-default navigation-clean" ] $ div_ [ class_ "container-fluid" ] $ do
     div_ [ class_ "navbar-header" ] $ do
-      a_ [ class_ "navbar-brand navbar-link", href_ "#", style_ "margin-left: 2px; padding: 0px;" ] $ img_ [ src_ "/assets/odd-jobs-color-logo.png", title_ "Odd Jobs Logo" ]
+      a_ [ class_ "navbar-brand navbar-link", href_ "#", style_ "margin-left: 2px; padding: 0px;" ] $ img_ [ src_ $ rStaticAsset "assets/odd-jobs-color-logo.png", title_ "Odd Jobs Logo" ]
       button_ [ class_ "navbar-toggle collapsed", data_ "toggle" "collapse", data_ "target" "#navcol-1" ] $ do
         span_ [ class_ "sr-only" ] $ "Toggle navigation"
         span_ [ class_ "icon-bar" ] $ ""
@@ -239,29 +237,25 @@ pageNav = do
     --       li_ [ role_ "presentation" ] $ a_ [ href_ "#" ] $ "Second Item"
     --       li_ [ role_ "presentation" ] $ a_ [ href_ "#" ] $ "Third Item"
 
-pageLayout :: Html() -> Html () -> Html ()
-pageLayout navHtml bodyHtml = do
+pageLayout :: Routes -> Html() -> Html () -> Html ()
+pageLayout routes@Routes{..} navHtml bodyHtml = do
   doctype_
   html_ $ do
     head_ $ do
       meta_ [ charset_ "utf-8" ]
       meta_ [ name_ "viewport", content_ "width=device-width, initial-scale=1.0" ]
       title_ "haskell-pg-queue"
-      link_ [ rel_ "stylesheet", href_ "assets/bootstrap/css/bootstrap.min.css" ]
-      link_ [ rel_ "stylesheet", href_ "https://fonts.googleapis.com/css?family=Lato:100i,300,300i,400,700,900" ]
-      -- link_ [ rel_ "stylesheet", href_ "assets/css/logo-slider.css" ]
-      -- link_ [ rel_ "stylesheet", href_ "assets/css/Navigation-Clean1.css" ]
-      link_ [ rel_ "stylesheet", href_ "assets/css/styles.css" ]
+      link_ [ rel_ "stylesheet", href_ $ rStaticAsset "assets/bootstrap/css/bootstrap.min.css" ]
+      link_ [ rel_ "stylesheet", href_ $ rStaticAsset "https://fonts.googleapis.com/css?family=Lato:100i,300,300i,400,700,900" ]
+      link_ [ rel_ "stylesheet", href_ $ rStaticAsset "assets/css/styles.css" ]
     body_ $ do
-      pageNav
+      pageNav routes
       div_ $ div_ [ class_ "container-fluid", style_ "/*background-color:#f2f2f2;*/" ] $ div_ [ class_ "row" ] $ do
         div_ [ class_ "d-none d-md-block col-md-2" ] navHtml
         div_ [ class_ "col-12 col-md-10" ] bodyHtml
-      script_ [ src_ "assets/js/jquery.min.js" ] $ ("" :: Text)
-      script_ [ src_ "assets/bootstrap/js/bootstrap.min.js" ] $ ("" :: Text)
-      script_ [ src_ "assets/js/custom.js" ] $ ("" :: Text)
-      -- script_ [ src_ "https://cdnjs.cloudflare.com/ajax/libs/slick-carousel/1.6.0/slick.js" ] $ ("" :: Text)
-      -- script_ [ src_ "assets/js/logo-slider.js" ] $ ("" :: Text)
+      script_ [ src_ $ rStaticAsset "assets/js/jquery.min.js" ] $ ("" :: Text)
+      script_ [ src_ $ rStaticAsset "assets/bootstrap/js/bootstrap.min.js" ] $ ("" :: Text)
+      script_ [ src_ $ rStaticAsset "assets/js/custom.js" ] $ ("" :: Text)
 
 sideNav :: Routes -> [Text] -> [JobRunnerName] -> UTCTime -> Filter -> Html ()
 sideNav Routes{..} jobTypes jobRunnerNames t filter@Filter{..} = do
