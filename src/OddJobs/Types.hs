@@ -60,14 +60,37 @@ data LogEvent
   | LogJobFailed !Job !SomeException !FailureMode !NominalDiffTime
   -- | Emitted when a job times out and is picked-up again for execution
   | LogJobTimeout !Job
-  -- | Emitted whenever 'jobPoller' polls the DB table
+  -- | Emitted whenever 'OddJobs.Job.jobPoller' polls the DB table
   | LogPoll
   -- | Emitted whenever any other event occurs
   | LogText !Text
   deriving (Show, Generic)
 
-data FailureMode = FailWithRetry | FailPermanent deriving (Eq, Show)
+-- | Used by 'JobErrHandler' and 'LogEvent' to indicate the nature of failure.
+data FailureMode
+  -- The job failed, but will be retried in the future.
+  = FailWithRetry
+  -- | The job failed and will no longer be retried (probably because it has
+  -- been tried 'cfgDefaultMaxAttempts' times already).
+  | FailPermanent deriving (Eq, Show)
 
+-- | Exception handler for jobs. This is conceptually very similar to how
+-- 'Control.Exception.Handler' and 'Control.Exception.catches' (from
+-- 'Control.Exception') work in-tandem. Using 'cfgOnJobFailed' you can install
+-- /multiple/ exception handlers, where each handler is responsible for one type
+-- of exception. OddJobs will execute the correct exception handler on the basis
+-- of the type of runtime exception raised. For example:
+--
+-- @
+-- cfgOnJobFailed =
+--   [ JobErrHandler $ \(e :: HttpException) job failMode -> ...
+--   , JobErrHandler $ \(e :: SqlException) job failMode -> ...
+--   , JobErrHandler $ \(e :: ) job failMode -> ...
+--   ]
+-- @
+--
+-- __TODO:__ Link-off to tutorial on how to use this to install airbrake
+-- notifier.
 data JobErrHandler a = forall e . (Exception e) => JobErrHandler (e -> Job -> FailureMode -> IO a)
 
 data ConcurrencyControl
@@ -96,12 +119,25 @@ instance Show ConcurrencyControl where
 
 type JobId = Int
 
-data Status = Success
-            | Queued
-            | Failed
-            | Retry
-            | Locked
-            deriving (Eq, Show, Generic, Enum, Bounded)
+data Status
+  -- | In the current version of odd-jobs you /should not/ find any jobs having
+  -- the 'Success' status, because successful jobs are immediately deleted.
+  -- However, in the future, we may keep them around for a certain time-period
+  -- before removing them from the jobs table.
+  = Success
+  -- | Jobs in 'Queued' status /may/ be picked up by the job-runner on the basis
+  -- of the 'jobRunAt' field.
+  | Queued
+  -- | Jobs in 'Failed' status will will not be retried by the job-runner.
+  | Failed
+  -- | Jobs in 'Retry' status will be retried by the job-runner on the basis of
+  -- the 'jobRunAt' field.
+  | Retry
+  -- | Jobs in 'Locked' status are currently being executed by a job-runner,
+  -- which is identified by the 'jobLockedBy' field. The start of job-execution
+  -- is indicated by the 'jobLocketAt' field.
+  | Locked
+  deriving (Eq, Show, Generic, Enum, Bounded)
 
 instance Ord Status where
   compare x y = compare (toText x) (toText y)
@@ -174,27 +210,40 @@ instance FromRow Job where
 -- completed failed.
 type JobRunner = Job -> IO ()
 
+-- | The web\/admin UI needs to know a \"master list\" of all job-types to be
+-- able to power the \"filter by job-type\" feature. This data-type helps in
+-- letting odd-jobs know /how/ to get such a master-list. The function specified
+-- by this type is run once when the job-runner starts (and stored in an
+-- internal @IORef@). After that the list of job-types needs to be updated
+-- manually by pressing the appropriate \"refresh\" link in the admin\/web UI.
 data AllJobTypes
+  -- | A fixed-list of job-types. If you don't want to increase boilerplate,
+  -- consider using 'OddJobs.ConfigBuilder.defaultConstantJobTypes' which will
+  -- automatically generate the list of available job-types based on a sum-type
+  -- that represents your job payload.
   = AJTFixed [Text]
+  -- | Construct the list of job-types dynamically by looking at the actual
+  -- payloads in 'cfgTableName' (using an SQL query).
   | AJTSql (Connection -> IO [Text])
+  -- | A custom 'IO' action for fetching the list of job-types.
   | AJTCustom (IO [Text])
-
-
-
 
 -- | While odd-jobs is highly configurable and the 'Config' data-type might seem
 -- daunting at first, it is not necessary to tweak every single configuration
--- parameter by hand. Please start-off by using the sensible defaults provided
--- by the [configuration helpers](#configHelpers), and tweaking
--- config parameters on a case-by-case basis.
+-- parameter by hand.
+--
+-- __Recommendation:__ Please start-off by building a 'Config' by using the
+-- 'OddJobs.ConfigBuilder.mkConfig' function (to get something with sensible
+-- defaults) and then tweaking config parameters on a case-by-case basis.
 data Config = Config
   { -- | The DB table which holds your jobs. Please note, this should have been
     -- created by the 'OddJobs.Migrations.createJobTable' function.
     cfgTableName :: TableName
 
-    -- | The actualy "job-runner" that __you__ need to provide. Please look at
-    -- the examples/tutorials if your applicaton's code is not in the @IO@
-    -- monad.
+    -- | The actualy "job-runner" that __you__ need to provide. If this function
+    -- throws a runtime exception, the job will be retried
+    -- 'cfgDefaultMaxAttempts' times. Please look at the examples/tutorials if
+    -- your applicaton's code is not in the @IO@ monad.
   , cfgJobRunner :: Job -> IO ()
 
     -- | The number of times a failing job is retried before it is considered is
@@ -227,10 +276,9 @@ data Config = Config
   -- | User-defined callback function that is called whenever a job succeeds.
   , cfgOnJobSuccess :: Job -> IO ()
 
-  -- | User-defined callback function that is called whenever a job fails. This
-  -- does not indicate permanent failure and means the job will be retried. It
-  -- is a good idea to log the failures to Airbrake, NewRelic, Sentry, or some
-  -- other error monitoring tool.
+  -- | User-defined error-handler that is called whenever a job fails (indicated
+  -- by 'cfgJobRunner' throwing an unhandled runtime exception). Please refer to
+  -- 'JobErrHandler' for documentation on how to use this.
   , cfgOnJobFailed :: forall a . [JobErrHandler a]
 
   -- | User-defined callback function that is called whenever a job starts
@@ -252,8 +300,18 @@ data Config = Config
   -- 'cffJobType' and 'defaultLogStr'
   , cfgLogger :: LogLevel -> LogEvent -> IO ()
 
-  -- | How to extract the "job type" from a 'Job'. Related: 'defaultJobType'
+  -- | How to extract the "job type" from a 'Job'. If you are overriding this,
+  -- please consider overriding 'cfgJobTypeSql' as well. Related:
+  -- 'OddJobs.ConfigBuilder.defaultJobType'
   , cfgJobType :: Job -> Text
+
+    -- | How to extract the \"job type\" directly in SQL. There are many places,
+    -- especially in the web\/admin UI, where we need to know a job's type
+    -- directly in SQL (because transferrring the entire @payload@ column to
+    -- Haskell, and then parsing it into JSON, and then applying the
+    -- 'cfgJobType' function on it would be too inefficient). Ref:
+    -- 'OddJobs.ConfigBuilder.defaultJobTypeSql' and 'cfgJobType'
+  , cfgJobTypeSql :: PGS.Query
 
     -- | How long can a job run after which it is considered to be "crashed" and
     -- picked up for execution again
@@ -261,15 +319,16 @@ data Config = Config
 
     -- | How to convert a list of 'Job's to a list of HTML fragments. This is
     -- used in the Web\/Admin UI. This function accepts a /list/ of jobs and
-    -- returns a /list/ of 'Html' fragments is because, in case, you need to
-    -- query another table to fetch some metadata (eg. convert a primary-key to
-    -- a human-readable name), you can do it efficiently instead of resulting in
-    -- an N+1 SQL bug. Ref: defaultJobToHtml
+    -- returns a /list/ of 'Html' fragments, because, in case, you need to query
+    -- another table to fetch some metadata (eg. convert a primary-key to a
+    -- human-readable name), you can do it efficiently instead of resulting in
+    -- an N+1 SQL bug. Ref: 'defaultJobToHtml'
   , cfgJobToHtml :: [Job] -> IO [Html ()]
 
-    -- | How to get a list of all known job-types?
+    -- | How to get a list of all known job-types? This is used by the
+    -- Web\/Admin UI to power the \"filter by job-type\" functionality. The
+    -- default value for this is 'OddJobs.ConfigBuilder.defaultDynamicJobTypes'
+    -- which does a @SELECT DISTINCT payload ->> ...@ to get a list of job-types
+    -- directly from the DB.
   , cfgAllJobTypes :: AllJobTypes
-
-    -- | TODO
-  , cfgJobTypeSql :: PGS.Query
   }

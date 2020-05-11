@@ -31,6 +31,9 @@ module OddJobs.Job
   , TableName
   , delaySeconds
   , Seconds(..)
+  , JobErrHandler(..)
+  , AllJobTypes(..)
+
   -- ** Structured logging
   --
   -- $logging
@@ -50,15 +53,15 @@ module OddJobs.Job
   -- * Database helpers
   --
   -- $dbHelpers
-  , findJobById
   , findJobByIdIO
-  , saveJob
   , saveJobIO
   , runJobNowIO
   , unlockJobIO
   , cancelJobIO
   , jobDbColumns
   , concatJobDbColumns
+  , fetchAllJobTypes
+  , fetchAllJobRunners
 
   -- * JSON helpers
   --
@@ -67,11 +70,6 @@ module OddJobs.Job
   , throwParsePayload
   , eitherParsePayloadWith
   , throwParsePayloadWith
-
-  , JobErrHandler(..)
-  , AllJobTypes(..)
-  , fetchAllJobTypes
-  , fetchAllJobRunners
   )
 where
 
@@ -147,20 +145,15 @@ class (MonadUnliftIO m, MonadBaseControl IO m) => HasJobRunner m where
 
 -- $logging
 --
--- TODO: Complete the prose here
-
-
-
-
-
-
-
--- $configHelpers
+-- OddJobs uses \"structured logging\" for important events that occur during
+-- the life-cycle of a job-runner. This is useful if you're using JSON\/XML for
+-- aggegating logs of your entire application to something like Kibana, AWS
+-- CloudFront, GCP StackDriver Logging, etc.
 --
--- #configHelpers#
-
-
-
+-- If you're not interested in using structured logging, look at
+-- 'OddJobs.ConfigBuilder.defaultLogStr' to output plain-text logs (or you can
+-- write your own function, as well).
+--
 
 
 data RunnerEnv = RunnerEnv
@@ -219,6 +212,12 @@ jobWorkerName = do
   hname <- getHostName
   pure $ hname ++ ":" ++ (show pid)
 
+-- | If you are writing SQL queries where you want to return ALL columns from
+-- the jobs table it is __recommended__ that you do not issue a @SELECT *@ or
+-- @RETURNIG *@. List out specific DB columns using 'jobDbColumns' and
+-- 'concatJobDbColumns' instead. This will insulate you from runtime errors
+-- caused by addition of new columns to 'cfgTableName' in future versions of
+-- OddJobs.
 jobDbColumns :: (IsString s, Semigroup s) => [s]
 jobDbColumns =
   [ "id"
@@ -232,6 +231,11 @@ jobDbColumns =
   , "locked_at"
   , "locked_by"
   ]
+
+-- | All 'jobDbColumns' joined together with commas. Useful for constructing SQL
+-- queries, eg:
+--
+-- @'query_' conn $ "SELECT " <> concatJobDbColumns <> "FROM jobs"@
 
 concatJobDbColumns :: (IsString s, Semigroup s) => s
 concatJobDbColumns = concatJobDbColumns_ jobDbColumns ""
@@ -250,6 +254,18 @@ withDbConnection :: (HasJobRunner m)
 withDbConnection action = do
   pool <- getDbPool
   withResource pool action
+
+--
+-- $dbHelpers
+--
+-- A bunch of functions that help you query 'cfgTableName' and change the status
+-- of individual jobs. Most of these functions are in @IO@ and you /might/ want
+-- to write wrappers that lift them into you application's custom monad.
+--
+-- __Note:__ When passing a 'Connection' to these function, it is
+-- __recommended__ __to not__ take a connection from 'cfgDbPool'. Use your
+-- application\'s database pool instead.
+--
 
 findJobById :: (HasJobRunner m)
             => JobId
@@ -647,7 +663,8 @@ throwParsePayloadWith parser job =
   either throwString (pure . Prelude.id) (eitherParsePayloadWith parser job)
 
 
-
+-- | Used by the web\/admin UI to fetch a \"master list\" of all known
+-- job-types. Ref: 'cfgAllJobTypes'
 fetchAllJobTypes :: (MonadIO m)
                  => Config
                  -> m [Text]
@@ -657,6 +674,12 @@ fetchAllJobTypes Config{cfgAllJobTypes, cfgDbPool} = liftIO $ do
     AJTSql fn -> withResource cfgDbPool fn
     AJTCustom fn -> fn
 
+-- | Used by web\/admin IO to fetch a \"master list\" of all known job-runners.
+-- There is a known issue with the way this has been implemented:
+--
+--   * Since this looks at the 'jobLockedBy' column of 'cfgTableName', it will
+--     discover only those job-runners that are actively executing at least one
+--     job at the time this function is executed.
 fetchAllJobRunners :: (MonadIO m)
                    => Config
                    -> m [JobRunnerName]

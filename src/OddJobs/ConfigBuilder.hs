@@ -31,6 +31,8 @@ import qualified System.Log.FastLogger as FLogger
 --
 -- It makes a few __important assumptions__ about your 'jobPayload 'JSON, which
 -- are documented in 'defaultJobType'.
+--
+-- TODO: Link-off to tutorial.
 mkConfig :: (LogLevel -> LogEvent -> IO ())
          -- ^ "Structured logging" function. Ref: 'cfgLogger'
          -> TableName
@@ -42,15 +44,15 @@ mkConfig :: (LogLevel -> LogEvent -> IO ())
          -> (Job -> IO ())
          -- ^ The actual "job runner" which contains your application code. Ref: 'cfgJobRunner'
          -> (Config -> Config)
-         -- ^ A function that allows you to modify the "interim config". The
-         -- "interim config" will cotains a bunch of in-built default values,
-         -- along with the table-name, db-pool, job-runner, etc) that you have
-         -- just provided. You can use this function to override the in-built
-         -- default values. If you do not wish to modify the "interim config"
-         -- just pass 'Prelude.id' as an argument to this parameter. __Note:__
-         -- it is stronly recommended that you __do not__ modify the generated
-         -- 'Config' outside of this function, unless you know what you're
-         -- doing.
+         -- ^ A function that allows you to modify the \"interim config\". The
+         -- \"interim config\" will cotain a bunch of in-built default config
+         -- params, along with the config params that you\'ve just provided
+         -- (i.e. logging function, table name, DB pool, etc). You can use this
+         -- function to override values in the \"interim config\". If you do not
+         -- wish to modify the \"interim config\" just pass 'Prelude.id' as an
+         -- argument to this parameter. __Note:__ it is strongly recommended
+         -- that you __do not__ modify the generated 'Config' outside of this
+         -- function, unless you know what you're doing.
          -> Config
          -- ^ The final 'Config' that can be used to start various job-runners
 mkConfig logger tname dbpool ccControl jrunner configOverridesFn =
@@ -77,7 +79,7 @@ mkConfig logger tname dbpool ccControl jrunner configOverridesFn =
 
 
 
-  -- TODO; Should the library be doing this?
+-- | TODO; Should the library be doing this?
 defaultLogStr :: (Job -> Text)
               -> LogLevel
               -> LogEvent
