@@ -3,8 +3,7 @@
 
 module OddJobs.ConfigBuilder where
 
-import OddJobs.Types hiding (Config(..))
-import qualified OddJobs.Types as Types (Config(..))
+import OddJobs.Types
 import Database.PostgreSQL.Simple as PGS
 import Data.Pool
 import Control.Monad.Logger (LogLevel(..), LogStr(..), toLogStr)
@@ -26,158 +25,57 @@ import UnliftIO (MonadUnliftIO, withRunInIO, bracket, liftIO)
 import qualified System.Log.FastLogger as FLogger
 
 
--- | While odd-jobs is highly configurable and the 'Config' data-type might seem
--- daunting at first, it is not necessary to tweak every single configuration
--- parameter by hand. Please start-off by using the sensible defaults provided
--- by the [configuration helpers](#configHelpers), and tweaking
--- config parameters on a case-by-case basis.
-data ConfigBuilder = ConfigBuilder
-  { -- | The DB table which holds your jobs. Please note, this should have been
-    -- created by the 'OddJobs.Migrations.createJobTable' function.
-    cfgTableName :: TableName
-
-    -- | The actualy "job-runner" that __you__ need to provide. Please look at
-    -- the examples/tutorials if your applicaton's code is not in the @IO@
-    -- monad.
-  , cfgJobRunner :: Job -> IO ()
-
-    -- | The number of times a failing job is retried before it is considered is
-    -- "permanently failed" and ignored by the job-runner. This config parameter
-    -- is called "/default/ max attempts" because, in the future, it would be
-    -- possible to specify the number of retry-attemps on a per-job basis
-    -- (__Note:__ per-job retry-attempts has not been implemented yet)
-  , cfgDefaultMaxAttempts :: Maybe Int
-
-    -- | Controls how many jobs can be run concurrently by /this instance/ of
-    -- the job-runner. __Please note,__ this is NOT the global concurrency of
-    -- entire job-queue. It is possible to have job-runners running on multiple
-    -- machines, and each will apply the concurrency control independnt of other
-    -- job-runners. TODO: Link-off to relevant section in the tutorial.
-  , cfgConcurrencyControl :: ConcurrencyControl
-
-    -- | The DB connection-pool to use for the job-runner. __Note:__ in case
-    -- your jobs require a DB connection, please create a separate
-    -- connection-pool for them. This pool will be used ONLY for monitoring jobs
-    -- and changing their status. We need to have __at least 4 connections__ in
-    -- this connection-pool for the job-runner to work as expected. (TODO:
-    -- Link-off to tutorial)
-  , cfgDbPool :: Pool Connection
-
-    -- | How frequently should the 'jobPoller' check for jobs where the Job's
-    -- 'jobRunAt' field indicates that it's time for the job to be executed.
-    -- TODO: link-off to the tutorial.
-  , cfgPollingInterval :: Maybe Seconds
-
-  -- | User-defined callback function that is called whenever a job succeeds.
-  , cfgOnJobSuccess :: Maybe (Job -> IO ())
-
-  -- | User-defined callback function that is called whenever a job fails. This
-  -- does not indicate permanent failure and means the job will be retried. It
-  -- is a good idea to log the failures to Airbrake, NewRelic, Sentry, or some
-  -- other error monitoring tool.
-  , cfgOnJobFailed :: forall a . [JobErrHandler a]
-
-  -- | User-defined callback function that is called whenever a job starts
-  -- execution.
-  , cfgOnJobStart :: Maybe (Job -> IO ())
-
-  -- | User-defined callback function that is called whenever a job times-out.
-  -- Also check 'cfgDefaultJobTimeout'
-  , cfgOnJobTimeout :: Maybe (Job -> IO ())
-
-  -- | File to store the PID of the job-runner process. This is used only when
-  -- invoking the job-runner as an independent background deemon (the usual mode
-  -- of deployment). (TODO: Link-off to tutorial).
-  , cfgPidFile :: Maybe FilePath
-
-  -- | A "structured logging" function that __you__ need to provide. The
-  -- @odd-jobs@ library does NOT use the standard logging interface provided by
-  -- 'monad-logger' on purpose. TODO: link-off to tutorial. Also look at
-  -- 'cffJobType' and 'defaultLogStr'
-  , cfgLogger :: (LogLevel -> LogEvent -> IO ())
-
-  -- | How to extract the "job type" from a 'Job'. Related: 'defaultJobType'
-  , cfgJobType :: Maybe (Job -> Text)
-
-    -- | How long can a job run after which it is considered to be "crashed" and
-    -- picked up for execution again
-  , cfgDefaultJobTimeout :: Maybe Seconds
-
-    -- | How to convert a list of 'Job's to a list of HTML fragments. This is
-    -- used in the Web\/Admin UI. This function accepts a /list/ of jobs and
-    -- returns a /list/ of 'Html' fragments is because, in case, you need to
-    -- query another table to fetch some metadata (eg. convert a primary-key to
-    -- a human-readable name), you can do it efficiently instead of resulting in
-    -- an N+1 SQL bug. Ref: defaultJobToHtml
-  , cfgJobToHtml :: Maybe ([Job] -> IO [Html ()])
-
-    -- | How to get a list of all known job-types?
-  , cfgAllJobTypes :: Maybe AllJobTypes
-
-    -- | TODO
-  , cfgJobTypeSql :: Maybe PGS.Query
-  }
-
 -- | This function gives you a 'Config' with a bunch of sensible defaults
--- already applied. It requies the bare minimum arguments that this library
--- cannot assume on your behalf.
+-- already applied. It requires the bare minimum configuration parameters that
+-- this library cannot assume on your behalf.
 --
 -- It makes a few __important assumptions__ about your 'jobPayload 'JSON, which
 -- are documented in 'defaultJobType'.
-defaultConfigBuilder :: (LogLevel -> LogEvent -> IO ())
-                     -- ^ "Structured logging" function. Ref: 'cfgLogger'
-                     -> TableName
-                     -- ^ DB table which holds your jobs. Ref: 'cfgTableName'
-                     -> Pool Connection
-                     -- ^ DB connection-pool to be used by job-runner. Ref: 'cfgDbPool'
-                     -> ConcurrencyControl
-                     -- ^ Concurrency configuration. Ref: 'cfgConcurrencyControl'
-                     -> (Job -> IO ())
-                     -- ^ The actual "job runner" which contains your application code. Ref: 'cfgJobRunner'
-                     -> ConfigBuilder
-defaultConfigBuilder logger tname dbpool ccControl jrunner = ConfigBuilder
-  { cfgPollingInterval = Nothing
-  , cfgOnJobSuccess = Nothing
-  , cfgOnJobFailed = []
-  , cfgJobRunner = jrunner
-  , cfgLogger = logger
-  , cfgDbPool = dbpool
-  , cfgOnJobStart = Nothing
-  , cfgDefaultMaxAttempts = Nothing
-  , cfgTableName = tname
-  , cfgOnJobTimeout = Nothing
-  , cfgConcurrencyControl = ccControl
-  , cfgPidFile = Nothing
-  , cfgJobType = Nothing
-  , cfgDefaultJobTimeout = Nothing
-  , cfgJobToHtml = Nothing
-  , cfgAllJobTypes = Nothing
-  , cfgJobTypeSql = Nothing
-  }
-
-finalizeConfig :: ConfigBuilder
-               -> Types.Config
-finalizeConfig cb =
-  let cfg = Types.Config
-            { Types.cfgPollingInterval = fromMaybe defaultPollingInterval $ cfgPollingInterval cb
-            , Types.cfgOnJobSuccess = fromMaybe (const $ pure ()) $ cfgOnJobSuccess cb
-            , Types.cfgOnJobFailed = cfgOnJobFailed cb
-            , Types.cfgJobRunner = cfgJobRunner cb
-            , Types.cfgLogger = cfgLogger cb
-            , Types.cfgDbPool = cfgDbPool cb
-            , Types.cfgOnJobStart = fromMaybe (const $ pure ()) $ cfgOnJobStart cb
-            , Types.cfgDefaultMaxAttempts = fromMaybe 10 $ cfgDefaultMaxAttempts cb
-            , Types.cfgTableName = cfgTableName cb
-            , Types.cfgOnJobTimeout = fromMaybe (const $ pure ()) $ cfgOnJobTimeout cb
-            , Types.cfgConcurrencyControl = cfgConcurrencyControl cb
-            , Types.cfgPidFile = cfgPidFile cb
-            , Types.cfgJobType = fromMaybe defaultJobType $ cfgJobType cb
-            , Types.cfgDefaultJobTimeout = fromMaybe (Seconds 600) $ cfgDefaultJobTimeout cb
-            , Types.cfgJobToHtml = fromMaybe (defaultJobToHtml (Types.cfgJobType cfg)) $ cfgJobToHtml cb
-            , Types.cfgAllJobTypes = fromMaybe (defaultDynamicJobTypes (Types.cfgTableName cfg) (Types.cfgJobTypeSql cfg)) $ cfgAllJobTypes cb
-            , Types.cfgJobTypeSql = fromMaybe defaultJobTypeSql $ cfgJobTypeSql cb
+mkConfig :: (LogLevel -> LogEvent -> IO ())
+         -- ^ "Structured logging" function. Ref: 'cfgLogger'
+         -> TableName
+         -- ^ DB table which holds your jobs. Ref: 'cfgTableName'
+         -> Pool Connection
+         -- ^ DB connection-pool to be used by job-runner. Ref: 'cfgDbPool'
+         -> ConcurrencyControl
+         -- ^ Concurrency configuration. Ref: 'cfgConcurrencyControl'
+         -> (Job -> IO ())
+         -- ^ The actual "job runner" which contains your application code. Ref: 'cfgJobRunner'
+         -> (Config -> Config)
+         -- ^ A function that allows you to modify the "interim config". The
+         -- "interim config" will cotains a bunch of in-built default values,
+         -- along with the table-name, db-pool, job-runner, etc) that you have
+         -- just provided. You can use this function to override the in-built
+         -- default values. If you do not wish to modify the "interim config"
+         -- just pass 'Prelude.id' as an argument to this parameter. __Note:__
+         -- it is stronly recommended that you __do not__ modify the generated
+         -- 'Config' outside of this function, unless you know what you're
+         -- doing.
+         -> Config
+         -- ^ The final 'Config' that can be used to start various job-runners
+mkConfig logger tname dbpool ccControl jrunner configOverridesFn =
+  let cfg = configOverridesFn $ Config
+            { cfgPollingInterval = defaultPollingInterval
+            , cfgOnJobSuccess = (const $ pure ())
+            , cfgOnJobFailed = []
+            , cfgJobRunner = jrunner
+            , cfgLogger = logger
+            , cfgDbPool = dbpool
+            , cfgOnJobStart = (const $ pure ())
+            , cfgDefaultMaxAttempts = 10
+            , cfgTableName = tname
+            , cfgOnJobTimeout = (const $ pure ())
+            , cfgConcurrencyControl = ccControl
+            , cfgPidFile = Nothing
+            , cfgJobType = defaultJobType
+            , cfgDefaultJobTimeout = Seconds 600
+            , cfgJobToHtml = defaultJobToHtml (cfgJobType cfg)
+            , cfgAllJobTypes = (defaultDynamicJobTypes (cfgTableName cfg) (cfgJobTypeSql cfg))
+            , cfgJobTypeSql = defaultJobTypeSql
             }
   in cfg
+
+
 
   -- TODO; Should the library be doing this?
 defaultLogStr :: (Job -> Text)
@@ -360,4 +258,3 @@ defaultTimedLogger logger logStrFn logLevel logEvent =
   else logger $ \t -> (toLogStr t) <> " | " <>
                       (logStrFn logLevel logEvent) <>
                       "\n"
-

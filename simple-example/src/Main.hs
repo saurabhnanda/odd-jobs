@@ -6,8 +6,8 @@
 
 module Main where
 
-import OddJobs.Job ( Job(..), defaultConfig, ConcurrencyControl(..), withConnectionPool, Config(..)
-                   , throwParsePayload, defaultTimedLogger, defaultLogStr, defaultJobToText, defaultJobType )
+import OddJobs.Job (Job(..),  ConcurrencyControl(..), Config(..), throwParsePayload)
+import OddJobs.ConfigBuilder (mkConfig, withConnectionPool, defaultTimedLogger, defaultLogStr, defaultJobToText, defaultJobType)
 import OddJobs.Cli (defaultMain)
 -- import Control.Monad.Logger(defaultLogStr, LogLevel(..))
 import System.Log.FastLogger(withTimedFastLogger, LogType'(..), defaultBufSize)
@@ -47,5 +47,5 @@ main = do
         tcache <- newTimeCache simpleTimeFormat
         withTimedFastLogger tcache (LogFileNoRotate "oddjobs.log" defaultBufSize) $ \logger -> do
           let jobLogger = defaultTimedLogger logger (defaultLogStr (defaultJobToText defaultJobType))
-              jm = defaultConfig jobLogger "jobs_aqgrqtaowi" dbPool (MaxConcurrentJobs 50) myJobRunner
-          callback jm
+              cfg = mkConfig jobLogger "jobs_aqgrqtaowi" dbPool (MaxConcurrentJobs 50) myJobRunner Prelude.id
+          callback cfg
