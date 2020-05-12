@@ -71,6 +71,7 @@ dependencies:
   - directory
   - generic-deriving
   - servant-static-th
+  - wai
 
 library:
   source-dirs:
@@ -95,6 +96,16 @@ executables:
       - -with-rtsopts=-N
     dependencies:
       - foreign-store
+      - odd-jobs
+
+  simple-example:
+    main: Main
+    source-dirs:
+      - simple-example/src
+    ghc-options:
+      - -threaded
+      - -with-rtsopts=-N
+    dependencies:
       - odd-jobs
 
 tests:

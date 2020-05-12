@@ -1,4 +1,7 @@
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE PartialTypeSignatures #-}
+{-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE DataKinds #-}
 module OddJobs.Cli where
 
 import Options.Applicative as Opts
@@ -13,7 +16,13 @@ import System.Environment (getProgName)
 import OddJobs.Types (Seconds(..), delaySeconds)
 import qualified System.Posix.Signals as Sig
 import qualified UnliftIO.Async as Async
-
+import qualified OddJobs.Endpoints as UI
+import Servant.Server as Servant
+import Servant.API
+import Data.Proxy
+import Data.Text.Encoding (decodeUtf8)
+import Network.Wai.Handler.Warp as Warp
+import Debug.Trace
 
 -- * Introduction
 --
@@ -95,15 +104,16 @@ defaultStartCommand :: StartArgs
                     -- ^ the same callback-within-callback function described in
                     -- 'defaultMain'
                     -> IO ()
-defaultStartCommand StartArgs{..} startFn = do
+defaultStartCommand args@StartArgs{..} startFn = do
   progName <- getProgName
   case startDaemonize of
     False -> do
-      startFn startJobRunner
+      startFn coreStartupFn
     True -> do
       (Dir.doesPathExist startPidFile) >>= \case
         True -> do
-          putStrLn $ "PID file already exists. Please check if " <> progName <> " is still running in the background." <>
+          putStrLn $
+            "PID file already exists. Please check if " <> progName <> " is still running in the background." <>
             " If not, you can safely delete this file and start " <> progName <> " again: " <> startPidFile
           Exit.exitWith (Exit.ExitFailure 1)
         False -> do
@@ -111,7 +121,32 @@ defaultStartCommand StartArgs{..} startFn = do
             pid <- getProcessID
             writeFile startPidFile (show pid)
             putStrLn $ "Started " <> progName <> " in background with PID=" <> show pid <> ". PID written to " <> startPidFile
-            startFn $ \jm -> startJobRunner jm{cfgPidFile = Just startPidFile}
+            startFn $ \cfg -> coreStartupFn cfg{cfgPidFile = Just startPidFile}
+  where
+    coreStartupFn cfg = do
+      Async.withAsync (defaultWebUi args cfg) $ \_ -> do
+        startJobRunner cfg
+
+
+defaultWebUi :: StartArgs
+             -> Config
+             -> IO ()
+defaultWebUi StartArgs{..} cfg@Config{..} = do
+  env <- UI.mkEnv cfg ("/" <>)
+  case startWebUiAuth of
+    Nothing -> pure ()
+    Just AuthNone ->
+      let app = UI.server cfg env Prelude.id
+      in Warp.run startWebUiPort $
+         Servant.serve (Proxy :: Proxy UI.FinalAPI) app
+    Just (AuthBasic u p) ->
+      let api = Proxy :: Proxy (BasicAuth "OddJobs Admin UI" OddJobsUser :> UI.FinalAPI)
+          ctx = defaultBasicAuth (u, p) :. EmptyContext
+          -- Now the app will receive an extra argument for OddJobsUser,
+          -- which we aren't really interested in.
+          app _ = UI.server cfg env Prelude.id
+      in Warp.run startWebUiPort $
+         Servant.serveWithContext api ctx app
 
 {-| Used by 'defaultMain' if 'Stop' command is issued via the CLI. Sends a
 @SIGINT@ signal to the process indicated by 'shutPidFile'. Waits for a maximum
@@ -191,8 +226,10 @@ commandParser = hsubparser
 -- | @start@ command is parsed into this data-structure by 'startParser'
 data StartArgs = StartArgs
   {
-    -- | Switch to enable/disable the web UI (the web UI is still WIP)
-    startWebUiEnable :: !Bool
+    -- | Switch to enable/disable the web UI
+    startWebUiAuth :: !(Maybe WebUiAuth)
+    -- | Port on which the web UI will run.
+  , startWebUiPort :: !Int
     -- | You'll need to pass the @--daemonize@ switch to fork the job-runner as
     -- a background daemon, else it will keep running as a foreground process.
   , startDaemonize :: !Bool
@@ -202,14 +239,39 @@ data StartArgs = StartArgs
 
 startParser :: Parser Command
 startParser = fmap Start $ StartArgs
-  <$> switch ( long "web-ui-enable" <>
-               help "Please look at other web-ui-* options to configure the Web UI"
-             )
+  <$> webUiAuthParser
+  <*> option auto ( long "web-ui-port" <>
+                    metavar "PORT" <>
+                    value 7777 <>
+                    showDefault <>
+                    help "The port on which the Web UI listens. Please note, to actually enable the Web UI you need to pick one of the available auth schemes"
+                  )
   <*> switch ( long "daemonize" <>
                help "Fork the job-runner as a background daemon. If omitted, the job-runner remains in the foreground."
              )
   <*> pidFileParser
 
+data WebUiAuth
+  = AuthNone
+  | AuthBasic !Text !Text
+  deriving (Eq, Show)
+
+webUiAuthParser :: Parser (Maybe WebUiAuth)
+webUiAuthParser = basicAuthParser <|> noAuthParser <|> (pure Nothing)
+  where
+    basicAuthParser = fmap Just $ AuthBasic
+      <$> strOption ( long "web-ui-basic-auth-user" <>
+                      metavar "USER" <>
+                      help "Username for basic auth"
+                    )
+      <*> strOption ( long "web-ui-basic-auth-password" <>
+                      metavar "PASS" <>
+                      help "Password for basic auth"
+                    )
+    noAuthParser = flag' (Just AuthNone)
+      ( long "web-ui-no-auth" <>
+        help "Start the web UI with any authentication. NOT RECOMMENDED."
+      )
 
 -- ** Stop command
 
@@ -274,3 +336,16 @@ defaultDaemonOptions = DaemonOptions
   }
 
 
+-- ** Auth implementations for the default Web UI
+
+-- *** Basic Auth
+
+data OddJobsUser = OddJobsUser !Text !Text deriving (Eq, Show)
+
+defaultBasicAuth :: (Text, Text) -> BasicAuthCheck OddJobsUser
+defaultBasicAuth (user, pass) = BasicAuthCheck $ \b ->
+  let u = decodeUtf8 (basicAuthUsername b)
+      p = decodeUtf8 (basicAuthPassword b)
+  in if u==user && p==pass
+     then pure (Authorized $ OddJobsUser u p)
+     else pure BadPassword

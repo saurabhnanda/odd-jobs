@@ -244,9 +244,9 @@ withConnectionPool connConfig action = withRunInIO $ \runInIO -> do
     poolCreator = liftIO $
       case connConfig of
         Left connString ->
-          createPool (PGS.connectPostgreSQL connString) PGS.close 1 (fromIntegral $ 2 * (unSeconds defaultPollingInterval)) 5
+          createPool (PGS.connectPostgreSQL connString) PGS.close 1 (fromIntegral $ 2 * (unSeconds defaultPollingInterval)) 8
         Right connInfo ->
-          createPool (PGS.connect connInfo) PGS.close 1 (fromIntegral $ 2 * (unSeconds defaultPollingInterval)) 5
+          createPool (PGS.connect connInfo) PGS.close 1 (fromIntegral $ 2 * (unSeconds defaultPollingInterval)) 8
 
 -- | TODO: Should the library be doing this?
 defaultTimedLogger :: FLogger.TimedFastLogger

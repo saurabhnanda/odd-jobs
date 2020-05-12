@@ -137,7 +137,7 @@ refreshJobRunners :: Config
 refreshJobRunners cfg@Config{..} Env{envRoutes=Web.Routes{..}, envJobRunnersRef} = do
   allJobRunners <- fetchAllJobRunners cfg
   atomicModifyIORef' envJobRunnersRef (\_ -> (allJobRunners, ()))
-  throwError $ err301{errHeaders=[("Location", toS $ rFilterResults Nothing)]}
+  throwError $ err302{errHeaders=[("Location", toS $ rFilterResults Nothing)]}
 
 refreshJobTypes :: Config
                 -> Env
@@ -145,7 +145,7 @@ refreshJobTypes :: Config
 refreshJobTypes cfg Env{envRoutes=Web.Routes{..}, envJobTypesRef} = do
   allJobTypes <- fetchAllJobTypes cfg
   atomicModifyIORef' envJobTypesRef (\_ -> (allJobTypes, ()))
-  throwError $ err301{errHeaders=[("Location", toS $ rFilterResults Nothing)]}
+  throwError $ err302{errHeaders=[("Location", toS $ rFilterResults Nothing)]}
 
 cancelJob :: Config
           -> Env
