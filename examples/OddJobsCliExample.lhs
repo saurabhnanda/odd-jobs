@@ -13,9 +13,7 @@ ghci> createJobTable conn "jobs_test"
 
 === 2. Create a module for your job-runner
 
-Ideally, this module should be compiled into a separate executable and should depend on your application's library module. Please refer to TODO for an example of how to setup your `package.yaml` (or cabal) file.
-
-| If you do not wish to deploy odd-jobs as an independent executable, you may embed it within your main application's executable as well. This is described in TODO.
+Ideally, this module should be compiled into a separate executable and should depend on your application's library module. If you do not wish to deploy odd-jobs as an independent executable, you may embed it within your main application's executable as well. This is described in [deployment](#deployment).
 
 \begin{code}
 {-# LANGUAGE DeriveAnyClass #-}
@@ -46,14 +44,14 @@ import OddJobs.Types (delaySeconds, Seconds(..))
 
 === 3. Set-up a Haskell type to represent your job-payload
 
-- Ideally, this data-type should be defined _inside_ your application's code and the module containing this type-definition should be part of the `exposed-modules` stanza. Again, please look at TODO for an example of how to setup your `package.yaml` (or cabal) file.
+- Ideally, this data-type should be defined _inside_ your application's code and the module containing this type-definition should be part of the `exposed-modules` stanza.
 - To work with all the default settings provided by 'OddJobs.ConfigBuilder' this data-type should have a **"tagged" JSON serialisation,** i.e.:
 
     ```json
     {"tag": "SendWelcomEmail", "contents": 10}
     ```
 
-  In case your JSON payload does not conform to this structure, please look at TODO.
+  In case your JSON payload does not conform to this structure, please look at [customising the job-payload's structure](#custom-payload-structure).
 
 - In this example, we are _blindly_ deriving `ToJSON` and `FromJSON` instances because the default behaviour of Aeson is to generate a tagged JSON as-per the example given above.
 
@@ -160,3 +158,4 @@ Please read [graceful shutdown](#graceful-shutdown) to know more.
 $ odd-jobs-cli stop --timeout 65
 ```
 </div>
+

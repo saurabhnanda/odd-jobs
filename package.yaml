@@ -7,7 +7,7 @@ description: |
   - Inspired by the Delayed Jobs library in Rails.
   - Queue backend is a Postgres table.
   - Queue is monitored using, both, LISTEN/NOTIFY and polling the DB.
-  - Comes with an in-built admin UI (WIP).
+  - Comes with an in-built admin UI.
   - Comes with utilities to help you built a CLI for your job-queue.
   - Highly configurable and monitorable
 homepage:            https://www.haskelltutorials.com/odd-jobs
