@@ -1,5 +1,5 @@
 name:                odd-jobs
-version:             0.2.0
+version:             0.2.1
 synopsis: A full-featured PostgreSQL-backed job queue (with an admin UI)
 description: |
   - Background jobs library for Haskell.
@@ -20,6 +20,24 @@ category:            Web
 extra-source-files:
 - README.md
 - CHANGELOG.md
+- assets/bootstrap/css/bootstrap-grid.css
+- assets/bootstrap/css/bootstrap-grid.min.css
+- assets/bootstrap/css/bootstrap-reboot.css
+- assets/bootstrap/css/bootstrap-reboot.min.css
+- assets/bootstrap/css/bootstrap.css
+- assets/bootstrap/css/bootstrap.min.css
+- assets/bootstrap/js/bootstrap.bundle.js
+- assets/bootstrap/js/bootstrap.bundle.min.js
+- assets/bootstrap/js/bootstrap.js
+- assets/bootstrap/js/bootstrap.min.js
+- assets/css/Navigation-Clean1.css
+- assets/css/logo-slider.css
+- assets/css/styles.css
+- assets/js/custom.js
+- assets/js/jquery.min.js
+- assets/js/logo-slider.js
+- assets/odd-jobs-color-logo.png
+
 
 ghc-options: 
   - -Wall 
