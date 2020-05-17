@@ -40,11 +40,15 @@ import Debug.Trace
 -- It is __highly recommended__ that you read the following links before putting
 -- odd-jobs into production.
 --
---   * A [simple-example](https://github.com/saurabhnanda/odd-jobs/blob/master/simple-example/src/Main.hs)
---     of how to use the 'defaultMain' function, that should make the callback-within-callback
---     more understandable.
+--   * The [getting started
+--     guide](https://www.haskelltutorials.com/odd-jobs/guide.html#getting-started)
+--     which will walk you through a bare-bones example of using the
+--     'defaultMain' function. It should make the callback-within-callback
+--     clearer.
 --
---   * TODO: link-off to \"Deployment\" in the tutorial
+--   * The [section on
+--     deployment](https://www.haskelltutorials.com/odd-jobs/guide.html#deployment)
+--     in the guide.
 
 -- * Default behaviour
 --
@@ -73,8 +77,9 @@ monad.
 All of these resource allocations need to be bracketed so that when the
 job-runner exits, they may be cleaned-up gracefully.
 
-Please take a look at @simple-example@ for how to use this function in
-practice. (TODO: link-off to the example).
+Please take a look at the [getting started
+guide](https://www.haskelltutorials.com/odd-jobs/guide.html#getting-started) for
+an example of how to use this function.
 -}
 defaultMain :: ((Config -> IO ()) -> IO ())
             -- ^ A callback function that will be executed once the dameon has
