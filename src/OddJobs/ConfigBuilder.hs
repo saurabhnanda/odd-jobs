@@ -79,15 +79,18 @@ mkConfig logger tname dbpool ccControl jrunner configOverridesFn =
 
 
 
--- | TODO; Should the library be doing this?
+-- | If you aren't interested in structured logging, you can use this function
+-- to emit plain-text logs (or define your own).
 defaultLogStr :: (Job -> Text)
               -> LogLevel
               -> LogEvent
               -> LogStr
-defaultLogStr jobToText logLevel logEvent =
+defaultLogStr jobTypeFn logLevel logEvent =
   (toLogStr $ show logLevel) <> " | " <> str
   where
-    jobToLogStr j = toLogStr $ jobToText j
+    jobToLogStr job@Job{jobId} =
+      "JobId=" <> (toLogStr $ show jobId) <> " JobType=" <> (toLogStr $ jobTypeFn job)
+
     str = case logEvent of
       LogJobStart j ->
         "Started | " <> jobToLogStr j
@@ -189,13 +192,6 @@ defaultDynamicJobTypes :: TableName
 defaultDynamicJobTypes tname jobTypeSql = AJTSql $ \conn -> do
   fmap (DL.map ((fromMaybe "(unknown)") . fromOnly)) $ PGS.query_ conn $ "select distinct(" <> jobTypeSql <> ") from " <> tname <> " order by 1 nulls last"
 
--- | Used only by 'defaultLogStr' now. TODO: Is this even required anymore?
--- Should this be removed?
-defaultJobToText :: (Job -> Text) -> Job -> Text
-defaultJobToText jobTypeFn job@Job{jobId} =
-  "JobId=" <> (toS $ show jobId) <> " JobType=" <> jobTypeFn job
-
-
 -- | This makes __two important assumptions__. First, this /assumes/ that jobs
 -- in your app are represented by a sum-type. For example:
 --
@@ -250,7 +246,8 @@ withConnectionPool connConfig action = withRunInIO $ \runInIO -> do
         Right connInfo ->
           createPool (PGS.connect connInfo) PGS.close 1 (fromIntegral $ 2 * (unSeconds defaultPollingInterval)) 8
 
--- | TODO: Should the library be doing this?
+-- | A convenience function to help you define a timed-logger with some sensible
+-- defaults.
 defaultTimedLogger :: FLogger.TimedFastLogger
                    -> (LogLevel -> LogEvent -> LogStr)
                    -> LogLevel

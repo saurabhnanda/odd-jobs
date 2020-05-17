@@ -27,7 +27,7 @@ Ideally, this module should be compiled into a separate executable and should de
 module OddJobsCliExample where
 
 import OddJobs.Job (Job(..),  ConcurrencyControl(..), Config(..), throwParsePayload)
-import OddJobs.ConfigBuilder (mkConfig, withConnectionPool, defaultTimedLogger, defaultLogStr, defaultJobToText, defaultJobType)
+import OddJobs.ConfigBuilder (mkConfig, withConnectionPool, defaultTimedLogger, defaultLogStr, defaultJobType)
 import OddJobs.Cli (defaultMain)
 
 -- Note: It is not necessary to use fast-logger. You can use any logging library
@@ -110,7 +110,7 @@ main = do
           -- Using the default string-based logging provided by
           -- `OddJobs.ConfigBuilder`. If you want to actually use
           -- structured-logging you'll need to define your own logging function.
-          let jobLogger = defaultTimedLogger logger (defaultLogStr (defaultJobToText defaultJobType))
+          let jobLogger = defaultTimedLogger logger (defaultLogStr defaultJobType)
               cfg = mkConfig jobLogger "jobs" dbPool (MaxConcurrentJobs 50) myJobRunner Prelude.id
 
           -- Finally, executing the callback function that was passed to me...
