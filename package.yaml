@@ -1,5 +1,5 @@
 name:                odd-jobs
-version:             0.1.0
+version:             0.2.0
 synopsis: A full-featured PostgreSQL-backed job queue (with an admin UI)
 description: |
   - Background jobs library for Haskell.

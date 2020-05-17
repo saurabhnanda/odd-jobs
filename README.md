@@ -1,31 +1,8 @@
 # Introduction
 
-Please read the **detailed tutorial** available at [Odd Jobs Tutorial](https://www.haskelltutorials.com/odd-jobs). Broadly, here is the **most common** way to get started with this library:
+- [Odd Jobs home page](https://www.haskelltutorials.com/odd-jobs) - contains a description of top-level features of this library
+- [Getting started & implementation guide for Odd Jobs](https://www.haskelltutorials.com/odd-jobs/guide.html)
+- [Haskell Job Queues: An Ultimate Guide](https://www.haskelltutorials.com/odd-jobs/haskell-job-queues-ultimate-guide.html) - A detailed writeup on why we built Odd Jobs and how it compares against other similar libraries.
+- [Start reading Hackage documentation from `OddJobs.Job`](https://hackage.haskell.org/package/odd-jobs-0.2.0/docs/OddJobs-Job.html) (**Note:** Please ensure you're reading docs for the correct version of the library)
+- Open an issue on [Odd Jobs Github repo](https://github.com/saurabhnanda/odd-jobs) if you need  help, or want to collaborate.
 
-- (For a working version of the steps described below, please check the [simple-example](https://github.com/saurabhnanda/odd-jobs/tree/master/simple-example) directory in the project repo).
-- Create a DB table to hold your jobs using the `OddJobs.Migrations.createJobTable` function.
-- Create a sum-type to represent your job payloads, for example:
-    ```
-    data MyJob = SendWelcomeEmail Int
-               | SendPasswordResetEmail Text
-               | SetupSampleData Int
-               deriving (Eq, Show, Generic, ToJSON, FromJSON)
-    ```
-- Ensure that you use a "tagged" JSON encoding for this data-type for best results (this is the default behaviour in Aeson). For example:
-    ```
-    Aeson.encode (SendWelcomeEmail 10) == "{\"tag\":\"SendWelcomeEmail\", \"contents\":10}"
-    ```
-    
-- Create you "core" job-runner function:
-    ```
-    myJobRunner :: Job -> IO ()
-    myJobRunner Job{jobPayload} = 
-      case jobPayload of
-        SendWelcomeEmail userId -> sendWelcomeEmail userId
-        SendPasswordResetEmail tkn -> sendPasswordResetEmail tkn
-        SetupSampleData userId -> sendPasswordResetEmail userId
-    ```
-    
-- Use `OddJobs.Job.createJob` and `OddJobs.Job.scheduleJob` within your app whenever you want to enqueue a job.
-- Use `OddJobs.Cli` to wrap all of this together into a nice CLI that can fork itself as a background daemon.
-- Hook this up to your [deployment scripts](https://www.haskelltutorials.com/odd-jobs/deployment.html) and you're good to go!
