@@ -272,13 +272,13 @@ sideNav Routes{..} jobTypes jobRunnerNames t filter@Filter{..} = do
             let lnk = (rFilterResults $ Just filter{filterStatuses = [], filterPage = (OddJobs.Web.filterPage blankFilter)})
             a_ [ href_ lnk ] $ do
               "all"
-              span_ [ class_ "badge badge-pill badge-secondary float-right" ] "12"
+              -- span_ [ class_ "badge badge-pill badge-secondary float-right" ] "12"
           forM_ ((\\) (enumFrom minBound) [Job.Success]) $ \st -> do
             li_ [ class_ ("list-group-item " <> if (st `elem` filterStatuses) then "active-nav" else "") ] $ do
               let lnk = (rFilterResults $ Just filter{filterStatuses = [st], filterPage = Nothing})
               a_ [ href_ lnk ] $ do
                 toHtml $ toText st
-                span_ [ class_ "badge badge-pill badge-secondary float-right" ] "12"
+                -- span_ [ class_ "badge badge-pill badge-secondary float-right" ] "12"
 
     jobRunnerFilters = do
       h6_ [ class_ "mt-3" ] $ do

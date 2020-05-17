@@ -2,7 +2,6 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE RankNTypes #-}
 
 module OddJobs.Types where
@@ -62,6 +61,8 @@ data LogEvent
   | LogJobTimeout !Job
   -- | Emitted whenever 'OddJobs.Job.jobPoller' polls the DB table
   | LogPoll
+  -- | TODO
+  | LogWebUIRequest
   -- | Emitted whenever any other event occurs
   | LogText !Text
   deriving (Show, Generic)
@@ -72,7 +73,7 @@ data FailureMode
   = FailWithRetry
   -- | The job failed and will no longer be retried (probably because it has
   -- been tried 'cfgDefaultMaxAttempts' times already).
-  | FailPermanent deriving (Eq, Show)
+  | FailPermanent deriving (Eq, Show, Generic)
 
 -- | Exception handler for jobs. This is conceptually very similar to how
 -- 'Control.Exception.Handler' and 'Control.Exception.catches' (from
@@ -165,7 +166,7 @@ data Job = Job
   , jobAttempts :: Int
   , jobLockedAt :: Maybe UTCTime
   , jobLockedBy :: Maybe JobRunnerName
-  } deriving (Eq, Show)
+  } deriving (Eq, Show, Generic)
 
 instance ToText Status where
   toText s = case s of

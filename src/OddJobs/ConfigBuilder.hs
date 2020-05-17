@@ -6,9 +6,9 @@ module OddJobs.ConfigBuilder where
 import OddJobs.Types
 import Database.PostgreSQL.Simple as PGS
 import Data.Pool
-import Control.Monad.Logger (LogLevel(..), LogStr(..), toLogStr)
+import Control.Monad.Logger (LogLevel(..), LogStr, toLogStr)
 import Data.Text (Text)
-import Lucid (Html(..), toHtml, class_, div_, span_, br_, button_, a_, href_, onclick_)
+import Lucid (Html, toHtml, class_, div_, span_, br_, button_, a_, href_, onclick_)
 import Data.Maybe (fromMaybe)
 import Data.List as DL
 import Data.Aeson as Aeson hiding (Success)
@@ -103,6 +103,8 @@ defaultLogStr jobToText logLevel logEvent =
         " lockedAt=" <> (toLogStr $ maybe "unknown" show jobLockedAt)
       LogPoll ->
         "Polling jobs table"
+      LogWebUIRequest ->
+        "WebUIRequest (TODO: Log the actual request)"
       LogText t ->
         toLogStr t
 
@@ -156,10 +158,10 @@ defaultPayloadToHtml :: Value -> Html ()
 defaultPayloadToHtml v = case v of
   Aeson.Object o -> do
     toHtml ("{ " :: Text)
-    forM_ (HM.toList o) $ \(k, v) -> do
+    forM_ (HM.toList o) $ \(k, v2) -> do
       span_ [ class_ " key-value-pair " ] $ do
         span_ [ class_ "key" ] $ toHtml $ k <> ":"
-        span_ [ class_ "value" ] $ defaultPayloadToHtml v
+        span_ [ class_ "value" ] $ defaultPayloadToHtml v2
     toHtml (" }" :: Text)
   Aeson.Array a -> do
     toHtml ("[" :: Text)
@@ -260,3 +262,33 @@ defaultTimedLogger logger logStrFn logLevel logEvent =
   else logger $ \t -> (toLogStr t) <> " | " <>
                       (logStrFn logLevel logEvent) <>
                       "\n"
+
+
+defaultJsonLogEvent :: LogEvent -> Aeson.Value
+defaultJsonLogEvent logEvent =
+  case logEvent of
+    LogJobStart job ->
+      Aeson.object [ "tag" Aeson..= ("LogJobStart" :: Text)
+                   , "contents" Aeson..= (defaultJsonJob job) ]
+    LogJobSuccess job runTime ->
+      Aeson.object [ "tag" Aeson..= ("LogJobSuccess" :: Text)
+                   , "contents" Aeson..= (defaultJsonJob job, runTime) ]
+    LogJobFailed job e fm runTime ->
+      Aeson.object [ "tag" Aeson..= ("LogJobFailed" :: Text)
+                   , "contents" Aeson..= (defaultJsonJob job, show e, defaultJsonFailureMode fm, runTime) ]
+    LogJobTimeout job ->
+      Aeson.object [ "tag" Aeson..= ("LogJobTimeout" :: Text)
+                   , "contents" Aeson..= (defaultJsonJob job) ]
+    LogPoll ->
+      Aeson.object [ "tag" Aeson..= ("LogJobPoll" :: Text)]
+    LogWebUIRequest ->
+      Aeson.object [ "tag" Aeson..= ("LogWebUIRequest" :: Text)]
+    LogText t ->
+      Aeson.object [ "tag" Aeson..= ("LogText" :: Text)
+                   , "contents" Aeson..= t ]
+
+defaultJsonJob :: Job -> Aeson.Value
+defaultJsonJob job = genericToJSON Aeson.defaultOptions job
+
+defaultJsonFailureMode :: FailureMode -> Aeson.Value
+defaultJsonFailureMode fm = genericToJSON Aeson.defaultOptions fm

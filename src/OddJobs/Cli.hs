@@ -226,7 +226,10 @@ commandParser = hsubparser
 -- | @start@ command is parsed into this data-structure by 'startParser'
 data StartArgs = StartArgs
   {
-    -- | Switch to enable/disable the web UI
+    -- | Switch to pick the authentication mechanism for web UI. __Note:__ We
+    -- don't have a separate switch to enable\/disable the web UI. Picking an
+    -- authentication mechanism by specifying the relevant options,
+    -- automatically enables the web UI. Ref: 'webUiAuthParser'
     startWebUiAuth :: !(Maybe WebUiAuth)
     -- | Port on which the web UI will run.
   , startWebUiPort :: !Int
@@ -256,6 +259,11 @@ data WebUiAuth
   | AuthBasic !Text !Text
   deriving (Eq, Show)
 
+-- | Pick one of the following auth mechanisms for the web UI:
+--
+--   * No auth - @--web-ui-no-auth@  __NOT RECOMMENDED__
+--   * Basic auth - @--web-ui-basic-auth-user <USER>@ and
+--     @--web-ui-basic-auth-password <PASS>@
 webUiAuthParser :: Parser (Maybe WebUiAuth)
 webUiAuthParser = basicAuthParser <|> noAuthParser <|> (pure Nothing)
   where
