@@ -31,8 +31,6 @@ import qualified System.Log.FastLogger as FLogger
 --
 -- It makes a few __important assumptions__ about your 'jobPayload 'JSON, which
 -- are documented in 'defaultJobType'.
---
--- TODO: Link-off to tutorial.
 mkConfig :: (LogLevel -> LogEvent -> IO ())
          -- ^ "Structured logging" function. Ref: 'cfgLogger'
          -> TableName
@@ -216,6 +214,11 @@ defaultDynamicJobTypes tname jobTypeSql = AJTSql $ \conn -> do
 --
 -- Even if tihs assumption is violated, the job-runner /should/ continue to
 -- function. It's just that you won't get very useful log messages.
+--
+-- __Note:__ If your job payload does not conform to the structure described
+-- above, please read the section on [customising the job payload's
+-- structure](https://www.haskelltutorials.com/odd-jobs/guide.html#custom-payload-structure)
+-- in the implementation guide.
 defaultJobType :: Job -> Text
 defaultJobType Job{jobPayload} =
   case jobPayload of
@@ -231,7 +234,7 @@ defaultPollingInterval = Seconds 5
 
 -- | Convenience function to create a DB connection-pool with some sensible
 -- defaults. Please see the source-code of this function to understand what it's
--- doing. TODO: link-off to tutorial.
+-- doing.
 withConnectionPool :: (MonadUnliftIO m)
                    => Either BS.ByteString PGS.ConnectInfo
                    -> (Pool PGS.Connection -> m a)
