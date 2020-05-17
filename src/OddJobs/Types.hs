@@ -90,13 +90,20 @@ data FailureMode
 --   ]
 -- @
 --
--- __TODO:__ Link-off to tutorial on how to use this to install airbrake
--- notifier.
+-- __Note:__ Please refer to the section on [alerts and
+-- notifications](https://www.haskelltutorials.com/odd-jobs/guide.html#alerts)
+-- in the implementation guide to understand how to use the machinery provided
+-- by 'JobErrHandler' and 'cfgOnJobFailed'.
 data JobErrHandler a = forall e . (Exception e) => JobErrHandler (e -> Job -> FailureMode -> IO a)
 
+
+-- | __Note:__ Please read the section on [controlling
+-- concurrency](https://www.haskelltutorials.com/odd-jobs/guide.html#controlling-concurrency)
+-- in the implementation guide to understand the implications of each option
+-- given by the data-type.
 data ConcurrencyControl
   -- | The maximum number of concurrent jobs that /this instance/ of the
-  -- job-runner can execute. TODO: Link-off to tutorial.
+  -- job-runner can execute.
   = MaxConcurrentJobs Int
   -- | __Not recommended:__ Please do not use this in production unless you know
   -- what you're doing. No machine can support unlimited concurrency. If your
@@ -108,8 +115,7 @@ data ConcurrencyControl
   -- | Use this to dynamically determine if the next job should be picked-up, or
   -- not. This is useful to write custom-logic to determine whether a limited
   -- resource is below a certain usage threshold (eg. CPU usage is below 80%).
-  -- __Caveat:__ This feature has not been tested in production, yet. TODO:
-  -- Link-off to tutorial.
+  -- __Caveat:__ This feature has not been tested in production, yet.
   | DynamicConcurrency (IO Bool)
 
 instance Show ConcurrencyControl where
@@ -258,20 +264,23 @@ data Config = Config
     -- the job-runner. __Please note,__ this is NOT the global concurrency of
     -- entire job-queue. It is possible to have job-runners running on multiple
     -- machines, and each will apply the concurrency control independnt of other
-    -- job-runners. TODO: Link-off to relevant section in the tutorial.
+    -- job-runners. __Ref:__ Section on [controllng
+    -- concurrency](https://www.haskelltutorials.com/odd-jobs/guide.html#controlling-concurrency)
+    -- in the implementtion guide.
   , cfgConcurrencyControl :: ConcurrencyControl
 
     -- | The DB connection-pool to use for the job-runner. __Note:__ in case
     -- your jobs require a DB connection, please create a separate
     -- connection-pool for them. This pool will be used ONLY for monitoring jobs
     -- and changing their status. We need to have __at least 4 connections__ in
-    -- this connection-pool for the job-runner to work as expected. (TODO:
-    -- Link-off to tutorial)
+    -- this connection-pool for the job-runner to work as expected.
   , cfgDbPool :: Pool Connection
 
     -- | How frequently should the 'jobPoller' check for jobs where the Job's
     -- 'jobRunAt' field indicates that it's time for the job to be executed.
-    -- TODO: link-off to the tutorial.
+    -- __Ref:__ Please read the section on [how Odd Jobs works
+    -- (architecture)](https://www.haskelltutorials.com/odd-jobs/guide.html#architecture)
+    -- to find out more.
   , cfgPollingInterval :: Seconds
 
   -- | User-defined callback function that is called whenever a job succeeds.
@@ -292,13 +301,16 @@ data Config = Config
 
   -- | File to store the PID of the job-runner process. This is used only when
   -- invoking the job-runner as an independent background deemon (the usual mode
-  -- of deployment). (TODO: Link-off to tutorial).
+  -- of deployment).
   , cfgPidFile :: Maybe FilePath
 
   -- | A "structured logging" function that __you__ need to provide. The
   -- @odd-jobs@ library does NOT use the standard logging interface provided by
-  -- 'monad-logger' on purpose. TODO: link-off to tutorial. Also look at
-  -- 'cffJobType' and 'defaultLogStr'
+  -- 'monad-logger' on purpose. Also look at 'cfgJobType' and 'defaultLogStr'
+  --
+  -- __Note:__ Please take a look at the section on [structured
+  -- logging](https://www.haskelltutorials.com/odd-jobs/guide.html#structured-logging)
+  -- to find out how to use this to log in JSON.
   , cfgLogger :: LogLevel -> LogEvent -> IO ()
 
   -- | How to extract the "job type" from a 'Job'. If you are overriding this,
