@@ -98,13 +98,14 @@ executables:
       - foreign-store
       - odd-jobs
 
-  simple-example:
-    main: Main
+  odd-jobs-cli-example:
+    main: OddJobsCliExample.lhs
     source-dirs:
-      - simple-example/src
+      - examples
     ghc-options:
       - -threaded
       - -with-rtsopts=-N
+      - -main-is OddJobsCliExample
     dependencies:
       - odd-jobs
 
