@@ -285,7 +285,7 @@ saveJobQuery :: TableName -> PGS.Query
 saveJobQuery tname = "UPDATE " <> tname <> " set run_at = ?, status = ?, payload = ?, last_error = ?, attempts = ?, locked_at = ?, locked_by = ? WHERE id = ? RETURNING " <> concatJobDbColumns
 
 deleteJobQuery :: TableName -> PGS.Query
-deleteJobQuery tname = "delete " <> tname <> " Where id = ?"
+deleteJobQuery tname = "DELETE FROM " <> tname <> " WHERE id = ?"
 
 saveJob :: (HasJobRunner m) => Job -> m Job
 saveJob j = do
