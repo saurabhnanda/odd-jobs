@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.2
+
+- Bugfix in the `deleteJobQuery` function
+- committed the cabal file to the repo
+
 ## 0.2.1
 
 - build fixes
