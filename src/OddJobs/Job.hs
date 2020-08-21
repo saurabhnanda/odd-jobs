@@ -629,7 +629,7 @@ scheduleJob conn tname payload runAt = do
   case rs of
     [] -> (Prelude.error . (<> "Not expecting a blank result set when creating a job. Query=")) <$> queryFormatter
     [r] -> pure r
-    _ -> (Prelude.error . (<> "Not expecting multiple rows when creating a single job. Query=")) <$> queryFormatter 
+    _ -> (Prelude.error . (<> "Not expecting multiple rows when creating a single job. Query=")) <$> queryFormatter
 
 
 -- getRunnerEnv :: (HasJobRunner m) => m RunnerEnv
@@ -650,7 +650,7 @@ throwParsePayload job =
 eitherParsePayloadWith :: (Aeson.Value -> Aeson.Parser a)
                        -> Job
                        -> Either String a
-eitherParsePayloadWith parser Job{jobPayload} = do
+eitherParsePayloadWith parser Job{jobPayload} =
   case iparse parser jobPayload of
     -- TODO: throw a custom exception so that error reporting is better
     IError jpath e -> Left $ formatError jpath e
@@ -660,7 +660,7 @@ throwParsePayloadWith :: (Aeson.Value -> Aeson.Parser a)
                       -> Job
                       -> IO a
 throwParsePayloadWith parser job =
-  either throwString (pure . Prelude.id) (eitherParsePayloadWith parser job)
+  either throwString pure (eitherParsePayloadWith parser job)
 
 
 -- | Used by the web\/admin UI to fetch a \"master list\" of all known
@@ -685,4 +685,3 @@ fetchAllJobRunners :: (MonadIO m)
                    -> m [JobRunnerName]
 fetchAllJobRunners Config{cfgTableName, cfgDbPool} = liftIO $ withResource cfgDbPool $ \conn -> do
   fmap (mapMaybe fromOnly) $ PGS.query_ conn $ "select distinct locked_by from " <> cfgTableName
-
