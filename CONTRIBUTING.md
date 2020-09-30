@@ -16,6 +16,6 @@ I'd like to see odd-jobs become a mature and production-ready job-queue.
 
 ## Hacktoberfest 2020
 
-![Hacktoberfest 2020 logo](https://hacktoberfest.digitalocean.com/assets/HF-full-logo-b05d5eb32b3f3ecc9b2240526104cf4da3187b8b61963dd9042fdc2536e4a76c.svg =300x)
+<img src="https://hacktoberfest.digitalocean.com/assets/HF-full-logo-b05d5eb32b3f3ecc9b2240526104cf4da3187b8b61963dd9042fdc2536e4a76c.svg" width="300" title="Hacktoberfest 2020 Logo" />
 
 Take a look at all all [issues tagged with `hacktoberfest` label](https://github.com/saurabhnanda/odd-jobs/issues?q=is%3Aissue+is%3Aopen+label%3Ahacktoberfest). These seem like they can be tackled within one month of picking them up.
