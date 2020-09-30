@@ -5,6 +5,7 @@
 - [Haskell Job Queues: An Ultimate Guide](https://www.haskelltutorials.com/odd-jobs/haskell-job-queues-ultimate-guide.html) - A detailed writeup on why we built Odd Jobs and how it compares against other similar libraries.
 - [Start reading Hackage documentation from `OddJobs.Job`](https://hackage.haskell.org/package/odd-jobs-0.2.2/docs/OddJobs-Job.html) (**Note:** Please ensure you're reading docs for the correct version of the library)
 - Open an issue on [Odd Jobs Github repo](https://github.com/saurabhnanda/odd-jobs) if you need  help, or want to collaborate.
+- Please :star2: the repository for good karma and :heart:
 
 # odd-jobs in production?
 
