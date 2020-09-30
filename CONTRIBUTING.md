@@ -18,4 +18,4 @@ I'd like to see odd-jobs become a mature and production-ready job-queue.
 
 <img src="https://hacktoberfest.digitalocean.com/assets/HF-full-logo-b05d5eb32b3f3ecc9b2240526104cf4da3187b8b61963dd9042fdc2536e4a76c.svg" width="300" title="Hacktoberfest 2020 Logo" />
 
-Take a look at all all [issues tagged with `hacktoberfest` label](https://github.com/saurabhnanda/odd-jobs/issues?q=is%3Aissue+is%3Aopen+label%3Ahacktoberfest). These seem like they can be tackled within one month of picking them up.
+We are participating (for the first time ever) in a Hacktoberfest. I will keep some time aside throughout the month of Ocotber to participate in discussions, and review + merge PRs. If you are interested, please take a look at all the [issues tagged with `hacktoberfest` label](https://github.com/saurabhnanda/odd-jobs/issues?q=is%3Aissue+is%3Aopen+label%3Ahacktoberfest). They seem like they can be tackled within one month of picking them up.
