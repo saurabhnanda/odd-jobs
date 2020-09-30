@@ -16,4 +16,6 @@ I'd like to see odd-jobs become a mature, production-ready job-queue.
 
 ## Hacktoberfest 2020
 
-![Hacktoberfest 2020 logo](https://hacktoberfest.digitalocean.com/assets/HF-full-logo-b05d5eb32b3f3ecc9b2240526104cf4da3187b8b61963dd9042fdc2536e4a76c.svg)
+![Hacktoberfest 2020 logo](https://hacktoberfest.digitalocean.com/assets/HF-full-logo-b05d5eb32b3f3ecc9b2240526104cf4da3187b8b61963dd9042fdc2536e4a76c.svg =300)
+
+
