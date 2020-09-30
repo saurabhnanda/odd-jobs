@@ -4,7 +4,7 @@
 
 Broadly speaking, I want to strike a good balance between features, configurability, and ease-of-use - with the last one getting a little more weightage. For example, I don't want `odd-jobs` to devolve into a mess of complicated types and custom monads, which, _theoretically_, give a lot of compile-time guarantees, but _practically_ make the library nearly-impossible to use!
 
-I'd like to see odd-jobs become a mature, production-ready job-queue.
+I'd like to see odd-jobs become a mature and production-ready job-queue.
 
 ## How to contribute?
 
@@ -16,6 +16,6 @@ I'd like to see odd-jobs become a mature, production-ready job-queue.
 
 ## Hacktoberfest 2020
 
-![Hacktoberfest 2020 logo](https://hacktoberfest.digitalocean.com/assets/HF-full-logo-b05d5eb32b3f3ecc9b2240526104cf4da3187b8b61963dd9042fdc2536e4a76c.svg =300)
+![Hacktoberfest 2020 logo](https://hacktoberfest.digitalocean.com/assets/HF-full-logo-b05d5eb32b3f3ecc9b2240526104cf4da3187b8b61963dd9042fdc2536e4a76c.svg =300x)
 
-
+Take a look at all all [issues tagged with `hacktoberfest` label](https://github.com/saurabhnanda/odd-jobs/issues?q=is%3Aissue+is%3Aopen+label%3Ahacktoberfest). These seem like they can be tackled within one month of picking them up.
