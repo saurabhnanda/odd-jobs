@@ -6,11 +6,9 @@
 - [Start reading Hackage documentation from `OddJobs.Job`](https://hackage.haskell.org/package/odd-jobs-0.2.2/docs/OddJobs-Job.html) (**Note:** Please ensure you're reading docs for the correct version of the library)
 - Open an issue on [Odd Jobs Github repo](https://github.com/saurabhnanda/odd-jobs) if you need  help, or want to collaborate.
 
-# `OddJobs` in production?
+# odd-jobs in production?
 
-If you are already using, or considering using, `odd-jobs` in production, please read [production usage reports](https://github.com/saurabhnanda/odd-jobs/issues/44). It would be really great if you can add your own usage-report to that discussion thread as well. **We need more success stories of Haskell in production!**
-
-Great! We need more
+If you are already using, or considering using, `odd-jobs` in production, please read [production usage-reports](https://github.com/saurabhnanda/odd-jobs/issues/44). It would be great if you could add your own usage-report to that discussion thread as well. **We need more success stories of Haskell in production!**
 
 # Contributing
 
