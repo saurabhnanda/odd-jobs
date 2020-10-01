@@ -4,7 +4,7 @@ In this example, our jobs table will be called `jobs_test`
 
 <div class="lhs-code">
 ```
-ghci> import Datasbe.PostgreSQL.Simple (connectPostgreSQL)
+ghci> import Database.PostgreSQL.Simple (connectPostgreSQL)
 ghci> import OddJobs.Migrations
 ghci> conn <- connectPostgreSQL "dbname=jobs_test user=jobs_test password=jobs_test host=localhost"
 ghci> createJobTable conn "jobs_test"
