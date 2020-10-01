@@ -1,17 +1,20 @@
 name: CI
 
-# Trigger the workflow on push or pull request, but only for the master branch
 on:
   pull_request:
+    branches:
+      - master
   push:
-    branches: [master]
+    branches:
+      - master
 
 jobs:
   stack:
-    name: stack / ghc ${{ matrix.ghc }}
-    runs-on: ubuntu-latest
+    name: ${{ matrix.os }} / stack / ghc ${{ matrix.ghc }}
+    runs-on: ${{ matrix.os }}
     strategy:
       matrix:
+        os: [ubuntu-latest, macOS-latest, windows-latest]
         stack: ["2.3.3"]
         ghc: ["8.8.3"]
 
