@@ -1,3 +1,5 @@
+[![GitHub CI](https://github.com/saurabhnanda/odd-jobs/workflows/CI/badge.svg)](https://github.com/saurabhnanda/odd-jobs/actions)
+
 # Introduction
 
 - [Odd Jobs home page](https://www.haskelltutorials.com/odd-jobs) - contains a description of top-level features of this library
@@ -14,3 +16,16 @@ If you are already using, or considering using, `odd-jobs` in production, please
 # Contributing
 
 Please read the [contribution guidelines](./CONTRIBUTING.md)
+
+## Development
+
+### Prerequisites
+
+- [The Haskell Tool Stack](https://docs.haskellstack.org/en/stable/README/#how-to-install)
+- `libpq-dev` library (required for PostgreSQL dependency)
+
+### Build
+
+```bash
+stack build
+```
