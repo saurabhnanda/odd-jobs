@@ -32,7 +32,8 @@ createJobTableQuery tname = "CREATE TABLE " <> tname <>
 createNotificationTrigger :: TableName -> Query
 createNotificationTrigger tname = "create or replace function " <> fnName <> "() returns trigger as $$" <>
   "begin \n" <>
-  "  perform pg_notify('" <> pgEventName tname <> "', row_to_json(new)::text); \n" <>
+  "  perform pg_notify('" <> pgEventName tname <> "', \n" <>
+  "    json_build_object('id', new.id, 'run_at', new.run_at, 'locked_at', new.locked_at)::text); \n" <>
   "  return new; \n" <>
   "end; \n" <>
   "$$ language plpgsql;" <>
