@@ -7,6 +7,7 @@
 module OddJobs.Types where
 
 import Database.PostgreSQL.Simple as PGS
+import Database.PostgreSQL.Simple.Types as PGS
 import UnliftIO (MonadIO)
 import UnliftIO.Concurrent (threadDelay)
 import Data.Text.Conversions
@@ -33,10 +34,10 @@ import Control.Monad.Logger (LogLevel)
 -- myJobsTable :: TableName
 -- myJobsTable = "my_jobs"
 -- @
-type TableName = PGS.Query
+type TableName = PGS.Identifier
 
-pgEventName :: TableName -> Query
-pgEventName tname = "job_created_" <> tname
+pgEventName :: TableName -> PGS.Identifier
+pgEventName tname = PGS.Identifier $ "job_created_" <> PGS.fromIdentifier tname
 
 newtype Seconds = Seconds { unSeconds :: Int } deriving (Eq, Show, Ord, Num, Read)
 
