@@ -34,7 +34,7 @@ import qualified System.Log.FastLogger as FLogger
 mkConfig :: (LogLevel -> LogEvent -> IO ())
          -- ^ "Structured logging" function. Ref: 'cfgLogger'
          -> TableName
-         -- ^ DB table which holds your jobs. Ref: 'cfgTableName'
+         -- ^ DB table which holds your jobs (resource table name will be generated). Ref: 'cfgTableNames'
          -> Pool Connection
          -- ^ DB connection-pool to be used by job-runner. Ref: 'cfgDbPool'
          -> ConcurrencyControl
@@ -63,14 +63,15 @@ mkConfig logger tname dbpool ccControl jrunner configOverridesFn =
             , cfgDbPool = dbpool
             , cfgOnJobStart = (const $ pure ())
             , cfgDefaultMaxAttempts = 10
-            , cfgTableName = tname
+            , cfgTableNames = simpleTableNames tname
             , cfgOnJobTimeout = (const $ pure ())
             , cfgConcurrencyControl = ccControl
+            , cfgDefaultResourceLimit = 1
             , cfgPidFile = Nothing
             , cfgJobType = defaultJobType
             , cfgDefaultJobTimeout = Seconds 600
             , cfgJobToHtml = defaultJobToHtml (cfgJobType cfg)
-            , cfgAllJobTypes = (defaultDynamicJobTypes (cfgTableName cfg) (cfgJobTypeSql cfg))
+            , cfgAllJobTypes = (defaultDynamicJobTypes (cfgTableNames cfg) (cfgJobTypeSql cfg))
             , cfgJobTypeSql = defaultJobTypeSql
             }
   in cfg
@@ -184,11 +185,12 @@ defaultConstantJobTypes :: forall a . (Generic a, ConNames (Rep a))
 defaultConstantJobTypes _ =
   AJTFixed $ DL.map toS $ conNames (undefined :: a)
 
-defaultDynamicJobTypes :: TableName
+defaultDynamicJobTypes :: TableNames
                        -> PGS.Query
                        -> AllJobTypes
-defaultDynamicJobTypes tname jobTypeSql = AJTSql $ \conn -> do
-  fmap (DL.map ((fromMaybe "(unknown)") . fromOnly)) $ PGS.query_ conn $ "select distinct(" <> jobTypeSql <> ") from " <> tname <> " order by 1 nulls last"
+defaultDynamicJobTypes tnames jobTypeSql = AJTSql $ \conn -> do
+  fmap (DL.map ((fromMaybe "(unknown)") . fromOnly)) $ PGS.query_ conn $
+    "select distinct(" <> jobTypeSql <> ") from " <> tnJob tnames <> " order by 1 nulls last"
 
 -- | This makes __two important assumptions__. First, this /assumes/ that jobs
 -- in your app are represented by a sum-type. For example:

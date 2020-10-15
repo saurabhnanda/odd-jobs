@@ -35,8 +35,22 @@ import Control.Monad.Logger (LogLevel)
 -- @
 type TableName = PGS.Query
 
-pgEventName :: TableName -> Query
-pgEventName tname = "job_created_" <> tname
+-- | Specifies the table names used for job management.
+data TableNames = TableNames
+  { tnJob :: TableName
+  , tnResource :: TableName
+  }
+
+-- | Convenience function for building 'TableNames' when resources are not being
+-- used or the name of the resource table does not need to be controlled.
+simpleTableNames :: TableName -> TableNames
+simpleTableNames jobTableName = TableNames
+  { tnJob = jobTableName
+  , tnResource = jobTableName <> "_resource"
+  }
+
+pgEventName :: TableNames -> Query
+pgEventName tnames = "job_created_" <> tnJob tnames
 
 newtype Seconds = Seconds { unSeconds :: Int } deriving (Eq, Show, Ord, Num, Read)
 
@@ -158,8 +172,9 @@ instance FromJSON Status where
       Left e -> fail e
       Right r -> pure r
 
-
 newtype JobRunnerName = JobRunnerName { unJobRunnerName :: Text } deriving (Eq, Show, FromField, ToField, Generic, ToJSON, FromJSON)
+
+newtype ResourceId = ResourceId { unResourceId :: Text } deriving (Eq, Show, FromField, ToField, Generic, ToJSON, FromJSON)
 
 data Job = Job
   { jobId :: JobId
@@ -172,6 +187,7 @@ data Job = Job
   , jobAttempts :: Int
   , jobLockedAt :: Maybe UTCTime
   , jobLockedBy :: Maybe JobRunnerName
+  , jobResourceId :: Maybe ResourceId
   } deriving (Eq, Show, Generic)
 
 instance ToText Status where
@@ -211,6 +227,7 @@ instance FromRow Job where
     <*> field -- attempts
     <*> field -- lockedAt
     <*> field -- lockedBy
+    <*> field -- resourceId
 
 -- TODO: Add a sum-type for return status which can signal the monitor about
 -- whether the job needs to be retried, marked successfull, or whether it has
@@ -230,7 +247,7 @@ data AllJobTypes
   -- that represents your job payload.
   = AJTFixed [Text]
   -- | Construct the list of job-types dynamically by looking at the actual
-  -- payloads in 'cfgTableName' (using an SQL query).
+  -- payloads in the job table of 'cfgTableNames' (using an SQL query).
   | AJTSql (Connection -> IO [Text])
   -- | A custom 'IO' action for fetching the list of job-types.
   | AJTCustom (IO [Text])
@@ -243,9 +260,10 @@ data AllJobTypes
 -- 'OddJobs.ConfigBuilder.mkConfig' function (to get something with sensible
 -- defaults) and then tweaking config parameters on a case-by-case basis.
 data Config = Config
-  { -- | The DB table which holds your jobs. Please note, this should have been
-    -- created by the 'OddJobs.Migrations.createJobTable' function.
-    cfgTableName :: TableName
+  { -- | The DB tables which hold your jobs and optional resource. Please note,
+    -- this should have been created by the 'OddJobs.Migrations.createJobTables'
+    -- function.
+    cfgTableNames :: TableNames
 
     -- | The actualy "job-runner" that __you__ need to provide. If this function
     -- throws a runtime exception, the job will be retried
@@ -268,6 +286,17 @@ data Config = Config
     -- concurrency](https://www.haskelltutorials.com/odd-jobs/guide.html#controlling-concurrency)
     -- in the implementtion guide.
   , cfgConcurrencyControl :: ConcurrencyControl
+
+    -- | The default per-resource concurrency limit to be used when a job
+    -- specifies a resource id and that resource does not exist or does not
+    -- specify a limit. This has no effect for jobs that do not specify a
+    -- resource id.
+    -- __Note:__ this is is always an additional limit beyond whatever is
+    -- supplied in 'cfgConcurrencyContol' on any given machine, but also note
+    -- that unlike the limit of `cfgConcurrencyControl`, this IS a global limit
+    -- across the entire job-queue. This means that this limit will be applied
+    -- regardless of what machine the jobs are running on.
+  , cfgDefaultResourceLimit :: Int
 
     -- | The DB connection-pool to use for the job-runner. __Note:__ in case
     -- your jobs require a DB connection, please create a separate

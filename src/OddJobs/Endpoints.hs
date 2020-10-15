@@ -152,7 +152,7 @@ cancelJob :: Config
           -> JobId
           -> Handler NoContent
 cancelJob Config{..} env jid = do
-  liftIO $ withResource cfgDbPool $ \conn -> void $ cancelJobIO conn cfgTableName jid
+  liftIO $ withResource cfgDbPool $ \conn -> void $ cancelJobIO conn cfgTableNames jid
   redirectToHome env
 
 runJobNow :: Config
@@ -160,7 +160,7 @@ runJobNow :: Config
           -> JobId
           -> Handler NoContent
 runJobNow Config{..} env jid = do
-  liftIO $ withResource cfgDbPool $ \conn -> void $ runJobNowIO conn cfgTableName jid
+  liftIO $ withResource cfgDbPool $ \conn -> void $ runJobNowIO conn cfgTableNames jid
   redirectToHome env
 
 enqueueJob :: Config
@@ -169,8 +169,8 @@ enqueueJob :: Config
            -> Handler NoContent
 enqueueJob Config{..} env jid = do
   liftIO $ withResource cfgDbPool $ \conn -> do
-    void $ unlockJobIO conn cfgTableName jid
-    void $ runJobNowIO conn cfgTableName jid
+    void $ unlockJobIO conn cfgTableNames jid
+    void $ runJobNowIO conn cfgTableNames jid
   redirectToHome env
 
 redirectToHome :: Env -> Handler NoContent

@@ -103,6 +103,7 @@ library
 executable devel
   main-is: DevelMain.hs
   other-modules:
+      DevelDb
       OddJobs.Cli
       OddJobs.ConfigBuilder
       OddJobs.Endpoints

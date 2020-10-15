@@ -127,8 +127,8 @@ data Routes = Routes
 
 
 filterJobsQuery :: Config -> Filter -> (PGS.Query, [Action])
-filterJobsQuery Config{cfgTableName, cfgJobTypeSql} Filter{..} =
-  ( "SELECT " <> Job.concatJobDbColumns <> " FROM " <> cfgTableName <> whereClause <> " " <> (orderClause $ fromMaybe (OrdUpdatedAt, Desc) filterOrder) <> " " <> limitOffsetClause
+filterJobsQuery Config{cfgTableNames, cfgJobTypeSql} Filter{..} =
+  ( "SELECT " <> Job.concatJobDbColumns <> " FROM " <> Job.tnJob cfgTableNames <> whereClause <> " " <> (orderClause $ fromMaybe (OrdUpdatedAt, Desc) filterOrder) <> " " <> limitOffsetClause
   , whereActions
   )
   where
