@@ -9,13 +9,13 @@ import Data.Functor (void)
 import Data.Pool as Pool
 import Test.Tasty.HUnit
 import Debug.Trace
-import Control.Exception.Lifted (finally, catch, bracket)
+-- import Control.Exception.Lifted (finally, catch, bracket)
 import Control.Monad.Logger
 import Control.Monad.Reader
 import Data.Aeson as Aeson
 import Data.Aeson.TH as Aeson
-import Control.Concurrent.Lifted
-import Control.Concurrent.Async.Lifted
+-- import Control.Concurrent.Lifted
+-- import Control.Concurrent.Async.Lifted
 import OddJobs.Job (Job(..), JobId, delaySeconds, Seconds(..))
 import System.Log.FastLogger ( fromLogStr, withFastLogger, LogType'(..)
                              , defaultBufSize, FastLogger, FileLogSpec(..), newTimedFastLogger
@@ -40,6 +40,7 @@ import qualified Data.Text as T
 import Data.Ord (comparing, Down(..))
 import Data.Maybe (fromMaybe)
 import qualified OddJobs.ConfigBuilder as Job
+import UnliftIO
 
 $(Aeson.deriveJSON Aeson.defaultOptions ''Seconds)
 
@@ -76,7 +77,7 @@ tests appPool jobPool = testGroup "All tests"
                              , testJobScheduling appPool jobPool
                              , testJobFailure appPool jobPool
                              , testEnsureShutdown appPool jobPool
-                             , testGracefuleShutdown appPool jobPool
+                             , testGracefulShutdown appPool jobPool
                              ]
   -- , testGroup "property tests" [ testEverything appPool jobPool
   --                              -- , propFilterJobs appPool jobPool
@@ -141,10 +142,64 @@ instance FromJSON JobPayload where
   parseJSON = genericParseJSON Aeson.defaultOptions
 
 
-assertJobIdStatus :: (HasCallStack) => Connection -> Job.TableName -> String -> Job.Status -> JobId -> Assertion
-assertJobIdStatus conn tname msg st jid = Job.findJobByIdIO conn tname jid >>= \case
-  Nothing -> assertFailure $ "Not expecting job to be deleted. JobId=" <> show jid
-  Just (Job{jobStatus}) -> assertEqual msg st jobStatus
+logEventToJob :: Job.LogEvent -> Maybe Job.Job
+logEventToJob le = case le of
+  Job.LogJobStart j -> Just j
+  Job.LogJobSuccess j _ -> Just j
+  Job.LogJobFailed j _ _ _ -> Just j
+  Job.LogJobTimeout j -> Just j
+  Job.LogPoll -> Nothing
+  Job.LogWebUIRequest -> Nothing
+  Job.LogText _ -> Nothing
+
+assertJobIdStatus :: (HasCallStack)
+                  => Connection
+                  -> Job.TableName
+                  -> IORef [Job.LogEvent]
+                  -> String
+                  -> Job.Status
+                  -> JobId
+                  -> Assertion
+assertJobIdStatus conn tname logRef msg st jid = do
+  logs <- readIORef logRef
+  let mjid = Just jid
+  case st of
+    Job.Success ->
+      assertBool (msg <> ": Success event not found in job-logs for JobId=" <> show jid) $
+      (flip DL.any) logs $ \logEvent -> case logEvent of
+                                          Job.LogJobSuccess j _ -> jid == Job.jobId j
+                                          _ -> False
+    Job.Queued ->
+      assertBool (msg <> ": Not expecting to find a queued job in the the job-logs JobId=" <> show jid) $
+      not $ (flip DL.any) logs $ \logEvent -> case logEvent of
+                                           Job.LogJobStart j -> jid == Job.jobId j
+                                           Job.LogJobSuccess j _ -> jid == Job.jobId j
+                                           Job.LogJobFailed j _ _ _ -> jid == Job.jobId j
+                                           Job.LogJobTimeout j -> jid == Job.jobId j
+                                           Job.LogWebUIRequest -> False
+                                           Job.LogText _ -> False
+    Job.Failed ->
+      assertBool (msg <> ": Failed event not found in job-logs for JobId=" <> show jid) $
+      (flip DL.any) logs $ \logEvent -> case logEvent of
+                                          Job.LogJobFailed j _ _ _ -> jid == Job.jobId j
+                                          _ -> False
+
+    Job.Retry ->
+      assertBool (msg <> ": Failed event not found in job-logs for JobId=" <> show jid) $
+      (flip DL.any) logs $ \logEvent -> case logEvent of
+                                          Job.LogJobFailed j _ _ _ -> jid == Job.jobId j
+                                          _ -> False
+
+    Job.Locked ->
+      assertBool (msg <> ": Start event should be present in the log for a locked job JobId=" <> show jid) $
+      (flip DL.any) logs $ \logEvent -> case logEvent of
+                                          Job.LogJobStart j -> jid == Job.jobId j
+                                          _ -> False
+
+  when (st /= Job.Success) $ do
+    Job.findJobByIdIO conn tname jid >>= \case
+      Nothing -> assertFailure $ "Not expecting job to be deleted. JobId=" <> show jid
+      Just (Job{jobStatus}) -> assertEqual msg st jobStatus
 
 ensureJobId :: (HasCallStack) => Connection -> Job.TableName -> JobId -> IO Job
 ensureJobId conn tname jid = Job.findJobByIdIO conn tname jid >>= \case
@@ -159,14 +214,19 @@ withRandomTable jobPool action = do
     (Pool.withResource jobPool $ \conn -> liftIO $ void $ PGS.execute_ conn ("drop table if exists " <> tname <> ";"))
 
 -- withNewJobMonitor :: (Pool Connection) -> (TableName -> Assertion) -> Assertion
-withNewJobMonitor jobPool actualTest = withRandomTable jobPool $ \tname -> withNamedJobMonitor tname jobPool (actualTest tname)
+withNewJobMonitor jobPool actualTest = do
+  withRandomTable jobPool $ \tname -> do
+    withNamedJobMonitor tname jobPool (actualTest tname)
 
 withNamedJobMonitor tname jobPool actualTest = do
+  logRef :: IORef [Job.LogEvent] <- newIORef []
   tcache <- newTimeCache simpleTimeFormat'
   withTimedFastLogger tcache LogNone $ \tlogger -> do
-    let flogger logLevel logEvent = tlogger $ \t -> toLogStr t <> " | " <> (Job.defaultLogStr Job.defaultJobType logLevel logEvent)
+    let flogger logLevel logEvent = do
+          tlogger $ \t -> toLogStr t <> " | " <> (Job.defaultLogStr Job.defaultJobType logLevel logEvent)
+          atomicModifyIORef' logRef (\logs -> (logEvent:logs, ()))
         cfg = Job.mkConfig flogger tname jobPool Job.UnlimitedConcurrentJobs jobRunner (\cfg -> cfg{Job.cfgDefaultMaxAttempts=3})
-    withAsync (Job.startJobRunner cfg) (const actualTest)
+    withAsync (Job.startJobRunner cfg) (const $ actualTest logRef)
 
 payloadGen :: MonadGen m => m JobPayload
 payloadGen = Gen.recursive  Gen.choice nonRecursive recursive
@@ -175,56 +235,64 @@ payloadGen = Gen.recursive  Gen.choice nonRecursive recursive
                    , PayloadSucceed <$> Gen.element [1, 2, 3]]
     recursive = [ PayloadFail <$> (Gen.element [1, 2, 3]) <*> payloadGen ]
 
-testJobCreation appPool jobPool = testCase "job creation" $ withNewJobMonitor jobPool $ \tname -> Pool.withResource appPool $ \conn -> do
-  Job{jobId} <- Job.createJob conn tname (PayloadSucceed 0)
-  delaySeconds $ Seconds 6
-  assertJobIdStatus conn tname "Expecting job to tbe successful by now" Job.Success jobId
+testJobCreation appPool jobPool = testCase "job creation" $ do
+  withNewJobMonitor jobPool $ \tname logRef -> do
+    Pool.withResource appPool $ \conn -> do
+      Job{jobId} <- Job.createJob conn tname (PayloadSucceed 0)
+      delaySeconds $ Seconds 6
+      assertJobIdStatus conn tname logRef "Expecting job to be successful by now" Job.Success jobId
 
-testEnsureShutdown appPool jobPool = testCase "ensure shutdown" $ withRandomTable jobPool $ \tname -> do
-  jid <- scheduleJob tname
-  delaySeconds (2 * Job.defaultPollingInterval)
-  Pool.withResource appPool $ \conn ->
-    assertJobIdStatus conn tname "Job should still be in queued state if job-monitor is no longer running" Job.Queued jid
+testEnsureShutdown appPool jobPool = testCase "ensure shutdown" $ do
+  withRandomTable jobPool $ \tname -> do
+    (jid, logRef) <- scheduleJob tname
+    delaySeconds (2 * Job.defaultPollingInterval)
+    Pool.withResource appPool $ \conn -> do
+      assertJobIdStatus conn tname logRef "Job should still be in queued state if job-monitor is no longer running" Job.Queued jid
   where
-    scheduleJob tname = withNamedJobMonitor tname jobPool $ do
+    scheduleJob tname = withNamedJobMonitor tname jobPool $ \logRef -> do
       t <- getCurrentTime
       Pool.withResource appPool $ \conn -> do
         Job{jobId} <- Job.scheduleJob conn tname (PayloadSucceed 0) (addUTCTime (fromIntegral (2 * (unSeconds Job.defaultPollingInterval))) t)
-        assertJobIdStatus conn tname "Job is scheduled in future, should still be queueud" Job.Queued jobId
-        pure jobId
+        assertJobIdStatus conn tname logRef "Job is scheduled in future, should still be queueud" Job.Queued jobId
+        pure (jobId, logRef)
 
-testGracefuleShutdown appPool jobPool = testCase "ensure graceful shutdown" $ withRandomTable jobPool $ \tname -> do
-  (j1, j2) <- withNamedJobMonitor tname jobPool $ Pool.withResource appPool $ \conn -> do
-    t <- getCurrentTime
-    j1 <- Job.createJob conn tname (PayloadSucceed $ 2 * Job.defaultPollingInterval)
-    j2 <- Job.scheduleJob conn tname (PayloadSucceed 0) (addUTCTime (fromIntegral $ unSeconds $ Job.defaultPollingInterval) t)
-    liftIO $ putStrLn "created"
-    pure (j1, j2)
-  Pool.withResource appPool $ \conn -> do
-    delaySeconds 1
-    assertJobIdStatus conn tname "Expecting the first job to be in locked state because it should be running" Job.Locked (jobId j1)
-    assertJobIdStatus conn tname "Expecting the second job to be queued because no new job should be picked up during graceful shutdown" Job.Queued (jobId j2)
-    delaySeconds $ 3 * Job.defaultPollingInterval
-    assertJobIdStatus conn tname "Expecting the first job to be completed successfully if graceful shutdown is implemented correctly" Job.Success (jobId j1)
-    assertJobIdStatus conn tname "Expecting the second job to be queued because no new job should be picked up during graceful shutdown" Job.Queued (jobId j2)
+testGracefulShutdown appPool jobPool = testCase "ensure graceful shutdown" $ do
+  withRandomTable jobPool $ \tname -> do
+    (j1, j2, logRef) <- withNamedJobMonitor tname jobPool $ \logRef -> do
+      Pool.withResource appPool $ \conn -> do
+        t <- getCurrentTime
+        j1 <- Job.createJob conn tname (PayloadSucceed $ 2 * Job.defaultPollingInterval)
+        j2 <- Job.scheduleJob conn tname (PayloadSucceed 0) (addUTCTime (fromIntegral $ unSeconds $ Job.defaultPollingInterval) t)
+        pure (j1, j2, logRef)
+    Pool.withResource appPool $ \conn -> do
+      delaySeconds 1
+      assertJobIdStatus conn tname logRef "Expecting the first job to be in locked state because it should be running" Job.Locked (jobId j1)
+      assertJobIdStatus conn tname logRef "Expecting the second job to be queued because no new job should be picked up during graceful shutdown" Job.Queued (jobId j2)
+      delaySeconds $ 3 * Job.defaultPollingInterval
+      assertJobIdStatus conn tname logRef "Expecting the first job to be completed successfully if graceful shutdown is implemented correctly" Job.Success (jobId j1)
+      assertJobIdStatus conn tname logRef "Expecting the second job to be queued because no new job should be picked up during graceful shutdown" Job.Queued (jobId j2)
 
-  pure ()
+    pure ()
 
-testJobScheduling appPool jobPool = testCase "job scheduling" $ withNewJobMonitor jobPool $ \tname -> Pool.withResource appPool $ \conn -> do
-  t <- getCurrentTime
-  job@Job{jobId} <- Job.scheduleJob conn tname (PayloadSucceed 0) (addUTCTime (fromIntegral 3600) t)
-  delaySeconds $ Seconds 2
-  assertJobIdStatus conn tname "Job is scheduled in the future. It should NOT have been successful by now" Job.Queued jobId
-  j <- Job.saveJobIO conn tname job{jobRunAt = (addUTCTime (fromIntegral (-1)) t)}
-  delaySeconds (Job.defaultPollingInterval + (Seconds 2))
-  assertJobIdStatus conn tname "Job had a runAt date in the past. It should have been successful by now" Job.Success jobId
+testJobScheduling appPool jobPool = testCase "job scheduling" $ do
+  withNewJobMonitor jobPool $ \tname logRef -> do
+    Pool.withResource appPool $ \conn -> do
+      t <- getCurrentTime
+      job@Job{jobId} <- Job.scheduleJob conn tname (PayloadSucceed 0) (addUTCTime (fromIntegral 3600) t)
+      delaySeconds $ Seconds 2
+      assertJobIdStatus conn tname logRef "Job is scheduled in the future. It should NOT have been successful by now" Job.Queued jobId
+      j <- Job.saveJobIO conn tname job{jobRunAt = (addUTCTime (fromIntegral (-1)) t)}
+      delaySeconds (Job.defaultPollingInterval + (Seconds 2))
+      assertJobIdStatus conn tname logRef "Job had a runAt date in the past. It should have been successful by now" Job.Success jobId
 
-testJobFailure appPool jobPool = testCase "job retry" $ withNewJobMonitor jobPool $ \tname -> Pool.withResource appPool $ \conn -> do
-  Job{jobId} <- Job.createJob conn tname (PayloadAlwaysFail 0)
-  delaySeconds $ Seconds 15
-  Job{jobAttempts, jobStatus} <- ensureJobId conn tname jobId
-  assertEqual "Exepcting job to be in Failed status" Job.Failed jobStatus
-  assertEqual ("Expecting job attempts to be 3. Found " <> show jobAttempts)  3 jobAttempts
+testJobFailure appPool jobPool = testCase "job retry" $ do
+  withNewJobMonitor jobPool $ \tname logRef -> do
+    Pool.withResource appPool $ \conn -> do
+      Job{jobId} <- Job.createJob conn tname (PayloadAlwaysFail 0)
+      delaySeconds $ Seconds 15
+      Job{jobAttempts, jobStatus} <- ensureJobId conn tname jobId
+      assertEqual "Exepcting job to be in Failed status" Job.Failed jobStatus
+      assertEqual ("Expecting job attempts to be 3. Found " <> show jobAttempts)  3 jobAttempts
 
 data JobEvent = JobStart
               | JobRetry
