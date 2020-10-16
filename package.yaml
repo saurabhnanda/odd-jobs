@@ -133,13 +133,14 @@ tests:
       - -threaded
       - -with-rtsopts=-N
     main: Test
-    source-dirs: test
+    source-dirs:
+      - test
+      - src
     dependencies:
       - tasty
       - tasty-discover
       - hedgehog
       - tasty-hedgehog
-      - odd-jobs
       - tasty-hunit
       - random
       - monad-control
