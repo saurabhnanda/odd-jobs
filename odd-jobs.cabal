@@ -1,10 +1,10 @@
 cabal-version: 1.12
 
--- This file has been generated from package.yaml by hpack version 0.31.2.
+-- This file has been generated from package.yaml by hpack version 0.33.0.
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: e6616995768a7a1fd8654b632013cf28cfa6e31926533c4470e8e970d1d2d3bd
+-- hash: 559bd60bc7a5df63861a213412268e713c83719c49399149be8dcbcc620aa0e5
 
 name:           odd-jobs
 version:        0.2.2
@@ -207,11 +207,18 @@ test-suite jobrunner
   main-is: Test.hs
   other-modules:
       CliParser
-      Try
-      Try2
+      OddJobs.Cli
+      OddJobs.ConfigBuilder
+      OddJobs.Endpoints
+      OddJobs.Job
+      OddJobs.Migrations
+      OddJobs.Types
+      OddJobs.Web
+      UI
       Paths_odd_jobs
   hs-source-dirs:
       test
+      src
   default-extensions: NamedFieldPuns LambdaCase TemplateHaskell ScopedTypeVariables GeneralizedNewtypeDeriving QuasiQuotes OverloadedStrings
   ghc-options: -Wall -fno-warn-orphans -fno-warn-unused-imports -fno-warn-dodgy-exports -Werror=missing-fields -threaded -with-rtsopts=-N -main-is Test
   build-depends:
@@ -235,7 +242,6 @@ test-suite jobrunner
     , monad-control
     , monad-logger
     , mtl
-    , odd-jobs
     , optparse-applicative
     , postgresql-simple
     , random
