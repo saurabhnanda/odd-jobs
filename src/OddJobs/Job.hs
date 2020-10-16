@@ -383,6 +383,7 @@ runJob jid = do
     Just job -> do
       startTime <- liftIO getCurrentTime
       lockTimeout <- getDefaultJobTimeout
+      log LevelInfo $ LogJobStart job
       (flip catches) [Handler $ timeoutHandler job startTime, Handler $ exceptionHandler job startTime] $ do
         runJobWithTimeout lockTimeout job
         endTime <- liftIO getCurrentTime
