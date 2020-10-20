@@ -34,7 +34,7 @@ import qualified System.Log.FastLogger as FLogger
 mkConfig :: (LogLevel -> LogEvent -> IO ())
          -- ^ "Structured logging" function. Ref: 'cfgLogger'
          -> TableName
-         -- ^ DB table which holds your jobs. Ref: 'cfgTableName'
+         -- ^ DB table which holds your jobs (resource table name will be generated). Ref: 'cfgTableNames'
          -> Pool Connection
          -- ^ DB connection-pool to be used by job-runner. Ref: 'cfgDbPool'
          -> ConcurrencyControl
@@ -53,7 +53,39 @@ mkConfig :: (LogLevel -> LogEvent -> IO ())
          -- function, unless you know what you're doing.
          -> Config
          -- ^ The final 'Config' that can be used to start various job-runners
-mkConfig logger tname dbpool ccControl jrunner configOverridesFn =
+mkConfig logger tname =
+  mkResourceConfig logger (simpleTableNames tname)
+
+-- | This function gives you a 'Config' with a bunch of sensible defaults
+-- already applied, but it allows the specification of all database table
+-- names.. It requires the bare minimum of other configuration parameters that
+-- this library cannot assume on your behalf.
+--
+-- It makes a few __important assumptions__ about your 'jobPayload 'JSON, which
+-- are documented in 'defaultJobType'.
+mkResourceConfig :: (LogLevel -> LogEvent -> IO ())
+                 -- ^ "Structured logging" function. Ref: 'cfgLogger'
+                 -> TableNames
+                 -- ^ DB tables which hold your jobs and resources
+                 -> Pool Connection
+                 -- ^ DB connection-pool to be used by job-runner. Ref: 'cfgDbPool'
+                 -> ConcurrencyControl
+                 -- ^ Concurrency configuration. Ref: 'cfgConcurrencyControl'
+                 -> (Job -> IO ())
+                 -- ^ The actual "job runner" which contains your application code. Ref: 'cfgJobRunner'
+                 -> (Config -> Config)
+                 -- ^ A function that allows you to modify the \"interim config\". The
+                 -- \"interim config\" will cotain a bunch of in-built default config
+                 -- params, along with the config params that you\'ve just provided
+                 -- (i.e. logging function, table name, DB pool, etc). You can use this
+                 -- function to override values in the \"interim config\". If you do not
+                 -- wish to modify the \"interim config\" just pass 'Prelude.id' as an
+                 -- argument to this parameter. __Note:__ it is strongly recommended
+                 -- that you __do not__ modify the generated 'Config' outside of this
+                 -- function, unless you know what you're doing.
+                 -> Config
+                 -- ^ The final 'Config' that can be used to start various job-runners
+mkResourceConfig logger tnames dbpool ccControl jrunner configOverridesFn =
   let cfg = configOverridesFn $ Config
             { cfgPollingInterval = defaultPollingInterval
             , cfgOnJobSuccess = (const $ pure ())
@@ -63,18 +95,18 @@ mkConfig logger tname dbpool ccControl jrunner configOverridesFn =
             , cfgDbPool = dbpool
             , cfgOnJobStart = (const $ pure ())
             , cfgDefaultMaxAttempts = 10
-            , cfgTableName = tname
+            , cfgTableNames = tnames
             , cfgOnJobTimeout = (const $ pure ())
             , cfgConcurrencyControl = ccControl
+            , cfgDefaultResourceLimit = 1
             , cfgPidFile = Nothing
             , cfgJobType = defaultJobType
             , cfgDefaultJobTimeout = Seconds 600
             , cfgJobToHtml = defaultJobToHtml (cfgJobType cfg)
-            , cfgAllJobTypes = (defaultDynamicJobTypes (cfgTableName cfg) (cfgJobTypeSql cfg))
+            , cfgAllJobTypes = (defaultDynamicJobTypes (cfgTableNames cfg) (cfgJobTypeSql cfg))
             , cfgJobTypeSql = defaultJobTypeSql
             }
   in cfg
-
 
 
 -- | If you aren't interested in structured logging, you can use this function
@@ -184,11 +216,12 @@ defaultConstantJobTypes :: forall a . (Generic a, ConNames (Rep a))
 defaultConstantJobTypes _ =
   AJTFixed $ DL.map toS $ conNames (undefined :: a)
 
-defaultDynamicJobTypes :: TableName
+defaultDynamicJobTypes :: TableNames
                        -> PGS.Query
                        -> AllJobTypes
-defaultDynamicJobTypes tname jobTypeSql = AJTSql $ \conn -> do
-  fmap (DL.map ((fromMaybe "(unknown)") . fromOnly)) $ PGS.query_ conn $ "select distinct(" <> jobTypeSql <> ") from " <> tname <> " order by 1 nulls last"
+defaultDynamicJobTypes tnames jobTypeSql = AJTSql $ \conn -> do
+  fmap (DL.map ((fromMaybe "(unknown)") . fromOnly)) $ PGS.query_ conn $
+    "select distinct(" <> jobTypeSql <> ") from " <> tnJob tnames <> " order by 1 nulls last"
 
 -- | This makes __two important assumptions__. First, this /assumes/ that jobs
 -- in your app are represented by a sum-type. For example:

@@ -19,7 +19,9 @@ module OddJobs.Job
   --
   -- $createJobs
   , createJob
+  , createResourceJob
   , scheduleJob
+  , scheduleResourceJob
 
   -- * @Job@ and associated data-types
   --
@@ -29,10 +31,14 @@ module OddJobs.Job
   , Status(..)
   , JobRunnerName(..)
   , TableName
+  , TableNames(..)
+  , simpleTableNames
   , delaySeconds
   , Seconds(..)
   , JobErrHandler(..)
   , AllJobTypes(..)
+  , ResourceId(..)
+
 
   -- ** Structured logging
   --
@@ -133,11 +139,12 @@ class (MonadUnliftIO m, MonadBaseControl IO m) => HasJobRunner m where
   onJobFailed :: forall a . m [JobErrHandler a]
   getJobRunner :: m (Job -> IO ())
   getDbPool :: m (Pool Connection)
-  getTableName :: m TableName
+  getTableNames :: m TableNames
   onJobStart :: Job -> m ()
   getDefaultMaxAttempts :: m Int
   getRunnerEnv :: m RunnerEnv
   getConcurrencyControl :: m ConcurrencyControl
+  getDefaultResourceLimit :: m Int
   getPidFile :: m (Maybe FilePath)
   log :: LogLevel -> LogEvent -> m ()
   getDefaultJobTimeout :: m Seconds
@@ -174,7 +181,7 @@ instance HasJobRunner RunnerM where
     logCallbackErrors (jobId job) "onJobSuccess" $ liftIO $ fn job
   getJobRunner = cfgJobRunner . envConfig <$> ask
   getDbPool = cfgDbPool . envConfig <$> ask
-  getTableName = cfgTableName . envConfig <$> ask
+  getTableNames = cfgTableNames . envConfig <$> ask
   onJobStart job = do
     fn <- cfgOnJobStart . envConfig <$> ask
     logCallbackErrors (jobId job) "onJobStart" $ liftIO $ fn job
@@ -184,6 +191,8 @@ instance HasJobRunner RunnerM where
   getRunnerEnv = ask
 
   getConcurrencyControl = (cfgConcurrencyControl . envConfig <$> ask)
+
+  getDefaultResourceLimit = cfgDefaultResourceLimit . envConfig <$> ask
 
   getPidFile = cfgPidFile . envConfig <$> ask
 
@@ -216,8 +225,8 @@ jobWorkerName = do
 -- the jobs table it is __recommended__ that you do not issue a @SELECT *@ or
 -- @RETURNIG *@. List out specific DB columns using 'jobDbColumns' and
 -- 'concatJobDbColumns' instead. This will insulate you from runtime errors
--- caused by addition of new columns to 'cfgTableName' in future versions of
--- OddJobs.
+-- caused by addition of new columns to job table of 'cfgTableNames' in future
+-- versions of OddJobs.
 jobDbColumns :: (IsString s, Semigroup s) => [s]
 jobDbColumns =
   [ "id"
@@ -230,6 +239,7 @@ jobDbColumns =
   , "attempts"
   , "locked_at"
   , "locked_by"
+  , "resource_id"
   ]
 
 -- | All 'jobDbColumns' joined together with commas. Useful for constructing SQL
@@ -245,8 +255,8 @@ concatJobDbColumns = concatJobDbColumns_ jobDbColumns ""
     concatJobDbColumns_ (col:cols) x = concatJobDbColumns_ cols (x <> col <> ", ")
 
 
-findJobByIdQuery :: TableName -> PGS.Query
-findJobByIdQuery tname = "SELECT " <> concatJobDbColumns <> " FROM " <> tname <> " WHERE id = ?"
+findJobByIdQuery :: TableNames -> PGS.Query
+findJobByIdQuery tnames = "SELECT " <> concatJobDbColumns <> " FROM " <> tnJob tnames <> " WHERE id = ?"
 
 withDbConnection :: (HasJobRunner m)
                  => (Connection -> m a)
@@ -258,9 +268,10 @@ withDbConnection action = do
 --
 -- $dbHelpers
 --
--- A bunch of functions that help you query 'cfgTableName' and change the status
--- of individual jobs. Most of these functions are in @IO@ and you /might/ want
--- to write wrappers that lift them into you application's custom monad.
+-- A bunch of functions that help you query tables in 'cfgTableNames' and change
+-- the status of individual jobs. Most of these functions are in @IO@ and you
+-- /might/ want to write wrappers that lift them into you application's custom
+-- monad.
 --
 -- __Note:__ When passing a 'Connection' to these function, it is
 -- __recommended__ __to not__ take a connection from 'cfgDbPool'. Use your
@@ -271,29 +282,29 @@ findJobById :: (HasJobRunner m)
             => JobId
             -> m (Maybe Job)
 findJobById jid = do
-  tname <- getTableName
-  withDbConnection $ \conn -> liftIO $ findJobByIdIO conn tname jid
+  tnames <- getTableNames
+  withDbConnection $ \conn -> liftIO $ findJobByIdIO conn tnames jid
 
-findJobByIdIO :: Connection -> TableName -> JobId -> IO (Maybe Job)
-findJobByIdIO conn tname jid = PGS.query conn (findJobByIdQuery tname) (Only jid) >>= \case
+findJobByIdIO :: Connection -> TableNames -> JobId -> IO (Maybe Job)
+findJobByIdIO conn tnames jid = PGS.query conn (findJobByIdQuery tnames) (Only jid) >>= \case
   [] -> pure Nothing
   [j] -> pure (Just j)
   js -> Prelude.error $ "Not expecting to find multiple jobs by id=" <> (show jid)
 
 
-saveJobQuery :: TableName -> PGS.Query
-saveJobQuery tname = "UPDATE " <> tname <> " set run_at = ?, status = ?, payload = ?, last_error = ?, attempts = ?, locked_at = ?, locked_by = ? WHERE id = ? RETURNING " <> concatJobDbColumns
+saveJobQuery :: TableNames -> PGS.Query
+saveJobQuery tnames = "UPDATE " <> tnJob tnames <> " set run_at = ?, status = ?, payload = ?, last_error = ?, attempts = ?, locked_at = ?, locked_by = ?, resource_id = ? WHERE id = ? RETURNING " <> concatJobDbColumns
 
-deleteJobQuery :: TableName -> PGS.Query
-deleteJobQuery tname = "DELETE FROM " <> tname <> " WHERE id = ?"
+deleteJobQuery :: TableNames -> PGS.Query
+deleteJobQuery tnames = "DELETE FROM " <> tnJob tnames <> " WHERE id = ?"
 
 saveJob :: (HasJobRunner m) => Job -> m Job
 saveJob j = do
-  tname <- getTableName
-  withDbConnection $ \conn -> liftIO $ saveJobIO conn tname j
+  tnames <- getTableNames
+  withDbConnection $ \conn -> liftIO $ saveJobIO conn tnames j
 
-saveJobIO :: Connection -> TableName -> Job -> IO Job
-saveJobIO conn tname Job{jobRunAt, jobStatus, jobPayload, jobLastError, jobAttempts, jobLockedBy, jobLockedAt, jobId} = do
+saveJobIO :: Connection -> TableNames -> Job -> IO Job
+saveJobIO conn tname Job{jobRunAt, jobStatus, jobPayload, jobLastError, jobAttempts, jobLockedBy, jobLockedAt, jobResourceId, jobId} = do
   rs <- PGS.query conn (saveJobQuery tname)
         ( jobRunAt
         , jobStatus
@@ -302,6 +313,7 @@ saveJobIO conn tname Job{jobRunAt, jobStatus, jobPayload, jobLastError, jobAttem
         , jobAttempts
         , jobLockedAt
         , jobLockedBy
+        , jobResourceId
         , jobId
         )
   case rs of
@@ -311,38 +323,38 @@ saveJobIO conn tname Job{jobRunAt, jobStatus, jobPayload, jobLastError, jobAttem
 
 deleteJob :: (HasJobRunner m) => JobId -> m ()
 deleteJob jid = do
-  tname <- getTableName
-  withDbConnection $ \conn -> liftIO $ deleteJobIO conn tname jid
+  tnames <- getTableNames
+  withDbConnection $ \conn -> liftIO $ deleteJobIO conn tnames jid
 
-deleteJobIO :: Connection -> TableName -> JobId -> IO ()
-deleteJobIO conn tname jid = do
-  void $ PGS.execute conn (deleteJobQuery tname) (Only jid)
+deleteJobIO :: Connection -> TableNames -> JobId -> IO ()
+deleteJobIO conn tnames jid =
+  void $ PGS.execute conn (deleteJobQuery tnames) (Only jid)
 
-runJobNowIO :: Connection -> TableName -> JobId -> IO (Maybe Job)
-runJobNowIO conn tname jid = do
+runJobNowIO :: Connection -> TableNames -> JobId -> IO (Maybe Job)
+runJobNowIO conn tnames jid = do
   t <- getCurrentTime
-  updateJobHelper tname conn (Queued, [Queued, Retry, Failed], Just t, jid)
+  updateJobHelper tnames conn (Queued, [Queued, Retry, Failed], Just t, jid)
 
 -- | TODO: First check in all job-runners if this job is still running, or not,
 -- and somehow send an uninterruptibleCancel to that thread.
-unlockJobIO :: Connection -> TableName -> JobId -> IO (Maybe Job)
-unlockJobIO conn tname jid = do
+unlockJobIO :: Connection -> TableNames -> JobId -> IO (Maybe Job)
+unlockJobIO conn tnames jid = do
   fmap listToMaybe $ PGS.query conn q (Retry, jid, In [Locked])
   where
-    q = "update " <> tname <> " set status=?, run_at=now(), locked_at=null, locked_by=null where id=? and status in ? returning " <> concatJobDbColumns
+    q = "update " <> tnJob tnames <> " set status=?, run_at=now(), locked_at=null, locked_by=null where id=? and status in ? returning " <> concatJobDbColumns
 
-cancelJobIO :: Connection -> TableName -> JobId -> IO (Maybe Job)
-cancelJobIO conn tname jid =
-  updateJobHelper tname conn (Failed, [Queued, Retry], Nothing, jid)
+cancelJobIO :: Connection -> TableNames -> JobId -> IO (Maybe Job)
+cancelJobIO conn tnames jid =
+  updateJobHelper tnames conn (Failed, [Queued, Retry], Nothing, jid)
 
-updateJobHelper :: TableName
+updateJobHelper :: TableNames
                 -> Connection
                 -> (Status, [Status], Maybe UTCTime, JobId)
                 -> IO (Maybe Job)
-updateJobHelper tname conn (newStatus, existingStates, mRunAt, jid) =
+updateJobHelper tnames conn (newStatus, existingStates, mRunAt, jid) =
   fmap listToMaybe $ PGS.query conn q (newStatus, runAt, jid, PGS.In existingStates)
   where
-    q = "update " <> tname <> " set attempts=0, status=?, run_at=? where id=? and status in ? returning " <> concatJobDbColumns
+    q = "update " <> tnJob tnames <> " set attempts=0, status=?, run_at=? where id=? and status in ? returning " <> concatJobDbColumns
     runAt = case mRunAt of
       Nothing -> PGS.toField $ PGS.Identifier "run_at"
       Just t -> PGS.toField t
@@ -382,6 +394,7 @@ runJob jid = do
     Just job -> do
       startTime <- liftIO getCurrentTime
       lockTimeout <- getDefaultJobTimeout
+      log LevelInfo $ LogJobStart job
       (flip catches) [Handler $ timeoutHandler job startTime, Handler $ exceptionHandler job startTime] $ do
         runJobWithTimeout lockTimeout job
         endTime <- liftIO getCurrentTime
@@ -453,8 +466,21 @@ jobMonitor = do
         liftIO $ Dir.removePathForcibly f
 
 -- | Ref: 'jobPoller'
-jobPollingSql :: TableName -> Query
-jobPollingSql tname = "update " <> tname <> " set status = ?, locked_at = ?, locked_by = ?, attempts=attempts+1 WHERE id in (select id from " <> tname <> " where (run_at<=? AND ((status in ?) OR (status = ? and locked_at<?))) ORDER BY run_at ASC LIMIT 1 FOR UPDATE) RETURNING id"
+jobPollingSql :: TableNames -> Query
+jobPollingSql tnames =
+  "update " <> tnJob tnames <>
+  "\n  set status = ?, locked_at = now(), locked_by = ?, attempts=attempts+1" <>
+  "\nwhere id in ( select id from " <> tnJob tnames <> " j_out" <>
+  "\n              where (run_at<=now() AND (status in ? OR (status = ? and locked_at < now() - ? * interval '1 second')))" <>
+  "\n                and case when resource_id is null then true" <>
+  "\n                         else ( select count(id) from " <> tnJob tnames <> " j_in" <>
+  "\n                                where j_in.resource_id = j_out.resource_id and j_in.status = ?" <>
+  "\n                                  and j_in.locked_at >= now() - ? * interval '1 second' )" <>
+  "\n                            < coalesce(( select resource_limit from " <> tnResource tnames <> " r" <>
+  "\n                                         where r.resource_id = j_out.resource_id ), ?)" <>
+  "\n                    end" <>
+  "\n              order by run_at asc limit 1 for update )" <>
+  "\nreturning id"
 
 waitForJobs :: (HasJobRunner m)
             => m ()
@@ -497,19 +523,19 @@ jobPoller :: (HasJobRunner m) => m ()
 jobPoller = do
   processName <- liftIO jobWorkerName
   pool <- getDbPool
-  tname <- getTableName
+  tnames <- getTableNames
   lockTimeout <- getDefaultJobTimeout
   log LevelInfo $ LogText $ toS $ "Starting the job monitor via DB polling with processName=" <> processName
   concurrencyControlFn <- getConcurrencyControlFn
+  defaultResourceLimit <- getDefaultResourceLimit
   withResource pool $ \pollerDbConn -> forever $ concurrencyControlFn >>= \case
     False -> log LevelWarn $ LogText $ "NOT polling the job queue due to concurrency control"
     True -> do
       nextAction <- mask_ $ do
         log LevelDebug $ LogText $ toS $ "[" <> processName <> "] Polling the job queue.."
-        t <- liftIO getCurrentTime
-        r <- liftIO $
-             PGS.query pollerDbConn (jobPollingSql tname)
-             (Locked, t, processName, t, (In [Queued, Retry]), Locked, (addUTCTime (fromIntegral $ negate $ unSeconds lockTimeout) t))
+        r <- liftIO $ PGS.query pollerDbConn
+               (jobPollingSql tnames)
+               (Locked, processName, In [Queued, Retry], Locked, unSeconds lockTimeout, Locked, unSeconds lockTimeout, defaultResourceLimit)
         case r of
           -- When we don't have any jobs to run, we can relax a bit...
           [] -> pure delayAction
@@ -532,21 +558,33 @@ jobEventListener :: (HasJobRunner m)
 jobEventListener = do
   log LevelInfo $ LogText "Starting the job monitor via LISTEN/NOTIFY..."
   pool <- getDbPool
-  tname <- getTableName
-  jwName <- liftIO jobWorkerName
+  tnames <- getTableNames
+  lockTimeout <- getDefaultJobTimeout
   concurrencyControlFn <- getConcurrencyControlFn
+  defaultResourceLimit <- getDefaultResourceLimit
+  jwName <- liftIO jobWorkerName
+
 
   let tryLockingJob jid = do
-        let q = "UPDATE " <> tname <> " SET status=?, locked_at=now(), locked_by=?, attempts=attempts+1 WHERE id=? AND status in ? RETURNING id"
-        (withDbConnection $ \conn -> (liftIO $ PGS.query conn q (Locked, jwName, jid, In [Queued, Retry]))) >>= \case
+        let q = "update " <> tnJob tnames <> " j_out" <>
+              "\n  set status=?, locked_at=now(), locked_by=?, attempts=attempts+1" <>
+              "\nwhere id=? and status in ? " <>
+              "\n   and case when resource_id is null then true" <>
+              "\n       else ( select count(id) from " <> tnJob tnames <> " j_in" <>
+              "\n              where j_in.resource_id = j_out.resource_id and j_in.status = ?" <>
+              "\n                and j_in.locked_at >= now() - ? * interval '1 second' )" <>
+              "\n            < coalesce((select resource_limit from " <> tnResource tnames <> " r where r.resource_id = j_out.resource_id), ?)" <>
+              "\n       end" <>
+              "\nRETURNING id"
+        (withDbConnection $ \conn -> (liftIO $ PGS.query conn q (Locked, jwName, jid, In [Queued, Retry], Locked, unSeconds lockTimeout, defaultResourceLimit))) >>= \case
           [] -> do
-            log LevelDebug $ LogText $ toS $ "Job was locked by someone else before I could start. Skipping it. JobId=" <> show jid
+            log LevelDebug $ LogText $ toS $ "Job was locked by someone else or resource limit was reached before I could start. Skipping it. JobId=" <> show jid
             pure Nothing
           [Only (_ :: JobId)] -> pure $ Just jid
           x -> error $ "WTF just happned? Was expecting a single row to be returned, received " ++ (show x)
 
   withResource pool $ \monitorDbConn -> do
-    void $ liftIO $ PGS.execute monitorDbConn ("LISTEN " <> pgEventName tname) ()
+    void $ liftIO $ PGS.execute monitorDbConn ("LISTEN " <> pgEventName tnames) ()
     forever $ do
       log LevelDebug $ LogText "[LISTEN/NOFIFY] Event loop"
       notif <- liftIO $ getNotification monitorDbConn
@@ -583,8 +621,8 @@ jobEventListener = do
 
 
 
-createJobQuery :: TableName -> PGS.Query
-createJobQuery tname = "INSERT INTO " <> tname <> "(run_at, status, payload, last_error, attempts, locked_at, locked_by) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING " <> concatJobDbColumns
+createJobQuery :: TableNames -> PGS.Query
+createJobQuery tnames = "INSERT INTO " <> tnJob tnames <> "(run_at, status, payload, last_error, attempts, locked_at, locked_by, resource_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING " <> concatJobDbColumns
 
 -- $createJobs
 --
@@ -599,12 +637,27 @@ createJobQuery tname = "INSERT INTO " <> tname <> "(run_at, status, payload, las
 -- 'scheduleJob' for further documentation.
 createJob :: ToJSON p
           => Connection
-          -> TableName
+          -> TableNames
           -> p
           -> IO Job
-createJob conn tname payload = do
+createJob conn tnames payload = do
   t <- getCurrentTime
-  scheduleJob conn tname payload t
+  scheduleJob conn tnames payload t
+
+-- | Create a job for immediate execution, with additional concurrnecy limits
+-- determined by the given 'resource'.
+--
+-- Internally calls 'scheduleResourceJob' passing it the current time. Read
+-- 'scheduleResourceJob' for further documentation.
+createResourceJob :: ToJSON p
+                  => Connection
+                  -> TableNames
+                  -> p
+                  -> Maybe ResourceId
+                  -> IO Job
+createResourceJob conn tnames payload resource = do
+  t <- getCurrentTime
+  scheduleResourceJob conn tnames payload resource t
 
 -- | Create a job for execution at the given time.
 --
@@ -618,14 +671,45 @@ scheduleJob :: ToJSON p
             => Connection   -- ^ DB connection to use. __Note:__ This should
                             -- /ideally/ come out of your application's DB pool,
                             -- not the 'cfgDbPool' you used in the job-runner.
-            -> TableName    -- ^ DB-table which holds your jobs
+            -> TableNames   -- ^ DB-tables which holds your jobs and resources
             -> p            -- ^ Job payload
             -> UTCTime      -- ^ when should the job be executed
             -> IO Job
-scheduleJob conn tname payload runAt = do
-  let args = ( runAt, Queued, toJSON payload, Nothing :: Maybe Value, 0 :: Int, Nothing :: Maybe Text, Nothing :: Maybe Text )
-      queryFormatter = toS <$> (PGS.formatQuery conn (createJobQuery tname) args)
-  rs <- PGS.query conn (createJobQuery tname) args
+scheduleJob conn tnames payload runAt =
+  scheduleResourceJob conn tnames payload Nothing runAt
+
+-- | Create a job for execution at the given time, with additional concurrnecy
+-- limits determined by the given 'resource'.
+--
+--  * If time has already past, 'jobEventListener' is going to pick this up
+--    for execution immediately.
+--
+--  * If time is in the future, 'jobPoller' is going to pick this up with an
+--    error of +/- 'cfgPollingInterval' seconds. Please do not expect very high
+--    accuracy of when the job is actually executed.
+--
+--  * If 'resource' is 'Nothing', then only the machine-bound concurrency
+--    control limit will be enforced (ref: 'cfgConcurrencyControl'). If a
+--    'ResourceId' is supplied, and that id is found in the resource table (ref:
+--    'cfgTableNames'), then the resource's concurrency limit will be enforced
+--    for this job, in addtion to the concurrency control limit. If the resource
+--    does not specify a resource limit, or if the resource id is not found,
+--    then the default resource limit (ref: 'cfgDefaultResourceLimit') will be
+--    used.
+scheduleResourceJob :: ToJSON p
+                    => Connection       -- ^ DB connection to use. __Note:__ This should
+                                        -- /ideally/ come out of your application's DB pool,
+                                        -- not the 'cfgDbPool' you used in the job-runner.
+                    -> TableNames       -- ^ DB-tables which holds your jobs and resources
+                    -> p                -- ^ Job payload
+                    -> Maybe ResourceId -- ^ Id of the resource, if any, whose concurrency
+                                        -- limits will apply to this job
+                    -> UTCTime          -- ^ when should the job be executed
+                    -> IO Job
+scheduleResourceJob conn tnames payload resource runAt = do
+  let args = ( runAt, Queued, toJSON payload, Nothing :: Maybe Value, 0 :: Int, Nothing :: Maybe Text, Nothing :: Maybe Text, resource )
+      queryFormatter = toS <$> (PGS.formatQuery conn (createJobQuery tnames) args)
+  rs <- PGS.query conn (createJobQuery tnames) args
   case rs of
     [] -> (Prelude.error . (<> "Not expecting a blank result set when creating a job. Query=")) <$> queryFormatter
     [r] -> pure r
@@ -677,12 +761,12 @@ fetchAllJobTypes Config{cfgAllJobTypes, cfgDbPool} = liftIO $ do
 -- | Used by web\/admin IO to fetch a \"master list\" of all known job-runners.
 -- There is a known issue with the way this has been implemented:
 --
---   * Since this looks at the 'jobLockedBy' column of 'cfgTableName', it will
---     discover only those job-runners that are actively executing at least one
---     job at the time this function is executed.
+--   * Since this looks at the 'jobLockedBy' column of the job table of
+--     'cfgTableNames', it will discover only those job-runners that are
+--     actively executing at least one job at the time this function is
+--     executed.
 fetchAllJobRunners :: (MonadIO m)
                    => Config
                    -> m [JobRunnerName]
-fetchAllJobRunners Config{cfgTableName, cfgDbPool} = liftIO $ withResource cfgDbPool $ \conn -> do
-  fmap (mapMaybe fromOnly) $ PGS.query_ conn $ "select distinct locked_by from " <> cfgTableName
-
+fetchAllJobRunners Config{cfgTableNames, cfgDbPool} = liftIO $ withResource cfgDbPool $ \conn -> do
+  fmap (mapMaybe fromOnly) $ PGS.query_ conn $ "select distinct locked_by from " <> tnJob cfgTableNames

@@ -2,3 +2,5 @@ stack.yaml.lock
 test.log
 TAGS
 .stack-work/
+dist-*
+cabal.project.local*
