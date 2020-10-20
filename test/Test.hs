@@ -5,6 +5,7 @@ import           Control.Monad.Logger
 import           Control.Monad.Reader
 import           Data.Aeson as Aeson
 import           Data.Aeson.TH as Aeson
+import           Data.ByteString.Char8 (pack)
 import           Data.Functor (void)
 import qualified Data.IntMap.Strict as Map
 import           Data.List as DL
@@ -18,6 +19,7 @@ import           Data.Time
 import qualified Data.Time.Convenience as Time
 import           Database.PostgreSQL.Simple as PGS
 import           GHC.Generics
+import           System.Environment (lookupEnv)
 import           System.Log.FastLogger ( fromLogStr, withFastLogger, LogType'(..)
                    , defaultBufSize, FastLogger, FileLogSpec(..), newTimedFastLogger
                    , withTimedFastLogger)
@@ -41,32 +43,38 @@ import           OddJobs.Web as Web
 
 $(Aeson.deriveJSON Aeson.defaultOptions ''Seconds)
 
+-- | Default database connection used in unit tests.
+-- __Note:__ This value will be used unless the environment variable
+-- "ODD_JOBS_TEST_DB_CONNECT" is defined, which must be set to a valid
+-- PostgreSQL connection string to override this default.
+defaultTestConnectInfo :: ConnectInfo
+defaultTestConnectInfo = ConnectInfo
+  { connectHost = "localhost"
+  , connectPort = fromIntegral (5432 :: Int)
+  , connectUser = "jobs_test"
+  , connectPassword = "jobs_test"
+  , connectDatabase = "jobs_test"
+  }
+
 main :: IO ()
 main = do
-  bracket createAppPool destroyAllResources $ \appPool -> do
-    bracket createJobPool destroyAllResources $ \jobPool -> do
+  bracket createTestPool destroyAllResources $ \appPool -> do
+    bracket createTestPool destroyAllResources $ \jobPool -> do
       defaultMain $ tests appPool jobPool
-  where
-    connInfo = ConnectInfo
-                 { connectHost = "localhost"
-                 , connectPort = fromIntegral (5432 :: Int)
-                 , connectUser = "jobs_test"
-                 , connectPassword = "jobs_test"
-                 , connectDatabase = "jobs_test"
-                 }
 
-    createAppPool = createPool
-      (PGS.connect connInfo)  -- cretea a new resource
-      (PGS.close)             -- destroy resource
-      1                       -- stripes
-      (fromRational 10)       -- number of seconds unused resources are kept around
-      45
-    createJobPool = createPool
-      (PGS.connect connInfo)  -- cretea a new resource
-      (PGS.close)             -- destroy resource
-      1                       -- stripes
-      (fromRational 10)       -- number of seconds unused resources are kept around
-      45
+createTestPool :: IO (Pool Connection)
+createTestPool =
+  createPool
+    openTestConnection -- create a new resource
+    PGS.close          -- destroy resource
+    1                  -- stripes
+    (fromRational 10)  -- number of seconds unused resources are kept around
+    45                 -- max resources open per stripe
+  where
+    openTestConnection =
+      maybe (PGS.connect defaultConnectInfo)
+            (PGS.connectPostgreSQL . pack)
+        =<< lookupEnv "ODD_JOBS_TEST_DB_CONNECT"
 
 tests appPool jobPool = testGroup "All tests"
   [
