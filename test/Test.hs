@@ -1,47 +1,43 @@
 {-# LANGUAGE TypeSynonymInstances, FlexibleInstances, NamedFieldPuns, DeriveGeneric, FlexibleContexts, TypeFamilies, StandaloneDeriving #-}
 module Test where
 
-import Test.Tasty as Tasty
-import qualified OddJobs.Migrations as Migrations
-import qualified OddJobs.Job as Job
-import Database.PostgreSQL.Simple as PGS
-import Data.Functor (void)
-import Data.Pool as Pool
-import Test.Tasty.HUnit
-import Debug.Trace
--- import Control.Exception.Lifted (finally, catch, bracket)
-import Control.Monad.Logger
-import Control.Monad.Reader
-import Data.Aeson as Aeson
-import Data.Aeson.TH as Aeson
--- import Control.Concurrent.Lifted
--- import Control.Concurrent.Async.Lifted
-import OddJobs.Job (Job(..), JobId, delaySeconds, Seconds(..))
-import System.Log.FastLogger ( fromLogStr, withFastLogger, LogType'(..)
-                             , defaultBufSize, FastLogger, FileLogSpec(..), newTimedFastLogger
-                             , withTimedFastLogger)
-import System.Log.FastLogger.Date (newTimeCache, simpleTimeFormat')
-import Data.String.Conv (toS)
-import Data.Time
-import GHC.Generics
-import Hedgehog
+import           Control.Monad.Logger
+import           Control.Monad.Reader
+import           Data.Aeson as Aeson
+import           Data.Aeson.TH as Aeson
+import           Data.Functor (void)
+import qualified Data.IntMap.Strict as Map
+import           Data.List as DL
+import           Data.Maybe (fromMaybe)
+import           Data.Ord (comparing, Down(..))
+import           Data.Pool as Pool
+import           Data.String (fromString)
+import           Data.String.Conv (toS)
+import qualified Data.Text as T
+import           Data.Time
+import qualified Data.Time.Convenience as Time
+import           Database.PostgreSQL.Simple as PGS
+import           GHC.Generics
+import           System.Log.FastLogger ( fromLogStr, withFastLogger, LogType'(..)
+                   , defaultBufSize, FastLogger, FileLogSpec(..), newTimedFastLogger
+                   , withTimedFastLogger)
+import           System.Log.FastLogger.Date (newTimeCache, simpleTimeFormat')
+import qualified System.Random as R
+import           UnliftIO
+
+import           Hedgehog
 import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Range
-import Test.Tasty.Hedgehog
-import qualified System.Random as R
-import Data.String (fromString)
-import qualified Data.IntMap.Strict as Map
-import Control.Monad.Trans.Control (liftWith, restoreT)
-import Control.Monad.Morph (hoist)
-import Data.List as DL
-import OddJobs.Web as Web
-import qualified Data.Time.Convenience as Time
-import qualified Data.Text as T
-import Data.Ord (comparing, Down(..))
-import Data.Maybe (fromMaybe)
+import           Test.Tasty as Tasty
+import           Test.Tasty.Hedgehog
+import           Test.Tasty.HUnit
+
 import qualified OddJobs.ConfigBuilder as Job
-import UnliftIO
-import OddJobs.Types
+import           OddJobs.Job (Job(..), JobId, delaySeconds, Seconds(..))
+import qualified OddJobs.Job as Job
+import qualified OddJobs.Migrations as Migrations
+import qualified OddJobs.Types as Job
+import           OddJobs.Web as Web
 
 $(Aeson.deriveJSON Aeson.defaultOptions ''Seconds)
 
@@ -207,22 +203,19 @@ ensureJobId conn tnames jid = Job.findJobByIdIO conn tnames jid >>= \case
   Nothing -> error $ "Not expecting job to be deleted. JobId=" <> show jid
   Just j -> pure j
 
---withRandomTable :: (MonadBaseControl IO m, MonadUnliftIO m) => Pool Connection -> (Job.TableNames -> m a) -> m a
 withRandomTable :: Pool Connection -> (Job.TableNames -> IO a) -> IO a
 withRandomTable jobPool action = do
-  tnames <- simpleTableNames . ("jobs_" <>) . fromString <$> liftIO (replicateM 10 (R.randomRIO ('a', 'z')))
+  tnames <- Job.simpleTableNames . ("jobs_" <>) . fromString <$> liftIO (replicateM 10 $ R.randomRIO ('a', 'z'))
   finally
     ((Pool.withResource jobPool $ \conn -> (liftIO $ Migrations.createJobTables conn tnames)) >> (action tnames))
     (Pool.withResource jobPool $ \conn -> liftIO $ void $ Migrations.dropJobTables conn tnames)
 
---withNewJobMonitor :: (MonadBaseControl IO m, MonadUnliftIO m) => Pool Connection -> (TableNames -> IORef [Job.LogEvent] -> m a) -> m a
-withNewJobMonitor :: Pool Connection -> (TableNames -> IORef [Job.LogEvent] -> IO a) -> IO a
+withNewJobMonitor :: Pool Connection -> (Job.TableNames -> IORef [Job.LogEvent] -> IO a) -> IO a
 withNewJobMonitor jobPool actualTest = do
   withRandomTable jobPool $ \tnames -> do
     withNamedJobMonitor tnames jobPool (actualTest tnames)
 
---withNamedJobMonitor :: (MonadBaseControl IO m, MonadUnliftIO m) => TableNames -> Pool Connection -> (IORef [Job.LogEvent] -> m a) -> m a
-withNamedJobMonitor :: TableNames -> Pool Connection -> (IORef [Job.LogEvent] -> IO a) -> IO a
+withNamedJobMonitor :: Job.TableNames -> Pool Connection -> (IORef [Job.LogEvent] -> IO a) -> IO a
 withNamedJobMonitor tnames jobPool actualTest = do
   logRef :: IORef [Job.LogEvent] <- newIORef []
   tcache <- newTimeCache simpleTimeFormat'
