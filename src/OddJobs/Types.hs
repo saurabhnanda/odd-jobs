@@ -24,7 +24,7 @@ import Lucid (Html(..))
 import Data.Pool (Pool)
 import Control.Monad.Logger (LogLevel)
 
--- | An alias for 'Identifier' type, it is used for the job table name.
+-- | An alias for 'QualifiedIdentifier' type, it is used for the job table name.
 -- Since this type has an instance of 'IsString',
 -- you do not need to do anything special to create a value for this type. Just
 -- ensure you have the @OverloadedStrings@ extention enabled. For example:
@@ -35,10 +35,11 @@ import Control.Monad.Logger (LogLevel)
 -- myJobsTable :: TableName
 -- myJobsTable = "my_jobs"
 -- @
-type TableName = PGS.Identifier
+type TableName = PGS.QualifiedIdentifier
 
 pgEventName :: TableName -> PGS.Identifier
-pgEventName tname = PGS.Identifier $ "job_created_" <> PGS.fromIdentifier tname
+pgEventName (PGS.QualifiedIdentifier Nothing tname) = PGS.Identifier $ "jobs_created_" <> tname
+pgEventName (PGS.QualifiedIdentifier (Just schema) tname) = PGS.Identifier $ "jobs_created_" <> schema <> "_" <> tname
 
 newtype Seconds = Seconds { unSeconds :: Int } deriving (Eq, Show, Ord, Num, Read)
 
