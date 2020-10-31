@@ -188,7 +188,7 @@ defaultDynamicJobTypes :: TableName
                        -> PGS.Query
                        -> AllJobTypes
 defaultDynamicJobTypes tname jobTypeSql = AJTSql $ \conn -> do
-  fmap (DL.map ((fromMaybe "(unknown)") . fromOnly)) $ PGS.query_ conn $ "select distinct(" <> jobTypeSql <> ") from " <> tname <> " order by 1 nulls last"
+  fmap (DL.map ((fromMaybe "(unknown)") . fromOnly)) $ PGS.query conn ("select distinct(" <> jobTypeSql <> ") from ? order by 1 nulls last") (Only tname)
 
 -- | This makes __two important assumptions__. First, this /assumes/ that jobs
 -- in your app are represented by a sum-type. For example:

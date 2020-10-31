@@ -7,6 +7,7 @@
 module OddJobs.Types where
 
 import Database.PostgreSQL.Simple as PGS
+import Database.PostgreSQL.Simple.Types as PGS
 import UnliftIO (MonadIO)
 import UnliftIO.Concurrent (threadDelay)
 import Data.Text.Conversions
@@ -23,7 +24,8 @@ import Lucid (Html(..))
 import Data.Pool (Pool)
 import Control.Monad.Logger (LogLevel)
 
--- | An alias for 'Query' type. Since this type has an instance of 'IsString'
+-- | An alias for 'QualifiedIdentifier' type. It is used for the job table name.
+-- Since this type has an instance of 'IsString',
 -- you do not need to do anything special to create a value for this type. Just
 -- ensure you have the @OverloadedStrings@ extention enabled. For example:
 --
@@ -33,10 +35,21 @@ import Control.Monad.Logger (LogLevel)
 -- myJobsTable :: TableName
 -- myJobsTable = "my_jobs"
 -- @
-type TableName = PGS.Query
+-- 
+-- This should also work for table names qualified by the schema name. For example:
+--
+-- @
+-- {-\# LANGUAGE OverloadedStrings \#-}
+--
+-- myJobsTable :: TableName
+-- myJobsTable = "odd_jobs.jobs"
+-- @
 
-pgEventName :: TableName -> Query
-pgEventName tname = "job_created_" <> tname
+type TableName = PGS.QualifiedIdentifier
+
+pgEventName :: TableName -> PGS.Identifier
+pgEventName (PGS.QualifiedIdentifier Nothing tname) = PGS.Identifier $ "jobs_created_" <> tname
+pgEventName (PGS.QualifiedIdentifier (Just schema) tname) = PGS.Identifier $ "jobs_created_" <> schema <> "_" <> tname
 
 newtype Seconds = Seconds { unSeconds :: Int } deriving (Eq, Show, Ord, Num, Read)
 

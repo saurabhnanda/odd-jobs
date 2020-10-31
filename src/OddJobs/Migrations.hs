@@ -5,11 +5,12 @@ module OddJobs.Migrations
 where
 
 import Database.PostgreSQL.Simple as PGS
+import Database.PostgreSQL.Simple.Types as PGS
 import Data.Functor (void)
 import OddJobs.Types
 
-createJobTableQuery :: TableName -> Query
-createJobTableQuery tname = "CREATE TABLE " <> tname <>
+createJobTableQuery :: Query
+createJobTableQuery = "CREATE TABLE ?" <>
   "( id serial primary key" <>
   ", created_at timestamp with time zone default now() not null" <>
   ", updated_at timestamp with time zone default now() not null" <>
@@ -22,28 +23,49 @@ createJobTableQuery tname = "CREATE TABLE " <> tname <>
   ", locked_by text null" <>
   ", constraint incorrect_locking_info CHECK ((status <> 'locked' and locked_at is null and locked_by is null) or (status = 'locked' and locked_at is not null and locked_by is not null))" <>
   ");" <>
-  "create index idx_" <> tname <> "_created_at on " <> tname <> "(created_at);" <>
-  "create index idx_" <> tname <> "_updated_at on " <> tname <> "(updated_at);" <>
-  "create index idx_" <> tname <> "_locked_at on " <> tname <> "(locked_at);" <>
-  "create index idx_" <> tname <> "_locked_by on " <> tname <> "(locked_by);" <>
-  "create index idx_" <> tname <> "_status on " <> tname <> "(status);" <>
-  "create index idx_" <> tname <> "_run_at on " <> tname <> "(run_at);"
+  "create index ? on ?(created_at);" <>
+  "create index ? on ?(updated_at);" <>
+  "create index ? on ?(locked_at);" <>
+  "create index ? on ?(locked_by);" <>
+  "create index ? on ?(status);" <>
+  "create index ? on ?(run_at);"
 
-createNotificationTrigger :: TableName -> Query
-createNotificationTrigger tname = "create or replace function " <> fnName <> "() returns trigger as $$" <>
+createNotificationTrigger :: Query
+createNotificationTrigger = "create or replace function ?() returns trigger as $$" <>
   "begin \n" <>
-  "  perform pg_notify('" <> pgEventName tname <> "', \n" <>
+  "  perform pg_notify('?', \n" <>
   "    json_build_object('id', new.id, 'run_at', new.run_at, 'locked_at', new.locked_at)::text); \n" <>
   "  return new; \n" <>
   "end; \n" <>
   "$$ language plpgsql;" <>
-  "create trigger " <> trgName <> " after insert on " <> tname <> " for each row execute procedure " <> fnName <> "();"
-  where
-    fnName = "notify_job_monitor_for_" <> tname
-    trgName = "trg_notify_job_monitor_for_" <> tname
-
+  "create trigger ? after insert on ? for each row execute procedure ?();"
 
 createJobTable :: Connection -> TableName -> IO ()
 createJobTable conn tname = void $ do
-  PGS.execute_ conn (createJobTableQuery tname)
-  PGS.execute_ conn (createNotificationTrigger tname)
+  let tnameTxt = getTnameTxt tname
+  PGS.execute conn createJobTableQuery
+    ( tname
+    , PGS.Identifier $ "idx_" <> tnameTxt <> "_created_at"
+    , tname
+    , PGS.Identifier $ "idx_" <> tnameTxt <> "_updated_at"
+    , tname
+    , PGS.Identifier $ "idx_" <> tnameTxt <> "_locked_at"
+    , tname
+    , PGS.Identifier $ "idx_" <> tnameTxt <> "_locked_by"
+    , tname
+    , PGS.Identifier $ "idx_" <> tnameTxt <> "_status"
+    , tname
+    , PGS.Identifier $ "idx_" <> tnameTxt <> "_run_at"
+    , tname
+    )
+  PGS.execute conn createNotificationTrigger
+    ( fnName
+    , pgEventName tname
+    , trgName
+    , tname
+    , fnName
+    )
+  where
+    fnName = PGS.Identifier $ "notify_job_monitor_for_" <> (getTnameTxt tname)
+    trgName = PGS.Identifier $ "trg_notify_job_monitor_for_" <> (getTnameTxt tname)
+    getTnameTxt (PGS.QualifiedIdentifier _ tname') = tname'
