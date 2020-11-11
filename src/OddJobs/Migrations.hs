@@ -10,7 +10,7 @@ import Data.Functor (void)
 import OddJobs.Types
 
 createJobTableQuery :: Query
-createJobTableQuery = "CREATE TABLE ?" <>
+createJobTableQuery = "CREATE TABLE ? IF NOT EXISTS ?" <>
   "( id serial primary key" <>
   ", created_at timestamp with time zone default now() not null" <>
   ", updated_at timestamp with time zone default now() not null" <>
@@ -45,6 +45,7 @@ createJobTable conn tname = void $ do
   let tnameTxt = getTnameTxt tname
   PGS.execute conn createJobTableQuery
     ( tname
+    , tname
     , PGS.Identifier $ "idx_" <> tnameTxt <> "_created_at"
     , tname
     , PGS.Identifier $ "idx_" <> tnameTxt <> "_updated_at"
