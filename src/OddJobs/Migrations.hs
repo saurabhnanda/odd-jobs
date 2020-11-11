@@ -23,12 +23,12 @@ createJobTableQuery = "CREATE TABLE IF NOT EXISTS ?" <>
   ", locked_by text null" <>
   ", constraint incorrect_locking_info CHECK ((status <> 'locked' and locked_at is null and locked_by is null) or (status = 'locked' and locked_at is not null and locked_by is not null))" <>
   ");" <>
-  "create index ? on ?(created_at);" <>
-  "create index ? on ?(updated_at);" <>
-  "create index ? on ?(locked_at);" <>
-  "create index ? on ?(locked_by);" <>
-  "create index ? on ?(status);" <>
-  "create index ? on ?(run_at);"
+  "create index if not exists ? on ?(created_at);" <>
+  "create index if not exists ? on ?(updated_at);" <>
+  "create index if not exists ? on ?(locked_at);" <>
+  "create index if not exists ? on ?(locked_by);" <>
+  "create index if not exists ? on ?(status);" <>
+  "create index if not exists ? on ?(run_at);"
 
 createNotificationTrigger :: Query
 createNotificationTrigger = "create or replace function ?() returns trigger as $$" <>
