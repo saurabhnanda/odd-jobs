@@ -38,7 +38,7 @@ createNotificationTrigger = "create or replace function ?() returns trigger as $
   "  return new; \n" <>
   "end; \n" <>
   "$$ language plpgsql;" <>
-  "create trigger if not exists ? after insert on ? for each row execute procedure ?();"
+  "drop trigger if exists ?; create trigger ? after insert on ? for each row execute procedure ?();"
 
 createJobTable :: Connection -> TableName -> IO ()
 createJobTable conn tname = void $ do
@@ -61,6 +61,7 @@ createJobTable conn tname = void $ do
   PGS.execute conn createNotificationTrigger
     ( fnName
     , pgEventName tname
+    , trgName
     , trgName
     , tname
     , fnName
