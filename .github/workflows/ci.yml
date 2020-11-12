@@ -31,10 +31,6 @@ jobs:
           - 5432:5432
 
     steps:
-    - name: check all running processes
-      run: |
-        ps ax
-
     - name: confirm that postgres is working
       run: |
         PGPASSWORD=jobs_test psql -U jobs_test -h localhost -c 'select 1'
