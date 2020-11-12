@@ -36,3 +36,7 @@ jobs:
     - name: Build
       run: |
         stack build
+
+    - name: Test
+      run: |
+        stack test

@@ -208,10 +208,10 @@ ensureJobId conn tname jid = Job.findJobByIdIO conn tname jid >>= \case
 
 -- withRandomTable :: (MonadIO m) => Pool Connection -> (Job.TableName -> m a) -> m a
 withRandomTable jobPool action = do
-  (tname :: Job.TableName) <- liftIO ((("jobs_" <>) . fromString) <$> (replicateM 10 (R.randomRIO ('a', 'z'))))
+  (tname :: Job.TableName) <- liftIO ((fromString . ("jobs_" <>)) <$> (replicateM 10 (R.randomRIO ('a', 'z'))))
   finally
     ((Pool.withResource jobPool $ \conn -> (liftIO $ Migrations.createJobTable conn tname)) >> (action tname))
-    (Pool.withResource jobPool $ \conn -> liftIO $ void $ PGS.execute_ conn ("drop table if exists " <> tname <> ";"))
+    (Pool.withResource jobPool $ \conn -> liftIO $ void $ PGS.execute conn "drop table if exists ?" (Only tname))
 
 -- withNewJobMonitor :: (Pool Connection) -> (TableName -> Assertion) -> Assertion
 withNewJobMonitor jobPool actualTest = do
