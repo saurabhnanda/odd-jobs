@@ -59,13 +59,13 @@ createJobTable conn tname = void $ do
     , tname
     )
   PGS.execute conn createNotificationTrigger
-    ( fnName
+    ( fnName tname
     , pgEventName tname
     , trgName
     , tname
-    , fnName
+    , fnName tname
     )
   where
-    fnName = PGS.Identifier $ "notify_job_monitor_for_" <> (getTnameTxt tname)
+    fnName (PGS.QualifiedIdentifier schemaM tname') = PGS.QualifiedIdentifier schemaM $ "notify_job_monitor_for_" <> tname'
     trgName = PGS.Identifier $ "trg_notify_job_monitor_for_" <> (getTnameTxt tname)
     getTnameTxt (PGS.QualifiedIdentifier _ tname') = tname'
