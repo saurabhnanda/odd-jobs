@@ -19,7 +19,9 @@ jobs:
       postgres:
         image: postgres
         env:
-          POSTGRES_PASSWORD: postgres
+          POSTGRES_PASSWORD: jobs_test
+          POSTGRES_USER: jobs_test
+          POSTGRES_DB: jobs_test
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -29,9 +31,13 @@ jobs:
           - 5432:5432
 
     steps:
+    - name: check all running processes
+      run: |
+        ps ax
+
     - name: confirm that postgres is working
       run: |
-        PGPASSWORD=posgtres psql -U postgres -h localhost -c 'select 1'
+        PGPASSWORD=jobs_test psql -U jobs_test -h localhost -c 'select 1'
 
     - uses: actions/checkout@v2
 
