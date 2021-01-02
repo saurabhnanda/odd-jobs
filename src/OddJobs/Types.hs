@@ -107,7 +107,7 @@ data FailureMode
 -- notifications](https://www.haskelltutorials.com/odd-jobs/guide.html#alerts)
 -- in the implementation guide to understand how to use the machinery provided
 -- by 'JobErrHandler' and 'cfgOnJobFailed'.
-data JobErrHandler a = forall e . (Exception e) => JobErrHandler (e -> Job -> FailureMode -> IO a)
+data JobErrHandler = forall a e . (Exception e) => JobErrHandler (e -> Job -> FailureMode -> IO a)
 
 
 -- | __Note:__ Please read the section on [controlling
@@ -302,7 +302,7 @@ data Config = Config
   -- | User-defined error-handler that is called whenever a job fails (indicated
   -- by 'cfgJobRunner' throwing an unhandled runtime exception). Please refer to
   -- 'JobErrHandler' for documentation on how to use this.
-  , cfgOnJobFailed :: forall a . [JobErrHandler a]
+  , cfgOnJobFailed :: [JobErrHandler]
 
   -- | User-defined callback function that is called whenever a job starts
   -- execution.

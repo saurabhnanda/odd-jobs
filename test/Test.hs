@@ -1,4 +1,4 @@
-{-# LANGUAGE TypeSynonymInstances, FlexibleInstances, NamedFieldPuns, DeriveGeneric, FlexibleContexts, TypeFamilies, StandaloneDeriving #-}
+{-# LANGUAGE TypeSynonymInstances, FlexibleInstances, NamedFieldPuns, DeriveGeneric, FlexibleContexts, TypeFamilies, StandaloneDeriving, RankNTypes #-}
 module Test where
 
 import Test.Tasty as Tasty
@@ -41,6 +41,7 @@ import Data.Ord (comparing, Down(..))
 import Data.Maybe (fromMaybe)
 import qualified OddJobs.ConfigBuilder as Job
 import UnliftIO
+import Control.Exception (ArithException)
 
 $(Aeson.deriveJSON Aeson.defaultOptions ''Seconds)
 
@@ -78,6 +79,7 @@ tests appPool jobPool = testGroup "All tests"
                              , testJobFailure appPool jobPool
                              , testEnsureShutdown appPool jobPool
                              , testGracefulShutdown appPool jobPool
+                             , testJobErrHandler appPool jobPool
                              ]
   -- , testGroup "property tests" [ testEverything appPool jobPool
   --                              -- , propFilterJobs appPool jobPool
@@ -128,11 +130,15 @@ jobRunner Job{jobPayload, jobAttempts} = case (fromJSON jobPayload) of
           PayloadFail delay innerpload -> if idx<jobAttempts
                                           then recur innerpload (idx + 1)
                                           else (delaySeconds delay) >> (error $ "Forced error after " <> show delay <> " seconds. step=" <> show idx)
+          PayloadThrowStringException s -> throwString s
+          PayloadThrowDivideByZero -> seq (1 `div` 0) (pure ())
     in recur j 0
 
 data JobPayload = PayloadSucceed Seconds
                 | PayloadFail Seconds JobPayload
                 | PayloadAlwaysFail Seconds
+                | PayloadThrowStringException String
+                | PayloadThrowDivideByZero
                 deriving (Eq, Show, Generic)
 
 instance ToJSON JobPayload where
@@ -178,6 +184,7 @@ assertJobIdStatus conn tname logRef msg st jid = do
                                            Job.LogJobTimeout j -> jid == Job.jobId j
                                            Job.LogWebUIRequest -> False
                                            Job.LogText _ -> False
+                                           Job.LogPoll -> False
     Job.Failed ->
       assertBool (msg <> ": Failed event not found in job-logs for JobId=" <> show jid) $
       (flip DL.any) logs $ \logEvent -> case logEvent of
@@ -216,16 +223,16 @@ withRandomTable jobPool action = do
 -- withNewJobMonitor :: (Pool Connection) -> (TableName -> Assertion) -> Assertion
 withNewJobMonitor jobPool actualTest = do
   withRandomTable jobPool $ \tname -> do
-    withNamedJobMonitor tname jobPool (actualTest tname)
+    withNamedJobMonitor tname jobPool Prelude.id (actualTest tname)
 
-withNamedJobMonitor tname jobPool actualTest = do
+withNamedJobMonitor tname jobPool cfgFn actualTest = do
   logRef :: IORef [Job.LogEvent] <- newIORef []
   tcache <- newTimeCache simpleTimeFormat'
   withTimedFastLogger tcache LogNone $ \tlogger -> do
     let flogger logLevel logEvent = do
           tlogger $ \t -> toLogStr t <> " | " <> (Job.defaultLogStr Job.defaultJobType logLevel logEvent)
           atomicModifyIORef' logRef (\logs -> (logEvent:logs, ()))
-        cfg = Job.mkConfig flogger tname jobPool Job.UnlimitedConcurrentJobs jobRunner (\cfg -> cfg{Job.cfgDefaultMaxAttempts=3})
+        cfg = Job.mkConfig flogger tname jobPool Job.UnlimitedConcurrentJobs jobRunner (\cfg -> cfgFn $ cfg{Job.cfgDefaultMaxAttempts=3})
     withAsync (Job.startJobRunner cfg) (const $ actualTest logRef)
 
 payloadGen :: MonadGen m => m JobPayload
@@ -249,7 +256,7 @@ testEnsureShutdown appPool jobPool = testCase "ensure shutdown" $ do
     Pool.withResource appPool $ \conn -> do
       assertJobIdStatus conn tname logRef "Job should still be in queued state if job-monitor is no longer running" Job.Queued jid
   where
-    scheduleJob tname = withNamedJobMonitor tname jobPool $ \logRef -> do
+    scheduleJob tname = withNamedJobMonitor tname jobPool Prelude.id $ \logRef -> do
       t <- getCurrentTime
       Pool.withResource appPool $ \conn -> do
         Job{jobId} <- Job.scheduleJob conn tname (PayloadSucceed 0) (addUTCTime (fromIntegral (2 * (unSeconds Job.defaultPollingInterval))) t)
@@ -258,7 +265,7 @@ testEnsureShutdown appPool jobPool = testCase "ensure shutdown" $ do
 
 testGracefulShutdown appPool jobPool = testCase "ensure graceful shutdown" $ do
   withRandomTable jobPool $ \tname -> do
-    (j1, j2, logRef) <- withNamedJobMonitor tname jobPool $ \logRef -> do
+    (j1, j2, logRef) <- withNamedJobMonitor tname jobPool Prelude.id $ \logRef -> do
       Pool.withResource appPool $ \conn -> do
         t <- getCurrentTime
         j1 <- Job.createJob conn tname (PayloadSucceed $ 2 * Job.defaultPollingInterval)
@@ -293,6 +300,24 @@ testJobFailure appPool jobPool = testCase "job retry" $ do
       Job{jobAttempts, jobStatus} <- ensureJobId conn tname jobId
       assertEqual "Exepcting job to be in Failed status" Job.Failed jobStatus
       assertEqual ("Expecting job attempts to be 3. Found " <> show jobAttempts)  3 jobAttempts
+
+testJobErrHandler appPool jobPool = testCase "job error handler" $ do
+  withRandomTable jobPool $ \tname -> do
+    Pool.withResource appPool $ \conn -> do
+      Job.createJob conn tname (PayloadThrowStringException "forced exception")
+      Job.createJob conn tname PayloadThrowDivideByZero
+      mvar1 <- newMVar False
+      mvar2 <- newMVar False
+      let addErrHandlers cfg = cfg { Job.cfgOnJobFailed = [ Job.JobErrHandler errHandler2
+                                                          , Job.JobErrHandler errHandler1
+                                                          ]
+                                   }
+          errHandler1 (e :: StringException) _ _ = swapMVar mvar1 True
+          errHandler2 (e :: ArithException) _ _ = swapMVar mvar2 True
+      withNamedJobMonitor tname jobPool addErrHandlers $ \logRef -> do
+        delaySeconds (Job.defaultPollingInterval * 3)
+      readMVar mvar1 >>= assertEqual "Error Handler 1 doesn't seem to have run" True
+      readMVar mvar2 >>= assertEqual "Error Handler 2 doesn't seem to have run" True
 
 data JobEvent = JobStart
               | JobRetry
@@ -397,10 +422,14 @@ data JobEvent = JobStart
 payloadDelay :: Seconds -> JobPayload -> Seconds
 payloadDelay jobPollingInterval pload = payloadDelay_ (Seconds 0) pload
   where
-    payloadDelay_ total p = case p of
-      PayloadAlwaysFail x -> total + x + jobPollingInterval
-      PayloadSucceed x -> total + x + jobPollingInterval
-      PayloadFail x ip -> payloadDelay_ (total + x + jobPollingInterval) ip
+    payloadDelay_ total p =
+      let defaultDelay x = total + x + jobPollingInterval
+      in case p of
+        PayloadAlwaysFail x -> defaultDelay x
+        PayloadSucceed x -> defaultDelay x
+        PayloadFail x ip -> payloadDelay_ (defaultDelay x) ip
+        PayloadThrowStringException _ -> defaultDelay 0
+        PayloadThrowDivideByZero -> defaultDelay 0
 
 
 
