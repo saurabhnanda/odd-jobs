@@ -10,7 +10,7 @@ jobs:
     name: ${{ matrix.os }} / stack / ghc ${{ matrix.ghc }}
     runs-on: ${{ matrix.os }}
     env:
-      - ACTIONS_ALLOW_UNSECURE_COMMANDS: true
+      ACTIONS_ALLOW_UNSECURE_COMMANDS: true
     strategy:
       matrix:
         os: [ubuntu-latest]
