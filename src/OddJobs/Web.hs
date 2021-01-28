@@ -246,7 +246,7 @@ pageLayout routes@Routes{..} navHtml bodyHtml = do
       meta_ [ name_ "viewport", content_ "width=device-width, initial-scale=1.0" ]
       title_ "haskell-pg-queue"
       link_ [ rel_ "stylesheet", href_ $ rStaticAsset "assets/bootstrap/css/bootstrap.min.css" ]
-      link_ [ rel_ "stylesheet", href_ $ rStaticAsset "https://fonts.googleapis.com/css?family=Lato:100i,300,300i,400,700,900" ]
+      link_ [ rel_ "stylesheet", href_ "https://fonts.googleapis.com/css?family=Lato:100i,300,300i,400,700,900" ]
       link_ [ rel_ "stylesheet", href_ $ rStaticAsset "assets/css/styles.css" ]
     body_ $ do
       pageNav routes
