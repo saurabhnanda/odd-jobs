@@ -395,6 +395,7 @@ runJob jid = do
       lockTimeout <- getDefaultJobTimeout
       log LevelInfo $ LogJobStart job
       flip catches [Handler $ timeoutHandler job startTime, Handler $ exceptionHandler job startTime] $ do
+        onJobStart job
         runJobWithTimeout lockTimeout job
         endTime <- liftIO getCurrentTime
         shouldDeleteJob <- deleteSuccessfulJobs
