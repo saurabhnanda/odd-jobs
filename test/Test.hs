@@ -95,9 +95,14 @@ tests appPool jobPool = testGroup "All tests"
                              , testJobFailure appPool jobPool
                              , testEnsureShutdown appPool jobPool
                              , testGracefulShutdown appPool jobPool
-                             , testJobErrHandler appPool jobPool
                              , testPushFailedJobEndQueue jobPool
                              , testRetryBackoff appPool jobPool
+                             , testGroup "callback tests"
+                               [ testOnJobFailed appPool jobPool
+                               , testOnJobStart appPool jobPool
+                               , testOnJobSuccess appPool jobPool
+                               , testOnJobTimeout appPool jobPool
+                               ]
                              ]
   -- , testGroup "property tests" [ testEverything appPool jobPool
   --                              -- , propFilterJobs appPool jobPool
@@ -344,7 +349,6 @@ testJobFailure appPool jobPool = testCase "job failure" $ do
       assertEqual "Exepcting job to be in Failed status" Job.Failed jobStatus
       assertEqual ("Expecting job attempts to be 3. Found " <> show jobAttempts)  3 jobAttempts
 
-
 testPushFailedJobEndQueue ::  Pool Connection -> TestTree
 testPushFailedJobEndQueue jobPool = testCase "testPushFailedJobEndQueue" $ do
   withRandomTable jobPool $ \tname -> do
@@ -357,7 +361,7 @@ testPushFailedJobEndQueue jobPool = testCase "testPushFailedJobEndQueue" $ do
         "Expecting the current job to be 2 since job 1 has been modified"
         (jobId job2) resId
 
-testJobErrHandler appPool jobPool = testCase "job error handler" $ do
+testOnJobFailed appPool jobPool = testCase "job error handler" $ do
   withRandomTable jobPool $ \tname -> do
     Pool.withResource appPool $ \conn -> do
       _ <- Job.createJob conn tname (PayloadThrowStringException "forced exception")
@@ -374,6 +378,36 @@ testJobErrHandler appPool jobPool = testCase "job error handler" $ do
         delaySeconds (Job.defaultPollingInterval * 3)
       readMVar mvar1 >>= assertEqual "Error Handler 1 doesn't seem to have run" True
       readMVar mvar2 >>= assertEqual "Error Handler 2 doesn't seem to have run" True
+
+testOnJobStart appPool jobPool = testCase "onJobStart" $ do
+  withRandomTable jobPool $ \tname -> do
+    callbackRef <- newIORef False
+    let callback = const $ modifyIORef' callbackRef (const True)
+    withNamedJobMonitor tname jobPool (\cfg -> cfg{Job.cfgOnJobStart=callback}) $ \logRef -> do
+      Pool.withResource appPool $ \conn -> do
+        Job.createJob conn tname (PayloadSucceed 0)
+        delaySeconds (2 * Job.defaultPollingInterval)
+        readIORef callbackRef >>= assertBool "It seems that onJobStart callback has not been called"
+
+testOnJobSuccess appPool jobPool = testCase "onJobSuccess" $ do
+  withRandomTable jobPool $ \tname -> do
+    callbackRef <- newIORef False
+    let callback = const $ modifyIORef' callbackRef (const True)
+    withNamedJobMonitor tname jobPool (\cfg -> cfg{Job.cfgOnJobSuccess=callback}) $ \logRef -> do
+      Pool.withResource appPool $ \conn -> do
+        Job.createJob conn tname (PayloadSucceed 0)
+        delaySeconds (2 * Job.defaultPollingInterval)
+        readIORef callbackRef >>= assertBool "It seems that onJobSuccess callback has not been called"
+
+testOnJobTimeout appPool jobPool = testCase "onJobTimeout" $ do
+  withRandomTable jobPool $ \tname -> do
+    callbackRef <- newIORef False
+    let callback = const $ modifyIORef' callbackRef (const True)
+    withNamedJobMonitor tname jobPool (\cfg -> cfg{Job.cfgOnJobTimeout=callback, Job.cfgDefaultJobTimeout=Seconds 2}) $ \logRef -> do
+      Pool.withResource appPool $ \conn -> do
+        Job.createJob conn tname (PayloadSucceed 10)
+        delaySeconds (2 * Job.defaultPollingInterval)
+        readIORef callbackRef >>= assertBool "It seems that onJobTimeout callback has not been called"
 
 testRetryBackoff appPool jobPool = testCase "retry backoff" $ do
   withRandomTable jobPool $ \tname -> do
@@ -515,10 +549,6 @@ payloadDelay jobPollingInterval = payloadDelay_ (Seconds 0)
         PayloadFail x ip -> payloadDelay_ (defaultDelay x) ip
         PayloadThrowStringException _ -> defaultDelay 0
         PayloadThrowDivideByZero -> defaultDelay 0
-
-
-
--- TODO: test to ensure that errors in callback do not affect the running of jobs
 
 deriving instance Enum Time.Unit
 deriving instance Enum Time.Direction
