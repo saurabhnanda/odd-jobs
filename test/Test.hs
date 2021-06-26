@@ -220,6 +220,9 @@ withRandomTable jobPool action = do
     ((Pool.withResource jobPool $ \conn -> (liftIO $ Migrations.createJobTable conn tname)) >> (action tname))
     (Pool.withResource jobPool $ \conn -> liftIO $ void $ PGS.execute conn "drop table if exists ?" (Only tname))
 
+testMaxAttempts :: Int
+testMaxAttempts = 3
+
 -- withNewJobMonitor :: (Pool Connection) -> (TableName -> Assertion) -> Assertion
 withNewJobMonitor jobPool actualTest = do
   withRandomTable jobPool $ \tname -> do
@@ -232,7 +235,7 @@ withNamedJobMonitor tname jobPool cfgFn actualTest = do
     let flogger logLevel logEvent = do
           tlogger $ \t -> toLogStr t <> " | " <> (Job.defaultLogStr Job.defaultJobType logLevel logEvent)
           atomicModifyIORef' logRef (\logs -> (logEvent:logs, ()))
-        cfg = Job.mkConfig flogger tname jobPool Job.UnlimitedConcurrentJobs jobRunner (\cfg -> cfgFn $ cfg{Job.cfgDefaultMaxAttempts=3})
+        cfg = Job.mkConfig flogger tname jobPool Job.UnlimitedConcurrentJobs jobRunner (\cfg -> cfgFn $ cfg{Job.cfgDefaultMaxAttempts=testMaxAttempts})
     withAsync (Job.startJobRunner cfg) (const $ actualTest logRef)
 
 payloadGen :: MonadGen m => m JobPayload
@@ -275,7 +278,7 @@ testGracefulShutdown appPool jobPool = testCase "ensure graceful shutdown" $ do
       delaySeconds 1
       assertJobIdStatus conn tname logRef "Expecting the first job to be in locked state because it should be running" Job.Locked (jobId j1)
       assertJobIdStatus conn tname logRef "Expecting the second job to be queued because no new job should be picked up during graceful shutdown" Job.Queued (jobId j2)
-      delaySeconds $ 3 * Job.defaultPollingInterval
+      delaySeconds $ calculateRetryDelay testMaxAttempts
       assertJobIdStatus conn tname logRef "Expecting the first job to be completed successfully if graceful shutdown is implemented correctly" Job.Success (jobId j1)
       assertJobIdStatus conn tname logRef "Expecting the second job to be queued because no new job should be picked up during graceful shutdown" Job.Queued (jobId j2)
 
@@ -296,7 +299,7 @@ testJobFailure appPool jobPool = testCase "job failure" $ do
   withNewJobMonitor jobPool $ \tname logRef -> do
     Pool.withResource appPool $ \conn -> do
       Job{jobId} <- Job.createJob conn tname (PayloadAlwaysFail 0)
-      delaySeconds $ Seconds 20
+      delaySeconds $ calculateRetryDelay testMaxAttempts
       Job{jobAttempts, jobStatus} <- ensureJobId conn tname jobId
       assertEqual "Exepcting job to be in Failed status" Job.Failed jobStatus
       assertEqual ("Expecting job attempts to be 3. Found " <> show jobAttempts)  3 jobAttempts
@@ -564,3 +567,6 @@ filterJobs Web.Filter{filterStatuses, filterCreatedAfter, filterCreatedBefore, f
 --   pure ( Job.defaultJobMonitor flogger tname pool
 --        , cleanup
 --        )
+
+calculateRetryDelay :: Int -> Seconds
+calculateRetryDelay n = Seconds $ foldl' (\s x -> s + (2 ^ x)) 0 [1..n]
