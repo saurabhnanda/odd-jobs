@@ -9,13 +9,34 @@ jobs:
   stack:
     name: ${{ matrix.os }} / stack / ghc ${{ matrix.ghc }}
     runs-on: ${{ matrix.os }}
+    env:
+      ACTIONS_ALLOW_UNSECURE_COMMANDS: true
     strategy:
       matrix:
         os: [ubuntu-latest]
         stack: ["2.3.3"]
         ghc: ["8.8.3"]
 
+    services:
+      postgres:
+        image: postgres
+        env:
+          POSTGRES_PASSWORD: jobs_test
+          POSTGRES_USER: jobs_test
+          POSTGRES_DB: jobs_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
     steps:
+    - name: confirm that postgres is working
+      run: |
+        PGPASSWORD=jobs_test psql -U jobs_test -h localhost -c 'select 1'
+
     - uses: actions/checkout@v2
 
     - uses: actions/setup-haskell@v1.1
@@ -36,3 +57,7 @@ jobs:
     - name: Build
       run: |
         stack build
+
+    - name: Test
+      run: |
+        stack test

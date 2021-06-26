@@ -45,6 +45,7 @@ ghc-options:
   - -fno-warn-unused-imports 
   - -fno-warn-dodgy-exports 
   - -Werror=missing-fields
+  - -Werror=incomplete-patterns
 
 default-extensions:
   - NamedFieldPuns
@@ -133,13 +134,14 @@ tests:
       - -threaded
       - -with-rtsopts=-N
     main: Test
-    source-dirs: test
+    source-dirs:
+      - test
+      - src
     dependencies:
       - tasty
       - tasty-discover
       - hedgehog
       - tasty-hedgehog
-      - odd-jobs
       - tasty-hunit
       - random
       - monad-control

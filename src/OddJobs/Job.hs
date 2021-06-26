@@ -130,7 +130,7 @@ import Database.PostgreSQL.Simple.ToField as PGS (toField)
 class (MonadUnliftIO m, MonadBaseControl IO m) => HasJobRunner m where
   getPollingInterval :: m Seconds
   onJobSuccess :: Job -> m ()
-  onJobFailed :: forall a . m [JobErrHandler a]
+  onJobFailed :: m [JobErrHandler]
   getJobRunner :: m (Job -> IO ())
   getDbPool :: m (Pool Connection)
   getTableName :: m TableName
@@ -383,6 +383,7 @@ runJob jid = do
     Just job -> do
       startTime <- liftIO getCurrentTime
       lockTimeout <- getDefaultJobTimeout
+      log LevelInfo $ LogJobStart job
       (flip catches) [Handler $ timeoutHandler job startTime, Handler $ exceptionHandler job startTime] $ do
         runJobWithTimeout lockTimeout job
         endTime <- liftIO getCurrentTime
@@ -414,7 +415,7 @@ runJob jid = do
 
       let tryHandler (JobErrHandler handler) res = case fromException e of
             Nothing -> res
-            Just e_ -> handler e_ newJob failureMode
+            Just e_ -> void $ handler e_ newJob failureMode
       handlers <- onJobFailed
       liftIO $ void $ Prelude.foldr tryHandler (throwIO e) handlers
       pure ()

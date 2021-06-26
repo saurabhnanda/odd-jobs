@@ -1,10 +1,10 @@
 cabal-version: 1.12
 
--- This file has been generated from package.yaml by hpack version 0.31.2.
+-- This file has been generated from package.yaml by hpack version 0.33.0.
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: e6616995768a7a1fd8654b632013cf28cfa6e31926533c4470e8e970d1d2d3bd
+-- hash: 6677b61240c930d793f07c90cd9dc719586179d99bdc7dc7b3dbe9a32d9a2afa
 
 name:           odd-jobs
 version:        0.2.2
@@ -62,7 +62,7 @@ library
   hs-source-dirs:
       src
   default-extensions: NamedFieldPuns LambdaCase TemplateHaskell ScopedTypeVariables GeneralizedNewtypeDeriving QuasiQuotes OverloadedStrings
-  ghc-options: -Wall -fno-warn-orphans -fno-warn-unused-imports -fno-warn-dodgy-exports -Werror=missing-fields
+  ghc-options: -Wall -fno-warn-orphans -fno-warn-unused-imports -fno-warn-dodgy-exports -Werror=missing-fields -Werror=incomplete-patterns
   build-depends:
       aeson
     , base >=4.7 && <5
@@ -116,7 +116,7 @@ executable devel
       dev
       src
   default-extensions: NamedFieldPuns LambdaCase TemplateHaskell ScopedTypeVariables GeneralizedNewtypeDeriving QuasiQuotes OverloadedStrings
-  ghc-options: -Wall -fno-warn-orphans -fno-warn-unused-imports -fno-warn-dodgy-exports -Werror=missing-fields -threaded -with-rtsopts=-N -main-is DevelMain
+  ghc-options: -Wall -fno-warn-orphans -fno-warn-unused-imports -fno-warn-dodgy-exports -Werror=missing-fields -Werror=incomplete-patterns -threaded -with-rtsopts=-N -main-is DevelMain
   build-depends:
       aeson
     , base >=4.7 && <5
@@ -163,7 +163,7 @@ executable odd-jobs-cli-example
   hs-source-dirs:
       examples
   default-extensions: NamedFieldPuns LambdaCase TemplateHaskell ScopedTypeVariables GeneralizedNewtypeDeriving QuasiQuotes OverloadedStrings
-  ghc-options: -Wall -fno-warn-orphans -fno-warn-unused-imports -fno-warn-dodgy-exports -Werror=missing-fields -threaded -with-rtsopts=-N -main-is OddJobsCliExample
+  ghc-options: -Wall -fno-warn-orphans -fno-warn-unused-imports -fno-warn-dodgy-exports -Werror=missing-fields -Werror=incomplete-patterns -threaded -with-rtsopts=-N -main-is OddJobsCliExample
   build-depends:
       aeson
     , base >=4.7 && <5
@@ -207,13 +207,20 @@ test-suite jobrunner
   main-is: Test.hs
   other-modules:
       CliParser
-      Try
-      Try2
+      OddJobs.Cli
+      OddJobs.ConfigBuilder
+      OddJobs.Endpoints
+      OddJobs.Job
+      OddJobs.Migrations
+      OddJobs.Types
+      OddJobs.Web
+      UI
       Paths_odd_jobs
   hs-source-dirs:
       test
+      src
   default-extensions: NamedFieldPuns LambdaCase TemplateHaskell ScopedTypeVariables GeneralizedNewtypeDeriving QuasiQuotes OverloadedStrings
-  ghc-options: -Wall -fno-warn-orphans -fno-warn-unused-imports -fno-warn-dodgy-exports -Werror=missing-fields -threaded -with-rtsopts=-N -main-is Test
+  ghc-options: -Wall -fno-warn-orphans -fno-warn-unused-imports -fno-warn-dodgy-exports -Werror=missing-fields -Werror=incomplete-patterns -threaded -with-rtsopts=-N -main-is Test
   build-depends:
       aeson
     , base >=4.7 && <5
@@ -235,7 +242,6 @@ test-suite jobrunner
     , monad-control
     , monad-logger
     , mtl
-    , odd-jobs
     , optparse-applicative
     , postgresql-simple
     , random
