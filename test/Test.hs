@@ -292,11 +292,11 @@ testJobScheduling appPool jobPool = testCase "job scheduling" $ do
       delaySeconds (Job.defaultPollingInterval + (Seconds 2))
       assertJobIdStatus conn tname logRef "Job had a runAt date in the past. It should have been successful by now" Job.Success jobId
 
-testJobFailure appPool jobPool = testCase "job retry" $ do
+testJobFailure appPool jobPool = testCase "job failure" $ do
   withNewJobMonitor jobPool $ \tname logRef -> do
     Pool.withResource appPool $ \conn -> do
       Job{jobId} <- Job.createJob conn tname (PayloadAlwaysFail 0)
-      delaySeconds $ Seconds 15
+      delaySeconds $ Seconds 20
       Job{jobAttempts, jobStatus} <- ensureJobId conn tname jobId
       assertEqual "Exepcting job to be in Failed status" Job.Failed jobStatus
       assertEqual ("Expecting job attempts to be 3. Found " <> show jobAttempts)  3 jobAttempts
