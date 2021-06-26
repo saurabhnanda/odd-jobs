@@ -268,21 +268,41 @@ testEnsureShutdown appPool jobPool = testCase "ensure shutdown" $ do
 
 testGracefulShutdown appPool jobPool = testCase "ensure graceful shutdown" $ do
   withRandomTable jobPool $ \tname -> do
-    (j1, j2, logRef) <- withNamedJobMonitor tname jobPool Prelude.id $ \logRef -> do
-      Pool.withResource appPool $ \conn -> do
-        t <- getCurrentTime
-        j1 <- Job.createJob conn tname (PayloadSucceed $ 2 * Job.defaultPollingInterval)
-        j2 <- Job.scheduleJob conn tname (PayloadSucceed 0) (addUTCTime (fromIntegral $ unSeconds $ Job.defaultPollingInterval) t)
-        pure (j1, j2, logRef)
-    Pool.withResource appPool $ \conn -> do
-      delaySeconds 1
-      assertJobIdStatus conn tname logRef "Expecting the first job to be in locked state because it should be running" Job.Locked (jobId j1)
-      assertJobIdStatus conn tname logRef "Expecting the second job to be queued because no new job should be picked up during graceful shutdown" Job.Queued (jobId j2)
-      delaySeconds $ calculateRetryDelay testMaxAttempts
-      assertJobIdStatus conn tname logRef "Expecting the first job to be completed successfully if graceful shutdown is implemented correctly" Job.Success (jobId j1)
-      assertJobIdStatus conn tname logRef "Expecting the second job to be queued because no new job should be picked up during graceful shutdown" Job.Queued (jobId j2)
-
-    pure ()
+    setupPreconditions 3 tname >>= \case
+      Nothing -> fail "Unable to setup preconditions for this test, even after trying thrice"
+      Just (j1, j2, logRef) -> do
+        Pool.withResource appPool $ \conn -> do
+          assertJobIdStatus conn tname logRef "Expecting the first job to be completed successfully if graceful shutdown is implemented correctly" Job.Success (jobId j1)
+          assertJobIdStatus conn tname logRef "Expecting the second job to be queued because no new job should be picked up during graceful shutdown" Job.Queued (jobId j2)
+  where
+    -- When this block completes execution, the graceful shutdown should have happened.
+    setupPreconditions i tname =
+      if i==0
+      then pure Nothing
+      else do
+        withNamedJobMonitor tname jobPool Prelude.id $ \logRef -> do
+          Pool.withResource appPool $ \conn -> do
+            t <- getCurrentTime
+            j1 <- Job.createJob conn tname (PayloadSucceed $ 3 * Job.defaultPollingInterval)
+            j2 <- Job.scheduleJob conn tname (PayloadSucceed 0) (addUTCTime (fromIntegral $ unSeconds $ Job.defaultPollingInterval) t)
+            let waitForPrecondition = do
+                  k1 <- Job.findJobByIdIO conn tname (jobId j1)
+                  k2 <- Job.findJobByIdIO conn tname (jobId j2)
+                  case (jobStatus <$> k1, jobStatus <$> k2) of
+                    (Nothing, _) -> do
+                      traceM "Not expecting first job to be completed so quickly. Trying again."
+                      setupPreconditions (i-1) tname
+                    (_, Nothing) -> do
+                      traceM "Not expecting second job to be completed so quickly. Trying again."
+                      setupPreconditions (i-1) tname
+                    (Just Job.Locked, Just Job.Queued) -> pure $ Just (j1, j2, logRef) -- precondition met
+                    (Just Job.Success, _) -> setupPreconditions (i-1) tname
+                    (_, Just Job.Success) -> setupPreconditions (i-1) tname
+                    (Just Job.Queued, Just Job.Queued) -> do
+                      delaySeconds 1
+                      waitForPrecondition
+                    x -> fail $ "Unexpeted job statuses while setting up the test: " <> show x
+            waitForPrecondition
 
 testJobScheduling appPool jobPool = testCase "job scheduling" $ do
   withNewJobMonitor jobPool $ \tname logRef -> do
@@ -299,7 +319,7 @@ testJobFailure appPool jobPool = testCase "job failure" $ do
   withNewJobMonitor jobPool $ \tname logRef -> do
     Pool.withResource appPool $ \conn -> do
       Job{jobId} <- Job.createJob conn tname (PayloadAlwaysFail 0)
-      delaySeconds $ calculateRetryDelay testMaxAttempts
+      delaySeconds $ (calculateRetryDelay testMaxAttempts) + (Seconds 3)
       Job{jobAttempts, jobStatus} <- ensureJobId conn tname jobId
       assertEqual "Exepcting job to be in Failed status" Job.Failed jobStatus
       assertEqual ("Expecting job attempts to be 3. Found " <> show jobAttempts)  3 jobAttempts
