@@ -7,7 +7,10 @@ module OddJobs.Cli where
 import Options.Applicative as Opts
 import Data.Text
 import OddJobs.Job (startJobRunner, Config(..))
-import System.Daemonize (DaemonOptions(..), daemonize)
+import OddJobs.Types (UIConfig(..))
+import OddJobs.Job(LogLevel(..), LogEvent(..))
+-- import System.Daemonize (DaemonOptions(..), daemonize)
+import qualified System.Posix.Daemon as Daemon
 import System.FilePath (FilePath)
 import System.Posix.Process (getProcessID)
 import qualified System.Directory as Dir
@@ -16,6 +19,8 @@ import System.Environment (getProgName)
 import OddJobs.Types (Seconds(..), delaySeconds)
 import qualified System.Posix.Signals as Sig
 import qualified UnliftIO.Async as Async
+import UnliftIO (bracket_)
+import Safe (fromJustNote)
 import qualified OddJobs.Endpoints as UI
 import Servant.Server as Servant
 import Servant.API
@@ -23,6 +28,7 @@ import Data.Proxy
 import Data.Text.Encoding (decodeUtf8)
 import Network.Wai.Handler.Warp as Warp
 import Debug.Trace
+import Data.String.Conv (toS)
 
 -- * Introduction
 --
@@ -57,6 +63,11 @@ import Debug.Trace
 -- #defaultBehaviour#
 --
 
+
+data CliType = CliOnlyJobRunner { cliStartJobRunner :: (Config -> Config) -> IO () }
+             | CliOnlyWebUi { cliStartWebUI :: UIStartArgs -> (UIConfig -> UIConfig) -> IO () }
+             | CliBoth { cliStartJobRunner :: (Config -> Config) -> IO (), cliStartWebUI :: UIStartArgs -> (UIConfig -> UIConfig) -> IO () }
+
 {-|
 Please do not get scared by the type-signature of the first argument.
 Conceptually, it's a callback, within another callback.
@@ -81,15 +92,12 @@ Please take a look at the [getting started
 guide](https://www.haskelltutorials.com/odd-jobs/guide.html#getting-started) for
 an example of how to use this function.
 -}
-defaultMain :: ((Config -> IO ()) -> IO ())
-            -- ^ A callback function that will be executed once the dameon has
-            -- forked into the background.
-            -> IO ()
-defaultMain startFn = do
-  Args{argsCommand} <- customExecParser defaultCliParserPrefs defaultCliInfo
+runCli :: CliType -> IO ()
+runCli cliType = do
+  Args{argsCommand} <- customExecParser defaultCliParserPrefs (defaultCliInfo cliType)
   case argsCommand of
-    Start cmdArgs -> do
-      defaultStartCommand cmdArgs startFn
+    Start commonArgs mUIArgs ->
+      defaultStartCommand commonArgs mUIArgs cliType
     Stop cmdArgs -> do
       defaultStopCommand cmdArgs
     Status ->
@@ -104,54 +112,73 @@ defaultMain startFn = do
 * If it exists, it refuses to start, to prevent multiple invocations of the same
   background daemon.
 -}
-defaultStartCommand :: StartArgs
-                    -> ((Config -> IO ()) -> IO ())
-                    -- ^ the same callback-within-callback function described in
-                    -- 'defaultMain'
+defaultStartCommand :: CommonStartArgs
+                    -> Maybe UIStartArgs
+                    -> CliType
                     -> IO ()
-defaultStartCommand args@StartArgs{..} startFn = do
-  progName <- getProgName
+defaultStartCommand CommonStartArgs{..} mUIArgs cliType = do
   case startDaemonize of
-    False -> do
-      startFn coreStartupFn
+    False ->
+      coreStartupFn
     True -> do
-      (Dir.doesPathExist startPidFile) >>= \case
-        True -> do
-          putStrLn $
-            "PID file already exists. Please check if " <> progName <> " is still running in the background." <>
-            " If not, you can safely delete this file and start " <> progName <> " again: " <> startPidFile
-          Exit.exitWith (Exit.ExitFailure 1)
-        False -> do
-          daemonize defaultDaemonOptions (pure ()) $ const $ do
-            pid <- getProcessID
-            writeFile startPidFile (show pid)
-            putStrLn $ "Started " <> progName <> " in background with PID=" <> show pid <> ". PID written to " <> startPidFile
-            startFn $ \cfg -> coreStartupFn cfg{cfgPidFile = Just startPidFile}
+      Daemon.runDetached (Just startPidFile) (Daemon.ToFile "/tmp/oddjobs.out") coreStartupFn
+      -- (Dir.doesPathExist startPidFile) >>= \case
+      --   True -> do
+      --     putStrLn $
+      --       "PID file (i.e. " <> startPidFile <> ")already exists. Please check if " <> progName <> " is still running in the background." <>
+      --       " If not, you can safely delete this file and start " <> progName <> " again."
+      --     Exit.exitWith (Exit.ExitFailure 1)
+      --   False -> do
+      --     runDetached (Just startPidFile) (ToFile "/tmp/oddjobs.out") $ do
+      --       finally coreStartupFn (Dir.removeFile startPidFile)
+            -- pid <- getProcessID
+            -- bracket_ (writeFile startPidFile (show pid)) (Dir.removeFile startPidFile) $ do
+            --   putStrLn $ "Started " <> progName <> " in background with PID=" <> show pid <> ". PID written to " <> startPidFile
+            --   coreStartupFn
   where
-    coreStartupFn cfg = do
-      Async.withAsync (defaultWebUi args cfg) $ \_ -> do
-        startJobRunner cfg
+    uiArgs = fromJustNote "Please specify Web UI Startup Args" $ traceShowId mUIArgs
+    coreStartupFn =
+      case cliType of
+        CliOnlyJobRunner{..} -> do
+          cliStartJobRunner Prelude.id
+        CliOnlyWebUi{..} -> do
+          traceM "CliOnlyWebUi before"
+          cliStartWebUI uiArgs Prelude.id
+        CliBoth{..} -> do
+          traceM "CliBoth before"
+          Async.withAsync (cliStartWebUI uiArgs Prelude.id) $ \_ -> do
+            traceM "CliBoth inside withAsync"
+            cliStartJobRunner Prelude.id
+            traceM "CliBoth end"
+
+-- daemonOptions :: DaemonOptions
+-- daemonOptions = DaemonOptions
+--   { daemonShouldChangeDirectory = False
+--   , daemonShouldCloseStandardStreams = True
+--   , daemonShouldIgnoreSignals = True
+--   , daemonUserToChangeTo = Nothing
+--   , daemonGroupToChangeTo = Nothing
+--   }
 
 
-defaultWebUi :: StartArgs
-             -> Config
+defaultWebUI :: UIStartArgs
+             -> UIConfig
              -> IO ()
-defaultWebUi StartArgs{..} cfg@Config{..} = do
-  env <- UI.mkEnv cfg ("/" <>)
-  case startWebUiAuth of
-    Nothing -> pure ()
-    Just AuthNone ->
-      let app = UI.server cfg env Prelude.id
-      in Warp.run startWebUiPort $
-         Servant.serve (Proxy :: Proxy UI.FinalAPI) app
-    Just (AuthBasic u p) ->
+defaultWebUI UIStartArgs{..} uicfg@UIConfig{..} = do
+  env <- UI.mkEnv uicfg ("/" <>)
+  case uistartAuth of
+    AuthNone -> do
+      let app = UI.server uicfg env Prelude.id
+      uicfgLogger LevelInfo $ LogText $ "Starting admin UI on port " <> (toS $ show uistartPort)
+      Warp.run uistartPort $ Servant.serve (Proxy :: Proxy UI.FinalAPI) app
+    (AuthBasic u p) -> do
       let api = Proxy :: Proxy (BasicAuth "OddJobs Admin UI" OddJobsUser :> UI.FinalAPI)
           ctx = defaultBasicAuth (u, p) :. EmptyContext
           -- Now the app will receive an extra argument for OddJobsUser,
           -- which we aren't really interested in.
-          app _ = UI.server cfg env Prelude.id
-      in Warp.run startWebUiPort $
-         Servant.serveWithContext api ctx app
+          app _ = UI.server uicfg env Prelude.id
+      uicfgLogger LevelInfo $ LogText $ "Starting admin UI on port " <> (toS $ show uistartPort)
+      Warp.run uistartPort $ Servant.serveWithContext api ctx app
 
 {-| Used by 'defaultMain' if 'Stop' command is issued via the CLI. Sends a
 @SIGINT@ signal to the process indicated by 'shutPidFile'. Waits for a maximum
@@ -162,26 +189,22 @@ defaultStopCommand :: StopArgs
                    -> IO ()
 defaultStopCommand StopArgs{..} = do
   progName <- getProgName
-  pid <- read <$> (readFile shutPidFile)
+  -- pid <- read <$> (readFile shutPidFile)
   if (shutTimeout == Seconds 0)
-    then forceKill pid
-    else do putStrLn $ "Sending SIGINT to pid=" <> show pid <>
+    then Daemon.brutalKill shutPidFile
+    else do putStrLn $ "Sending sigINT to " <> show progName <>
               " and waiting " <> (show $ unSeconds shutTimeout) <> " seconds for graceful stop"
-            Sig.signalProcess Sig.sigINT pid
+            readFile shutPidFile >>= (pure . read) >>= Sig.signalProcess Sig.sigINT
             (Async.race (delaySeconds shutTimeout) checkProcessStatus) >>= \case
               Right _ -> do
                 putStrLn $ progName <> " seems to have exited gracefully."
                 Exit.exitSuccess
               Left _ -> do
-                putStrLn $ progName <> " has still not exited."
-                forceKill pid
+                putStrLn $ progName <> " has still not exited. Sending sigKILL for forced exit."
+                Daemon.brutalKill shutPidFile
   where
-    forceKill pid = do
-      putStrLn $ "Sending SIGKILL to pid=" <> show pid
-      Sig.signalProcess Sig.sigKILL pid
-
     checkProcessStatus = do
-      Dir.doesPathExist shutPidFile >>= \case
+      Daemon.isRunning shutPidFile >>= \case
         True -> do
           delaySeconds (Seconds 1)
           checkProcessStatus
@@ -206,47 +229,43 @@ data Args = Args
 
 
 -- | The top-level command-line parser
-argParser :: Parser Args
-argParser = Args <$> commandParser
+argParser :: CliType -> Parser Args
+argParser cliType = Args <$> (commandParser cliType)
 
 -- ** Top-level command parser
 
 -- | CLI commands are parsed into this data-structure by 'commandParser'
 data Command
-  = Start StartArgs
+  = Start CommonStartArgs (Maybe UIStartArgs)
   | Stop StopArgs
   | Status
   deriving (Eq, Show)
 
 -- Parser for 'argsCommand'
-commandParser :: Parser Command
-commandParser = hsubparser
-   ( command "start" (info startParser (progDesc "start the odd-jobs runner")) <>
-     command "stop" (info stopParser (progDesc "stop the odd-jobs runner")) <>
+commandParser :: CliType -> Parser Command
+commandParser cliType = hsubparser
+   ( command "start" (info (startCmdParser cliType) (progDesc "start the odd-jobs runner and/or admin UI")) <>
+     command "stop" (info stopParser (progDesc "stop the odd-jobs runner and/or admin UI")) <>
      command "status" (info statusParser (progDesc "print status of all active jobs"))
    )
+
+
+data UIStartArgs = UIStartArgs
+  { uistartAuth :: !WebUiAuth
+  , uistartPort :: !Int
+  } deriving (Eq, Show)
 
 -- ** Start command
 
 -- | @start@ command is parsed into this data-structure by 'startParser'
-data StartArgs = StartArgs
-  {
-    -- | Switch to pick the authentication mechanism for web UI. __Note:__ We
-    -- don't have a separate switch to enable\/disable the web UI. Picking an
-    -- authentication mechanism by specifying the relevant options,
-    -- automatically enables the web UI. Ref: 'webUiAuthParser'
-    startWebUiAuth :: !(Maybe WebUiAuth)
-    -- | Port on which the web UI will run.
-  , startWebUiPort :: !Int
-    -- | You'll need to pass the @--daemonize@ switch to fork the job-runner as
-    -- a background daemon, else it will keep running as a foreground process.
-  , startDaemonize :: !Bool
+data CommonStartArgs = CommonStartArgs
+  { startDaemonize :: !Bool
     -- | PID file for the background dameon. Ref: 'pidFileParser'
   , startPidFile :: !FilePath
   } deriving (Eq, Show)
 
-startParser :: Parser Command
-startParser = fmap Start $ StartArgs
+uiStartArgsParser :: Parser UIStartArgs
+uiStartArgsParser = UIStartArgs
   <$> webUiAuthParser
   <*> option auto ( long "web-ui-port" <>
                     metavar "PORT" <>
@@ -254,10 +273,22 @@ startParser = fmap Start $ StartArgs
                     showDefault <>
                     help "The port on which the Web UI listens. Please note, to actually enable the Web UI you need to pick one of the available auth schemes"
                   )
-  <*> switch ( long "daemonize" <>
+
+commonStartArgsParser :: Parser CommonStartArgs
+commonStartArgsParser = CommonStartArgs
+  <$> switch ( long "daemonize" <>
                help "Fork the job-runner as a background daemon. If omitted, the job-runner remains in the foreground."
              )
   <*> pidFileParser
+
+startCmdParser :: CliType -> Parser Command
+startCmdParser cliType = Start
+  <$> commonStartArgsParser
+  <*> (case cliType of
+         CliOnlyJobRunner _ -> pure Nothing
+         CliOnlyWebUi _     -> Just <$> uiStartArgsParser
+         CliBoth _ _        -> (Just <$> uiStartArgsParser) <|> (pure Nothing)
+      )
 
 data WebUiAuth
   = AuthNone
@@ -269,10 +300,10 @@ data WebUiAuth
 --   * No auth - @--web-ui-no-auth@  __NOT RECOMMENDED__
 --   * Basic auth - @--web-ui-basic-auth-user <USER>@ and
 --     @--web-ui-basic-auth-password <PASS>@
-webUiAuthParser :: Parser (Maybe WebUiAuth)
-webUiAuthParser = basicAuthParser <|> noAuthParser <|> (pure Nothing)
+webUiAuthParser :: Parser WebUiAuth
+webUiAuthParser = basicAuthParser <|> noAuthParser
   where
-    basicAuthParser = fmap Just $ AuthBasic
+    basicAuthParser = AuthBasic
       <$> strOption ( long "web-ui-basic-auth-user" <>
                       metavar "USER" <>
                       help "Username for basic auth"
@@ -281,7 +312,7 @@ webUiAuthParser = basicAuthParser <|> noAuthParser <|> (pure Nothing)
                       metavar "PASS" <>
                       help "Password for basic auth"
                     )
-    noAuthParser = flag' (Just AuthNone)
+    noAuthParser = flag' AuthNone
       ( long "web-ui-no-auth" <>
         help "Start the web UI with any authentication. NOT RECOMMENDED."
       )
@@ -335,18 +366,18 @@ defaultCliParserPrefs = prefs $
   showHelpOnError <>
   showHelpOnEmpty
 
-defaultCliInfo :: ParserInfo Args
-defaultCliInfo =
-  info (argParser  <**> helper) fullDesc
+defaultCliInfo :: CliType -> ParserInfo Args
+defaultCliInfo cliType =
+  info ((argParser cliType)  <**> helper) fullDesc
 
-defaultDaemonOptions :: DaemonOptions
-defaultDaemonOptions = DaemonOptions
-  { daemonShouldChangeDirectory = False
-  , daemonShouldCloseStandardStreams = False
-  , daemonShouldIgnoreSignals = True
-  , daemonUserToChangeTo = Nothing
-  , daemonGroupToChangeTo = Nothing
-  }
+-- defaultDaemonOptions :: DaemonOptions
+-- defaultDaemonOptions = DaemonOptions
+--   { daemonShouldChangeDirectory = False
+--   , daemonShouldCloseStandardStreams = False
+--   , daemonShouldIgnoreSignals = True
+--   , daemonUserToChangeTo = Nothing
+--   , daemonGroupToChangeTo = Nothing
+--   }
 
 
 -- ** Auth implementations for the default Web UI

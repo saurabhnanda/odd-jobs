@@ -138,7 +138,6 @@ class (MonadUnliftIO m, MonadBaseControl IO m) => HasJobRunner m where
   getDefaultMaxAttempts :: m Int
   getRunnerEnv :: m RunnerEnv
   getConcurrencyControl :: m ConcurrencyControl
-  getPidFile :: m (Maybe FilePath)
   log :: LogLevel -> LogEvent -> m ()
   getDefaultJobTimeout :: m Seconds
 
@@ -185,8 +184,6 @@ instance HasJobRunner RunnerM where
 
   getConcurrencyControl = (cfgConcurrencyControl . envConfig <$> ask)
 
-  getPidFile = cfgPidFile . envConfig <$> ask
-
   log logLevel logEvent = do
     loggerFn <- cfgLogger . envConfig <$> ask
     liftIO $ loggerFn logLevel logEvent
@@ -199,11 +196,13 @@ instance HasJobRunner RunnerM where
 -- standalone daemon.
 startJobRunner :: Config -> IO ()
 startJobRunner jm = do
+  traceM "startJobRunner top"
   r <- newIORef []
   let monitorEnv = RunnerEnv
                    { envConfig = jm
                    , envJobThreadsRef = r
                    }
+  traceM "before runReaderT"
   runReaderT jobMonitor monitorEnv
 
 jobWorkerName :: IO String
@@ -423,6 +422,7 @@ runJob jid = do
 -- TODO: This might have a resource leak.
 restartUponCrash :: (HasJobRunner m, Show a) => Text -> m a -> m ()
 restartUponCrash name_ action = do
+  traceM "restartUponCrash top"
   a <- async action
   finally (waitCatch a >>= fn) $ do
     (log LevelInfo $ LogText $ "Received shutdown: " <> toS name_)
@@ -432,6 +432,7 @@ restartUponCrash name_ action = do
       case x of
         Left (e :: SomeException) -> log LevelError $ LogText $ name_ <> " seems to have exited with an error. Restarting: " <> toS (show e)
         Right r -> log LevelError $ LogText $ name_ <> " seems to have exited with the folloing result: " <> toS (show r) <> ". Restaring."
+      traceM "CRASH OCCURRED"
       restartUponCrash name_ action
 
 -- | Spawns 'jobPoller' and 'jobEventListener' in separate threads and restarts
@@ -440,19 +441,16 @@ restartUponCrash name_ action = do
 -- executed to finish execution before exiting the main thread.
 jobMonitor :: forall m . (HasJobRunner m) => m ()
 jobMonitor = do
+  traceM "jobMonitor top"
   a1 <- async $ restartUponCrash "Job poller" jobPoller
   a2 <- async $ restartUponCrash "Job event listener" jobEventListener
+  traceM "jobMonitor after async"
   finally (void $ waitAnyCatch [a1, a2]) $ do
     log LevelInfo (LogText "Stopping jobPoller and jobEventListener threads.")
     cancel a2
     cancel a1
     log LevelInfo (LogText "Waiting for jobs to complete.")
     waitForJobs
-    getPidFile >>= \case
-      Nothing -> pure ()
-      Just f -> do
-        log LevelInfo $ LogText $ "Removing PID file: " <> toS f
-        liftIO $ Dir.removePathForcibly f
 
 -- | Ref: 'jobPoller'
 jobPollingSql :: Query
@@ -501,6 +499,7 @@ jobPoller = do
   pool <- getDbPool
   tname <- getTableName
   lockTimeout <- getDefaultJobTimeout
+  traceM "jobPoller just before log statement"
   log LevelInfo $ LogText $ toS $ "Starting the job monitor via DB polling with processName=" <> processName
   concurrencyControlFn <- getConcurrencyControlFn
   withResource pool $ \pollerDbConn -> forever $ concurrencyControlFn >>= \case
@@ -676,12 +675,12 @@ throwParsePayloadWith parser job =
 -- | Used by the web\/admin UI to fetch a \"master list\" of all known
 -- job-types. Ref: 'cfgAllJobTypes'
 fetchAllJobTypes :: (MonadIO m)
-                 => Config
+                 => UIConfig
                  -> m [Text]
-fetchAllJobTypes Config{cfgAllJobTypes, cfgDbPool} = liftIO $ do
-  case cfgAllJobTypes of
+fetchAllJobTypes UIConfig{uicfgAllJobTypes, uicfgDbPool} = liftIO $ do
+  case uicfgAllJobTypes of
     AJTFixed jts -> pure jts
-    AJTSql fn -> withResource cfgDbPool fn
+    AJTSql fn -> withResource uicfgDbPool fn
     AJTCustom fn -> fn
 
 -- | Used by web\/admin IO to fetch a \"master list\" of all known job-runners.
@@ -691,8 +690,8 @@ fetchAllJobTypes Config{cfgAllJobTypes, cfgDbPool} = liftIO $ do
 --     discover only those job-runners that are actively executing at least one
 --     job at the time this function is executed.
 fetchAllJobRunners :: (MonadIO m)
-                   => Config
+                   => UIConfig
                    -> m [JobRunnerName]
-fetchAllJobRunners Config{cfgTableName, cfgDbPool} = liftIO $ withResource cfgDbPool $ \conn -> do
-  fmap (mapMaybe fromOnly) $ PGS.query conn "select distinct locked_by from ?" (Only cfgTableName)
+fetchAllJobRunners UIConfig{uicfgTableName, uicfgDbPool} = liftIO $ withResource uicfgDbPool $ \conn -> do
+  fmap (mapMaybe fromOnly) $ PGS.query conn "select distinct locked_by from ?" (Only uicfgTableName)
 

@@ -126,10 +126,10 @@ data Routes = Routes
   }
 
 
-filterJobsQuery :: Config -> Filter -> (PGS.Query, [Action])
-filterJobsQuery Config{cfgTableName, cfgJobTypeSql} Filter{..} =
+filterJobsQuery :: UIConfig -> Filter -> (PGS.Query, [Action])
+filterJobsQuery UIConfig{uicfgTableName, uicfgJobTypeSql} Filter{..} =
   ( "SELECT " <> Job.concatJobDbColumns <> " FROM ?" <> whereClause <> " " <> (orderClause $ fromMaybe (OrdUpdatedAt, Desc) filterOrder) <> " " <> limitOffsetClause
-  , (toRow $ Only cfgTableName) ++ whereActions
+  , (toRow $ Only uicfgTableName) ++ whereActions
   )
   where
     orderClause (flt, dir) =
@@ -172,7 +172,7 @@ filterJobsQuery Config{cfgTableName, cfgJobTypeSql} Filter{..} =
     jobTypeClause = case filterJobTypes of
       [] -> Nothing
       xs ->
-        let qFragment = "(" <> cfgJobTypeSql <> ")=?"
+        let qFragment = "(" <> uicfgJobTypeSql <> ")=?"
             build ys (q, vs) = case ys of
               [] -> (q, vs)
               (y:[]) -> (qFragment <> q, (toField y):vs)
@@ -192,12 +192,12 @@ filterJobsQuery Config{cfgTableName, cfgJobTypeSql} Filter{..} =
 
     -- orderClause = _
 
-filterJobs :: Config -> Connection -> Filter -> IO [Job]
+filterJobs :: UIConfig -> Connection -> Filter -> IO [Job]
 filterJobs cfg conn f = do
   let (q, queryArgs) = filterJobsQuery cfg f
   PGS.query conn q queryArgs
 
-countJobs :: Config -> Connection -> Filter -> IO Int
+countJobs :: UIConfig -> Connection -> Filter -> IO Int
 countJobs cfg conn f = do
   let (q, queryArgs) = filterJobsQuery cfg f
       finalqry = "SELECT count(*) FROM (" <> q <> ") a"

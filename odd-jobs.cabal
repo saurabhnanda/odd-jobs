@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 6677b61240c930d793f07c90cd9dc719586179d99bdc7dc7b3dbe9a32d9a2afa
+-- hash: 81dabf5fa65d737ec98a4f07762968283cccc36292941ff7fff10a9a398e84b0
 
 name:           odd-jobs
 version:        0.2.2
@@ -67,7 +67,7 @@ library
       aeson
     , base >=4.7 && <5
     , bytestring
-    , direct-daemonize
+    , daemons
     , directory
     , either
     , fast-logger
@@ -121,7 +121,7 @@ executable devel
       aeson
     , base >=4.7 && <5
     , bytestring
-    , direct-daemonize
+    , daemons
     , directory
     , either
     , fast-logger
@@ -168,7 +168,7 @@ executable odd-jobs-cli-example
       aeson
     , base >=4.7 && <5
     , bytestring
-    , direct-daemonize
+    , daemons
     , directory
     , either
     , fast-logger
@@ -226,7 +226,7 @@ test-suite jobrunner
     , base >=4.7 && <5
     , bytestring
     , containers
-    , direct-daemonize
+    , daemons
     , directory
     , either
     , fast-logger

@@ -315,7 +315,7 @@ data Config = Config
   -- | File to store the PID of the job-runner process. This is used only when
   -- invoking the job-runner as an independent background deemon (the usual mode
   -- of deployment).
-  , cfgPidFile :: Maybe FilePath
+  -- , cfgPidFile :: Maybe FilePath
 
   -- | A "structured logging" function that __you__ need to provide. The
   -- @odd-jobs@ library does NOT use the standard logging interface provided by
@@ -331,17 +331,36 @@ data Config = Config
   -- 'OddJobs.ConfigBuilder.defaultJobType'
   , cfgJobType :: Job -> Text
 
+    -- | How long can a job run after which it is considered to be "crashed" and
+    -- picked up for execution again
+  , cfgDefaultJobTimeout :: Seconds
+  }
+
+
+data UIConfig = UIConfig
+  { -- | The DB table which holds your jobs. Please note, this should have been
+    -- created by the 'OddJobs.Migrations.createJobTable' function.
+    uicfgTableName :: TableName
+
+    -- | The DB connection-pool to use for the job-runner. __Note:__ in case
+    -- your jobs require a DB connection, please create a separate
+    -- connection-pool for them. This pool will be used ONLY for monitoring jobs
+    -- and changing their status. We need to have __at least 4 connections__ in
+    -- this connection-pool for the job-runner to work as expected.
+  , uicfgDbPool :: Pool Connection
+
+    -- | How to extract the "job type" from a 'Job'. If you are overriding this,
+    -- please consider overriding 'cfgJobTypeSql' as well. Related:
+    -- 'OddJobs.ConfigBuilder.defaultJobType'
+  , uicfgJobType :: Job -> Text
+
     -- | How to extract the \"job type\" directly in SQL. There are many places,
     -- especially in the web\/admin UI, where we need to know a job's type
     -- directly in SQL (because transferrring the entire @payload@ column to
     -- Haskell, and then parsing it into JSON, and then applying the
     -- 'cfgJobType' function on it would be too inefficient). Ref:
     -- 'OddJobs.ConfigBuilder.defaultJobTypeSql' and 'cfgJobType'
-  , cfgJobTypeSql :: PGS.Query
-
-    -- | How long can a job run after which it is considered to be "crashed" and
-    -- picked up for execution again
-  , cfgDefaultJobTimeout :: Seconds
+  , uicfgJobTypeSql :: PGS.Query
 
     -- | How to convert a list of 'Job's to a list of HTML fragments. This is
     -- used in the Web\/Admin UI. This function accepts a /list/ of jobs and
@@ -349,12 +368,21 @@ data Config = Config
     -- another table to fetch some metadata (eg. convert a primary-key to a
     -- human-readable name), you can do it efficiently instead of resulting in
     -- an N+1 SQL bug. Ref: 'defaultJobToHtml'
-  , cfgJobToHtml :: [Job] -> IO [Html ()]
+  , uicfgJobToHtml :: [Job] -> IO [Html ()]
 
     -- | How to get a list of all known job-types? This is used by the
     -- Web\/Admin UI to power the \"filter by job-type\" functionality. The
     -- default value for this is 'OddJobs.ConfigBuilder.defaultDynamicJobTypes'
     -- which does a @SELECT DISTINCT payload ->> ...@ to get a list of job-types
     -- directly from the DB.
-  , cfgAllJobTypes :: AllJobTypes
+  , uicfgAllJobTypes :: AllJobTypes
+
+    -- | A "structured logging" function that __you__ need to provide. The
+    -- @odd-jobs@ library does NOT use the standard logging interface provided by
+    -- 'monad-logger' on purpose. Also look at 'cfgJobType' and 'defaultLogStr'
+    --
+    -- __Note:__ Please take a look at the section on [structured
+    -- logging](https://www.haskelltutorials.com/odd-jobs/guide.html#structured-logging)
+    -- to find out how to use this to log in JSON.
+  , uicfgLogger :: LogLevel -> LogEvent -> IO ()
   }
