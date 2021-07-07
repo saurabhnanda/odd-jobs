@@ -466,7 +466,7 @@ jobPollingSqlM = do
   pure $
     "update ? set status = ?, locked_at = ?, locked_by = ?, attempts=attempts+1\
     \ WHERE id in (select id from ? where (run_at<=? AND (" <> jobTypeSql <> " IN ?)\
-    \ AND ((status in ?) OR (status = ? and locked_at<?))) ORDER BY run_at ASC LIMIT\
+    \ AND ((status in ?) OR (status = ? and locked_at<?))) ORDER BY attempts asc, run_at ASC LIMIT\
     \ 1 FOR UPDATE) RETURNING id"
 
 waitForJobs :: (HasJobRunner m)
@@ -749,4 +749,3 @@ fetchAllJobRunners :: (MonadIO m)
                    -> m [JobRunnerName]
 fetchAllJobRunners Config{cfgTableName, cfgDbPool} = liftIO $ withResource cfgDbPool $ \conn -> do
   fmap (mapMaybe fromOnly) $ PGS.query conn "select distinct locked_by from ?" (Only cfgTableName)
-
