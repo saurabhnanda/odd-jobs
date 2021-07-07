@@ -80,6 +80,7 @@ tests appPool jobPool = testGroup "All tests"
                              , testEnsureShutdown appPool jobPool
                              , testGracefulShutdown appPool jobPool
                              , testJobErrHandler appPool jobPool
+                             , testMaxConcurrentPerTypeScheduling appPool jobPool
                              ]
   -- , testGroup "property tests" [ testEverything appPool jobPool
   --                              -- , propFilterJobs appPool jobPool
@@ -341,6 +342,22 @@ testJobErrHandler appPool jobPool = testCase "job error handler" $ do
         delaySeconds (Job.defaultPollingInterval * 3)
       readMVar mvar1 >>= assertEqual "Error Handler 1 doesn't seem to have run" True
       readMVar mvar2 >>= assertEqual "Error Handler 2 doesn't seem to have run" True
+
+testMaxConcurrentPerTypeScheduling appPool jobPool = testCase "concurrency control by job type" $ do
+  withRandomTable jobPool $ \tname -> withNamedJobMonitor tname jobPool cfgFn $ \logRef -> do
+    Pool.withResource appPool $ \conn -> do
+      Job{jobId = firstGoodJob} <- Job.createJob conn tname (PayloadSucceed 5)
+      Job{jobId = secondGoodJob} <- Job.createJob conn tname (PayloadSucceed 5)
+      Job{jobId = badJob} <- Job.createJob conn tname (PayloadAlwaysFail 5)
+
+      delaySeconds $ Job.defaultPollingInterval + Seconds 2
+
+      assertJobIdStatus conn tname logRef "Job was created first - it should be running" Job.Locked firstGoodJob
+      assertJobIdStatus conn tname logRef "Job has same type as first - it shouldn't be running" Job.Queued secondGoodJob
+      assertJobIdStatus conn tname logRef "Job has different type - it should be running" Job.Locked badJob
+
+  where cfgFn cfg = cfg { Job.cfgConcurrencyControl = Job.MaxConcurrentJobsPerType 1 }
+
 
 data JobEvent = JobStart
               | JobRetry

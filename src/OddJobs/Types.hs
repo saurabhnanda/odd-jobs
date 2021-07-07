@@ -118,6 +118,11 @@ data ConcurrencyControl
   -- | The maximum number of concurrent jobs that /this instance/ of the
   -- job-runner can execute.
   = MaxConcurrentJobs Int
+  -- | The maximum number of concurrent jobs that /this instance/ of the job
+  -- runner can execute for /each type/. If the job limit is reached for a
+  -- particular job type, new jobs with that type will /not/ be picked up by the
+  -- job runner, even if there are no jobs running with other types.
+  | MaxConcurrentJobsPerType Int
   -- | __Not recommended:__ Please do not use this in production unless you know
   -- what you're doing. No machine can support unlimited concurrency. If your
   -- jobs are doing anything worthwhile, running a sufficiently large number
@@ -134,6 +139,7 @@ data ConcurrencyControl
 instance Show ConcurrencyControl where
   show cc = case cc of
     MaxConcurrentJobs n -> "MaxConcurrentJobs " <> show n
+    MaxConcurrentJobsPerType n -> "MaxConcurrentJobsPerType " <> show n
     UnlimitedConcurrentJobs -> "UnlimitedConcurrentJobs"
     DynamicConcurrency _ -> "DynamicConcurrency (IO Bool)"
 

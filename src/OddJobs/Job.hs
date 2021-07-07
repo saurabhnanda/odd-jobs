@@ -46,7 +46,7 @@ module OddJobs.Job
   , jobMonitor
   , jobEventListener
   , jobPoller
-  , jobPollingSql
+  , jobPollingSqlM
   , JobRunner
   , HasJobRunner (..)
 
@@ -141,7 +141,8 @@ class (MonadUnliftIO m, MonadBaseControl IO m) => HasJobRunner m where
   getPidFile :: m (Maybe FilePath)
   log :: LogLevel -> LogEvent -> m ()
   getDefaultJobTimeout :: m Seconds
-
+  getAllJobTypes :: m [Text]
+  getJobTypeSql :: m Query
 
 -- $logging
 --
@@ -192,6 +193,9 @@ instance HasJobRunner RunnerM where
     liftIO $ loggerFn logLevel logEvent
 
   getDefaultJobTimeout = cfgDefaultJobTimeout . envConfig <$> ask
+
+  getAllJobTypes = asks envConfig >>= fetchAllJobTypes
+  getJobTypeSql = cfgJobTypeSql . envConfig <$> ask
 
 -- | Start the job-runner in the /current/ thread, i.e. you'll need to use
 -- 'forkIO' or 'async' manually, if you want the job-runner to run in the
@@ -295,7 +299,7 @@ saveJob j = do
 saveJobIO :: Connection -> TableName -> Job -> IO Job
 saveJobIO conn tname Job{jobRunAt, jobStatus, jobPayload, jobLastError, jobAttempts, jobLockedBy, jobLockedAt, jobId} = do
   rs <- PGS.query conn saveJobQuery
-        ( tname 
+        ( tname
         , jobRunAt
         , jobStatus
         , jobPayload
@@ -455,8 +459,15 @@ jobMonitor = do
         liftIO $ Dir.removePathForcibly f
 
 -- | Ref: 'jobPoller'
-jobPollingSql :: Query
-jobPollingSql = "update ? set status = ?, locked_at = ?, locked_by = ?, attempts=attempts+1 WHERE id in (select id from ? where (run_at<=? AND ((status in ?) OR (status = ? and locked_at<?))) ORDER BY run_at ASC LIMIT 1 FOR UPDATE) RETURNING id"
+jobPollingSqlM :: (HasJobRunner m)
+              => m Query
+jobPollingSqlM = do
+  jobTypeSql <- getJobTypeSql
+  pure $
+    "update ? set status = ?, locked_at = ?, locked_by = ?, attempts=attempts+1\
+    \ WHERE id in (select id from ? where (run_at<=? AND (" <> jobTypeSql <> " IN ?)\
+    \ AND ((status in ?) OR (status = ? and locked_at<?))) ORDER BY run_at ASC LIMIT\
+    \ 1 FOR UPDATE) RETURNING id"
 
 waitForJobs :: (HasJobRunner m)
             => m ()
@@ -471,14 +482,34 @@ waitForJobs = do
       delaySeconds (Seconds 1)
       waitForJobs
 
+data ConcurrencyAction
+  = DontPoll
+  | PollAny
+  | PollOnlyTypes [Text]
+
 getConcurrencyControlFn :: (HasJobRunner m)
-                        => m (m Bool)
+                        => m (Connection -> m ConcurrencyAction)
 getConcurrencyControlFn = getConcurrencyControl >>= \case
-  UnlimitedConcurrentJobs -> pure $ pure True
-  MaxConcurrentJobs maxJobs -> pure $ do
+  UnlimitedConcurrentJobs -> pure $ const $ pure $ PollAny
+  MaxConcurrentJobs maxJobs -> pure $ const $ do
     curJobs <- getRunnerEnv >>= (readIORef . envJobThreadsRef)
-    pure $ (DL.length curJobs) < maxJobs
-  DynamicConcurrency fn -> pure $ liftIO fn
+    pure $ pollIf $ (DL.length curJobs) < maxJobs
+  MaxConcurrentJobsPerType n -> pure $ \dbConn -> do
+    tname <- getTableName
+    jobCountsByTypeSql <- jobCountsByTypeSqlM
+    countsByType <- liftIO $ PGS.query dbConn jobCountsByTypeSql (PGS.Only tname)
+    let underresourcedTypes =  DL.concatMap (\(type', cnt) -> [type' | cnt < n]) countsByType
+    pure $ PollOnlyTypes underresourcedTypes
+  DynamicConcurrency fn -> pure $ const $ pollIf <$> liftIO fn
+
+  where
+    pollIf cond = if cond then PollAny else DontPoll
+
+jobCountsByTypeSqlM :: HasJobRunner m => m Query
+jobCountsByTypeSqlM = do
+  jobTypeSql <- getJobTypeSql
+  pure $ "select (" <> jobTypeSql <> "), count(id) filter (where status = 'locked') FROM ? GROUP BY (" <> jobTypeSql <> ")"
+
 
 -- | Executes 'jobPollingSql' every 'cfgPollingInterval' seconds to pick up jobs
 -- for execution. Uses @UPDATE@ along with @SELECT...FOR UPDATE@ to efficiently
@@ -502,35 +533,45 @@ jobPoller = do
   tname <- getTableName
   lockTimeout <- getDefaultJobTimeout
   log LevelInfo $ LogText $ toS $ "Starting the job monitor via DB polling with processName=" <> processName
+
+  let pollWithFilter conn mTypesFilter = do
+        nextAction <- mask_ $ do
+          typesFilter <- case mTypesFilter of
+            Nothing -> getAllJobTypes
+            Just types -> pure types
+          log LevelDebug $ LogText $ toS $ "[" <> processName <> "] Polling the job queue.."
+          jobPollingSql <- jobPollingSqlM
+          t <- liftIO getCurrentTime
+          r <- liftIO $
+               PGS.query conn jobPollingSql
+               ( tname
+               , Locked
+               , t
+               , processName
+               , tname
+               , t
+               , (In typesFilter)
+               , (In [Queued, Retry])
+               , Locked
+               , (addUTCTime (fromIntegral $ negate $ unSeconds lockTimeout) t))
+          case r of
+            -- When we don't have any jobs to run, we can relax a bit...
+            [] -> pure delayAction
+
+            -- When we find a job to run, fork and try to find the next job without any delay...
+            [Only (jid :: JobId)] -> do
+              void $ async $ runJob jid
+              pure noDelayAction
+
+            x -> error $ "WTF just happened? I was supposed to get only a single row, but got: " ++ (show x)
+        nextAction
+
   concurrencyControlFn <- getConcurrencyControlFn
-  withResource pool $ \pollerDbConn -> forever $ concurrencyControlFn >>= \case
-    False -> log LevelWarn $ LogText $ "NOT polling the job queue due to concurrency control"
-    True -> do
-      nextAction <- mask_ $ do
-        log LevelDebug $ LogText $ toS $ "[" <> processName <> "] Polling the job queue.."
-        t <- liftIO getCurrentTime
-        r <- liftIO $
-             PGS.query pollerDbConn jobPollingSql
-             ( tname
-             , Locked
-             , t
-             , processName
-             , tname
-             , t
-             , (In [Queued, Retry])
-             , Locked
-             , (addUTCTime (fromIntegral $ negate $ unSeconds lockTimeout) t))
-        case r of
-          -- When we don't have any jobs to run, we can relax a bit...
-          [] -> pure delayAction
+  withResource pool $ \pollerDbConn -> forever $ concurrencyControlFn pollerDbConn >>= \case
+    DontPoll -> log LevelWarn $ LogText $ "NOT polling the job queue due to concurrency control"
+    PollAny -> pollWithFilter pollerDbConn Nothing
+    PollOnlyTypes types -> pollWithFilter pollerDbConn (Just types)
 
-          -- When we find a job to run, fork and try to find the next job without any delay...
-          [Only (jid :: JobId)] -> do
-            void $ async $ runJob jid
-            pure noDelayAction
-
-          x -> error $ "WTF just happened? I was supposed to get only a single row, but got: " ++ (show x)
-      nextAction
   where
     delayAction = delaySeconds =<< getPollingInterval
     noDelayAction = pure ()
@@ -555,34 +596,47 @@ jobEventListener = do
           [Only (_ :: JobId)] -> pure $ Just jid
           x -> error $ "WTF just happned? Was expecting a single row to be returned, received " ++ (show x)
 
+  let getJobType conn jid = do
+        jobTypeSql <- getJobTypeSql
+        let q = "SELECT (" <> jobTypeSql <> ") FROM ? WHERE id = ?"
+        liftIO $ PGS.query conn q (tname, jid) >>= \case
+          [Only jobType] -> pure jobType
+          x -> error $ "WTF just happned? Was expecting a single row to be returned, received " ++ (show x)
+
   withResource pool $ \monitorDbConn -> do
     void $ liftIO $ PGS.execute monitorDbConn ("LISTEN ?") (Only $ pgEventName tname)
     forever $ do
       log LevelDebug $ LogText "[LISTEN/NOTIFY] Event loop"
       notif <- liftIO $ getNotification monitorDbConn
-      concurrencyControlFn >>= \case
-        False -> log LevelWarn $ LogText "Received job event, but ignoring it due to concurrency control"
-        True -> do
-          let pload = notificationData notif
-          log LevelDebug $ LogText $ toS $ "NOTIFY | " <> show pload
-          case (eitherDecode $ toS pload) of
-            Left e -> log LevelError $ LogText $ toS $  "Unable to decode notification payload received from Postgres. Payload=" <> show pload <> " Error=" <> show e
 
-            -- Checking if job needs to be fired immediately AND it is not already
-            -- taken by some othe thread, by the time it got to us
-            Right (v :: Value) -> case (Aeson.parseMaybe parser v) of
-              Nothing -> log LevelError $ LogText $ toS $ "Unable to extract id/run_at/locked_at from " <> show pload
-              Just (jid, runAt_, mLockedAt_) -> do
-                t <- liftIO getCurrentTime
-                if (runAt_ <= t) && (isNothing mLockedAt_)
-                  then do log LevelDebug $ LogText $ toS $ "Job needs needs to be run immediately. Attempting to fork in background. JobId=" <> show jid
-                          void $ async $ do
-                            -- Let's try to lock the job first... it is possible that it has already
-                            -- been picked up by the poller by the time we get here.
-                            tryLockingJob jid >>= \case
-                              Nothing -> pure ()
-                              Just lockedJid -> runJob lockedJid
-                  else log LevelDebug $ LogText $ toS $ "Job is either for future, or is already locked. Skipping. JobId=" <> show jid
+      let pload = notificationData notif
+          runNotifWithFilter :: HasJobRunner m => Maybe [Text] -> m ()
+          runNotifWithFilter mTypesFilter = do
+            log LevelDebug $ LogText $ toS $ "NOTIFY | " <> show pload
+            case (eitherDecode $ toS pload) of
+              Left e -> log LevelError $ LogText $ toS $  "Unable to decode notification payload received from Postgres. Payload=" <> show pload <> " Error=" <> show e
+
+              -- Checking if job needs to be fired immediately AND it is not already
+              -- taken by some othe thread, by the time it got to us
+              Right (v :: Value) -> case (Aeson.parseMaybe parser v) of
+                Nothing -> log LevelError $ LogText $ toS $ "Unable to extract id/run_at/locked_at from " <> show pload
+                Just (jid, runAt_, mLockedAt_) -> do
+                  t <- liftIO getCurrentTime
+                  jobType <- getJobType monitorDbConn jid
+                  if (runAt_ <= t) && (isNothing mLockedAt_) && maybe True (elem jobType) mTypesFilter
+                    then do log LevelDebug $ LogText $ toS $ "Job needs needs to be run immediately. Attempting to fork in background. JobId=" <> show jid
+                            void $ async $ do
+                              -- Let's try to lock the job first... it is possible that it has already
+                              -- been picked up by the poller by the time we get here.
+                              tryLockingJob jid >>= \case
+                                Nothing -> pure ()
+                                Just lockedJid -> runJob lockedJid
+                    else log LevelDebug $ LogText $ toS $ "Job is either for future, is already locked, or would violate concurrency constraints. Skipping. JobId=" <> show jid
+
+      concurrencyControlFn monitorDbConn >>= \case
+        DontPoll -> log LevelWarn $ LogText "Received job event, but ignoring it due to concurrency control"
+        PollAny -> runNotifWithFilter Nothing
+        PollOnlyTypes types -> runNotifWithFilter (Just types)
   where
     parser :: Value -> Aeson.Parser (JobId, UTCTime, Maybe UTCTime)
     parser = withObject "expecting an object to parse job.run_at and job.locked_at" $ \o -> do
@@ -639,7 +693,7 @@ scheduleJob conn tname payload runAt = do
   case rs of
     [] -> (Prelude.error . (<> "Not expecting a blank result set when creating a job. Query=")) <$> queryFormatter
     [r] -> pure r
-    _ -> (Prelude.error . (<> "Not expecting multiple rows when creating a single job. Query=")) <$> queryFormatter 
+    _ -> (Prelude.error . (<> "Not expecting multiple rows when creating a single job. Query=")) <$> queryFormatter
 
 
 -- getRunnerEnv :: (HasJobRunner m) => m RunnerEnv
