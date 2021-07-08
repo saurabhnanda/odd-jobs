@@ -504,7 +504,10 @@ jobPoller = do
   log LevelInfo $ LogText $ toS $ "Starting the job monitor via DB polling with processName=" <> processName
   concurrencyControlFn <- getConcurrencyControlFn
   withResource pool $ \pollerDbConn -> forever $ concurrencyControlFn >>= \case
-    False -> log LevelWarn $ LogText $ "NOT polling the job queue due to concurrency control"
+    False -> do
+      log LevelWarn $ LogText $ "NOT polling the job queue due to concurrency control"
+      -- If we can't run any jobs ATM, relax and wait for resources to free up
+      delayAction
     True -> do
       nextAction <- mask_ $ do
         log LevelDebug $ LogText $ toS $ "[" <> processName <> "] Polling the job queue.."
