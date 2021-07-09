@@ -29,3 +29,14 @@ Please read the [contribution guidelines](./CONTRIBUTING.md)
 ```bash
 stack build
 ```
+
+
+### Running tests
+
+Add the users to postgresql:
+
+
+```
+CREATE USER jobs_test WITH SUPERUSER PASSWORD 'jobs_test';
+CREATE DATABASE jobs_test OWNER jobs_test;
+```
