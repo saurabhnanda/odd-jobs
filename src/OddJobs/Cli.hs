@@ -122,19 +122,6 @@ defaultStartCommand CommonStartArgs{..} mUIArgs cliType = do
       coreStartupFn
     True -> do
       Daemon.runDetached (Just startPidFile) (Daemon.ToFile "/tmp/oddjobs.out") coreStartupFn
-      -- (Dir.doesPathExist startPidFile) >>= \case
-      --   True -> do
-      --     putStrLn $
-      --       "PID file (i.e. " <> startPidFile <> ")already exists. Please check if " <> progName <> " is still running in the background." <>
-      --       " If not, you can safely delete this file and start " <> progName <> " again."
-      --     Exit.exitWith (Exit.ExitFailure 1)
-      --   False -> do
-      --     runDetached (Just startPidFile) (ToFile "/tmp/oddjobs.out") $ do
-      --       finally coreStartupFn (Dir.removeFile startPidFile)
-            -- pid <- getProcessID
-            -- bracket_ (writeFile startPidFile (show pid)) (Dir.removeFile startPidFile) $ do
-            --   putStrLn $ "Started " <> progName <> " in background with PID=" <> show pid <> ". PID written to " <> startPidFile
-            --   coreStartupFn
   where
     uiArgs = fromJustNote "Please specify Web UI Startup Args" $ traceShowId mUIArgs
     coreStartupFn =
@@ -150,16 +137,6 @@ defaultStartCommand CommonStartArgs{..} mUIArgs cliType = do
             traceM "CliBoth inside withAsync"
             cliStartJobRunner Prelude.id
             traceM "CliBoth end"
-
--- daemonOptions :: DaemonOptions
--- daemonOptions = DaemonOptions
---   { daemonShouldChangeDirectory = False
---   , daemonShouldCloseStandardStreams = True
---   , daemonShouldIgnoreSignals = True
---   , daemonUserToChangeTo = Nothing
---   , daemonGroupToChangeTo = Nothing
---   }
-
 
 defaultWebUI :: UIStartArgs
              -> UIConfig

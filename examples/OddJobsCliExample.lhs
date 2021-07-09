@@ -106,54 +106,6 @@ main = runCli CliBoth{..}
           let jobLogger = defaultTimedLogger logger (defaultLogStr defaultJobType)
           defaultWebUI uiStartArgs $
             mkUIConfig jobLogger "jobs" dbPool cfgOverrideFn
-
-
--- main :: IO ()
--- main = do
---   dbPool <- createPool
---             (PGS.connectPostgreSQL "dbname=jobs_test user=jobs_test password=jobs_test host=localhost")
---             PGS.close
---             1
---             10
---             8
---   tcache <- newTimeCache simpleTimeFormat
---   (tlogger, tloggerCleanup) <- newTimedFastLogger tcache (LogFileNoRotate "oddjobs.log" defaultBufSize)
---   let jobLogger = defaultTimedLogger tlogger (defaultLogStr defaultJobType)
---       cliStartJobRunner cfgOverrideFn = do
---         startJobRunner $
---           mkConfig jobLogger "jobs" dbPool (MaxConcurrentJobs 50) myJobRunner cfgOverrideFn
-
---       cliStartWebUI uiStartArgs cfgOverrideFn = do
---         defaultWebUI uiStartArgs $
---           mkUIConfig jobLogger "jobs" dbPool cfgOverrideFn
-
---   runCli CliBoth{..}
-
-
-  -- do
-  -- -- a utility function provided by `OddJobs.ConfigBuilder` which ensures
-  -- -- that the DB pool is gracefully destroyed upon shutdown.
-  -- withConnectionPool (Left "dbname=jobs_test user=jobs_test password=jobs_test host=localhost")$ \dbPool -> do
-
-  --   -- Boilerplate code to setup a TimedFastLogger (from the fast-logger library)
-  --   tcache <- newTimeCache simpleTimeFormat
-  --   withTimedFastLogger tcache (LogFileNoRotate "oddjobs.log" defaultBufSize) $ \logger -> do
-  --   -- withTimedFastLogger tcache (LogStdout defaultBufSize) $ \logger -> do
-
-  --     -- Using the default string-based logging provided by
-  --     -- `OddJobs.ConfigBuilder`. If you want to actually use
-  --     -- structured-logging you'll need to define your own logging function.
-  --     let jobLogger = defaultTimedLogger logger (defaultLogStr defaultJobType)
-  --         cliStartJobRunner cfgOverrideFn = do
-  --           putStrLn "starting job runner"
-  --           startJobRunner $
-  --             mkConfig jobLogger "jobs" dbPool (MaxConcurrentJobs 50) myJobRunner cfgOverrideFn
-  --         cliStartWebUI uiStartArgs cfgOverrideFn = defaultWebUI uiStartArgs $
-  --                                                   mkUIConfig jobLogger "jobs" dbPool cfgOverrideFn
-
-  --     jobLogger LevelInfo (LogText "about to start cli")
-  --     -- Finally, executing the callback function that was passed to me...
-  --     runCli CliBoth{..}
 \end{code}
 
 === 6. Compile and start the Odd Jobs runner

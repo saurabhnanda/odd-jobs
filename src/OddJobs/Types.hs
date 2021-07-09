@@ -342,15 +342,17 @@ data UIConfig = UIConfig
     -- created by the 'OddJobs.Migrations.createJobTable' function.
     uicfgTableName :: TableName
 
-    -- | The DB connection-pool to use for the job-runner. __Note:__ in case
-    -- your jobs require a DB connection, please create a separate
-    -- connection-pool for them. This pool will be used ONLY for monitoring jobs
-    -- and changing their status. We need to have __at least 4 connections__ in
-    -- this connection-pool for the job-runner to work as expected.
+    -- | The DB connection-pool to use for the web UI. __Note:__ the same DB
+    -- pool used by your job-runner can be passed here if it has a sufficient
+    -- number of connections to satisfy both use-scases. Else create a separate
+    -- DB pool to be used only by the web UI (this DB pool can have just 1-3
+    -- connection, because __typically__ the web UI doesn't serve too many
+    -- concurrent user in most real-life cases)
   , uicfgDbPool :: Pool Connection
 
     -- | How to extract the "job type" from a 'Job'. If you are overriding this,
-    -- please consider overriding 'cfgJobTypeSql' as well. Related:
+    -- please consider overriding 'cfgJobTypeSql' as well. __Note:__ Usually
+    -- 'cfgJobType' and 'uicfgJobType' would use the same value. Related:
     -- 'OddJobs.ConfigBuilder.defaultJobType'
   , uicfgJobType :: Job -> Text
 
@@ -359,7 +361,7 @@ data UIConfig = UIConfig
     -- directly in SQL (because transferrring the entire @payload@ column to
     -- Haskell, and then parsing it into JSON, and then applying the
     -- 'cfgJobType' function on it would be too inefficient). Ref:
-    -- 'OddJobs.ConfigBuilder.defaultJobTypeSql' and 'cfgJobType'
+    -- 'OddJobs.ConfigBuilder.defaultJobTypeSql' and 'uicfgJobType'
   , uicfgJobTypeSql :: PGS.Query
 
     -- | How to convert a list of 'Job's to a list of HTML fragments. This is

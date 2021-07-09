@@ -73,23 +73,25 @@ mkConfig logger tname dbpool ccControl jrunner configOverridesFn =
 
 
 mkUIConfig :: (LogLevel -> LogEvent -> IO ())
-           -- ^ "Structured logging" function. Ref: 'cfgLogger'
+           -- ^ "Structured logging" function. Ref: 'uicfgLogger'
            -> TableName
-           -- ^ DB table which holds your jobs. Ref: 'cfgTableName'
+           -- ^ DB table which holds your jobs. Ref: 'uicfgTableName'
            -> Pool Connection
-           -- ^ The actual "job runner" which contains your application code. Ref: 'cfgJobRunner'
+           -- ^ DB connection-pool to be used by web UI. Ref: 'uicfgDbPool'
            -> (UIConfig -> UIConfig)
-           -- ^ A function that allows you to modify the \"interim config\". The
-           -- \"interim config\" will cotain a bunch of in-built default config
-           -- params, along with the config params that you\'ve just provided
-           -- (i.e. logging function, table name, DB pool, etc). You can use this
-           -- function to override values in the \"interim config\". If you do not
-           -- wish to modify the \"interim config\" just pass 'Prelude.id' as an
-           -- argument to this parameter. __Note:__ it is strongly recommended
-           -- that you __do not__ modify the generated 'Config' outside of this
-           -- function, unless you know what you're doing.
+           -- ^ A function that allows you to modify the \"interim UI config\".
+           -- The \"interim config\" will cotain a bunch of in-built default
+           -- config params, along with the config params that you\'ve just
+           -- provided (i.e. logging function, table name, DB pool, etc). You
+           -- can use this function to override values in the \"interim UI
+           -- config\". If you do not wish to modify the \"interim UI config\"
+           -- just pass 'Prelude.id' as an argument to this parameter. __Note:__
+           -- it is strongly recommended that you __do not__ modify the
+           -- generated 'Config' outside of this function, unless you know what
+           -- you're doing.
            -> UIConfig
-           -- ^ The final 'Config' that can be used to start various job-runners
+           -- ^ The final 'UIConfig' that needs to be passed to
+           -- 'OddJobs.Endpoint.mkEnv' and 'OddJobs.Cli.defaultWebUI'
 mkUIConfig logger tname dbpool configOverridesFn =
   let cfg = configOverridesFn $ UIConfig
             { uicfgLogger = logger
