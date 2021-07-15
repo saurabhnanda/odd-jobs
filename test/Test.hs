@@ -5,6 +5,8 @@ import Test.Tasty as Tasty
 import qualified OddJobs.Migrations as Migrations
 import qualified OddJobs.Job as Job
 import Database.PostgreSQL.Simple as PGS
+import qualified Database.Postgres.Temp as TempDB
+import Data.ByteString (ByteString)
 import Data.Functor (void)
 import Data.Pool as Pool
 import Test.Tasty.HUnit
@@ -45,31 +47,28 @@ import Control.Exception (ArithException)
 
 $(Aeson.deriveJSON Aeson.defaultOptions ''Seconds)
 
+withDb :: (ByteString -> IO ()) -> IO ()
+withDb run =
+  void . TempDB.with $ \db -> run (TempDB.toConnectionString db)
+
 main :: IO ()
 main = do
-  bracket createAppPool destroyAllResources $ \appPool -> do
-    bracket createJobPool destroyAllResources $ \jobPool -> do
-      defaultMain $ tests appPool jobPool
+  withDb $ \connStr -> do
+    bracket (createAppPool connStr) destroyAllResources $ \appPool -> do
+      bracket (createJobPool connStr) destroyAllResources $ \jobPool -> do
+        defaultMain $ tests appPool jobPool
   where
-    connInfo = ConnectInfo
-                 { connectHost = "localhost"
-                 , connectPort = fromIntegral (5432 :: Int)
-                 , connectUser = "jobs_test"
-                 , connectPassword = "jobs_test"
-                 , connectDatabase = "jobs_test"
-                 }
-
-    createAppPool = createPool
-      (PGS.connect connInfo)  -- cretea a new resource
-      (PGS.close)             -- destroy resource
-      1                       -- stripes
-      (fromRational 10)       -- number of seconds unused resources are kept around
+    createAppPool connStr = createPool
+      (PGS.connectPostgreSQL connStr)  -- create a new resource
+      (PGS.close)                      -- destroy resource
+      1                                -- stripes
+      (fromRational 10)                -- number of seconds unused resources are kept around
       45
-    createJobPool = createPool
-      (PGS.connect connInfo)  -- cretea a new resource
-      (PGS.close)             -- destroy resource
-      1                       -- stripes
-      (fromRational 10)       -- number of seconds unused resources are kept around
+    createJobPool connStr = createPool
+      (PGS.connectPostgreSQL connStr)  -- create a new resource
+      (PGS.close)                      -- destroy resource
+      1                                -- stripes
+      (fromRational 10)                -- number of seconds unused resources are kept around
       45
 
 tests appPool jobPool = testGroup "All tests"

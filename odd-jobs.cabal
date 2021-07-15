@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 6677b61240c930d793f07c90cd9dc719586179d99bdc7dc7b3dbe9a32d9a2afa
+-- hash: c5d572d202080362fc15306f8d59e7b86a6755ba988d1d00d20a93291edd70e1
 
 name:           odd-jobs
 version:        0.2.2
@@ -260,6 +260,7 @@ test-suite jobrunner
     , text-conversions
     , time
     , timing-convenience
+    , tmp-postgres
     , unix
     , unliftio
     , unliftio-core
