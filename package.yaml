@@ -39,11 +39,11 @@ extra-source-files:
 - assets/odd-jobs-color-logo.png
 
 
-ghc-options: 
-  - -Wall 
-  - -fno-warn-orphans 
-  - -fno-warn-unused-imports 
-  - -fno-warn-dodgy-exports 
+ghc-options:
+  - -Wall
+  - -fno-warn-orphans
+  - -fno-warn-unused-imports
+  - -fno-warn-dodgy-exports
   - -Werror=missing-fields
   - -Werror=incomplete-patterns
 
@@ -149,3 +149,4 @@ tests:
       - lifted-base
       - lifted-async
       - containers
+      - tmp-postgres
