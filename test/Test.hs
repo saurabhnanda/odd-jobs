@@ -92,6 +92,7 @@ tests appPool jobPool = testGroup "All tests"
                                , testOnJobTimeout appPool jobPool
                                ]
                              , testResourceLimitedScheduling appPool jobPool
+                             , testKillJob appPool jobPool
                              ]
   -- , testGroup "property tests" [ testEverything appPool jobPool
   --                              -- , propFilterJobs appPool jobPool
@@ -166,6 +167,8 @@ logEventToJob le = case le of
   Job.LogJobSuccess j _ -> Just j
   Job.LogJobFailed j _ _ _ -> Just j
   Job.LogJobTimeout j -> Just j
+  Job.LogKillJobSuccess j -> Just j
+  Job.LogKillJobFailed j -> Just j
   Job.LogPoll -> Nothing
   Job.LogWebUIRequest -> Nothing
   Job.LogText _ -> Nothing
@@ -195,6 +198,8 @@ assertJobIdStatus conn tname logRef msg st jid = do
         Job.LogJobSuccess j _ -> jid == Job.jobId j
         Job.LogJobFailed j _ _ _ -> jid == Job.jobId j
         Job.LogJobTimeout j -> jid == Job.jobId j
+        Job.LogKillJobSuccess _ -> False
+        Job.LogKillJobFailed _  -> False
         Job.LogWebUIRequest -> False
         Job.LogText _ -> False
         Job.LogPoll -> False
@@ -203,6 +208,12 @@ assertJobIdStatus conn tname logRef msg st jid = do
       assertBool (msg <> ": Failed event not found in job-logs for JobId=" <> show jid) $
       flip DL.any logs $ \case
         Job.LogJobFailed j _ _ _ -> jid == Job.jobId j
+        _ -> False
+
+    Job.Cancelled ->
+      assertBool (msg <> ": Job killed event not found in job-logs for JobId=" <> show jid) $
+      flip DL.any logs $ \case
+        Job.LogKillJobSuccess j -> jid == Job.jobId j
         _ -> False
 
     Job.Retry ->
@@ -626,6 +637,19 @@ setup' jobPool defaultLimit action =
         , Job.cfgConcurrencyControl = Job.ResourceLimits resCfg
         , Job.cfgDeleteSuccessfulJobs = False
         }
+
+testKillJob appPool jobPool = testCase "killing a ongoing job" $ do
+  withRandomTable jobPool $ \tname -> withNamedJobMonitor tname jobPool Prelude.id $ \logRef -> do
+    Pool.withResource appPool $ \conn -> do
+      Job{jobId = jid} <- Job.createJob conn tname (PayloadSucceed 60)
+      delaySeconds $ Job.defaultPollingInterval + Seconds 2
+
+      assertJobIdStatus conn tname logRef "Job should be running" Job.Locked jid
+
+      _ <- Job.killJobIO conn tname jid
+      delaySeconds $ Job.defaultPollingInterval + Seconds 2
+
+      assertJobIdStatus conn tname logRef "Job is cancelled and the job thread should be killed" Job.Cancelled jid
 
 data JobEvent = JobStart
               | JobRetry

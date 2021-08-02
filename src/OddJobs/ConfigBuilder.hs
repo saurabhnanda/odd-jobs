@@ -144,6 +144,10 @@ defaultLogStr jobTypeFn logLevel logEvent =
       LogJobTimeout j@Job{jobLockedAt, jobLockedBy} ->
         "Timeout | " <> jobToLogStr j <> " | lockedBy=" <> toLogStr (maybe  "unknown" unJobRunnerName jobLockedBy) <>
         " lockedAt=" <> toLogStr (maybe "unknown" show jobLockedAt)
+      LogKillJobSuccess j ->
+        "Kill Job Success | " <> jobToLogStr j
+      LogKillJobFailed j ->
+        "Kill Job Failed | " <> jobToLogStr j <> "(the job might have completed or timed out)"
       LogPoll ->
         "Polling jobs table"
       LogWebUIRequest ->
@@ -320,6 +324,12 @@ defaultJsonLogEvent logEvent =
                    , "contents" Aeson..= (defaultJsonJob job, show e, defaultJsonFailureMode fm, runTime) ]
     LogJobTimeout job ->
       Aeson.object [ "tag" Aeson..= ("LogJobTimeout" :: Text)
+                   , "contents" Aeson..= defaultJsonJob job ]
+    LogKillJobSuccess job ->
+      Aeson.object [ "tag" Aeson..= ("LogKillJobSuccess" :: Text)
+                   , "contents" Aeson..= defaultJsonJob job ]
+    LogKillJobFailed job ->
+      Aeson.object [ "tag" Aeson..= ("LogKillJobFailed" :: Text)
                    , "contents" Aeson..= defaultJsonJob job ]
     LogPoll ->
       Aeson.object [ "tag" Aeson..= ("LogJobPoll" :: Text)]
