@@ -21,18 +21,20 @@ Ideally, this module should be compiled into a separate executable and should de
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE RecordWildCards #-}
 
 module OddJobsCliExample where
 
-import OddJobs.Job (Job(..),  ConcurrencyControl(..), Config(..), throwParsePayload)
-import OddJobs.ConfigBuilder (mkConfig, withConnectionPool, defaultTimedLogger, defaultLogStr, defaultJobType)
-import OddJobs.Cli (defaultMain)
+import OddJobs.Job (Job(..),  ConcurrencyControl(..), Config(..), throwParsePayload, startJobRunner, LogLevel(..), LogEvent(..))
+import OddJobs.ConfigBuilder (mkConfig, withConnectionPool, defaultTimedLogger, defaultLogStr, defaultJobType, mkUIConfig)
+import OddJobs.Cli (runCli, defaultWebUI, CliType(..))
 
 -- Note: It is not necessary to use fast-logger. You can use any logging library
 -- that can give you a logging function in the IO monad.
-import System.Log.FastLogger(withTimedFastLogger, LogType'(..), defaultBufSize)
+import System.Log.FastLogger(withTimedFastLogger, LogType'(..), defaultBufSize, newTimedFastLogger)
 import System.Log.FastLogger.Date (newTimeCache, simpleTimeFormat)
-
+import Database.PostgreSQL.Simple as PGS
+import Data.Pool
 import Data.Text (Text)
 import Data.Aeson as Aeson
 import GHC.Generics
@@ -87,32 +89,23 @@ myJobRunner job = do
 
 \begin{code}
 main :: IO ()
-main = do
-  defaultMain startJobMonitor
+main = runCli CliBoth{..}
   where
-    -- A callback-within-callback function. If the commands-line args contain a
-    -- `start` command, this function will be called. Once this function has
-    -- constructed the 'Config' (which requires setting up a logging function,
-    -- and a DB pool) it needs to execute the `callback` function that is passed
-    -- to it.
-    startJobMonitor callback =
-
-      -- a utility function provided by `OddJobs.ConfigBuilder` which ensures
-      -- that the DB pool is gracefully destroyed upon shutdown.
+    cliStartJobRunner cfgOverrideFn = do
       withConnectionPool (Left "dbname=jobs_test user=jobs_test password=jobs_test host=localhost")$ \dbPool -> do
-
-        -- Boilerplate code to setup a TimedFastLogger (from the fast-logger library)
         tcache <- newTimeCache simpleTimeFormat
         withTimedFastLogger tcache (LogFileNoRotate "oddjobs.log" defaultBufSize) $ \logger -> do
-
-          -- Using the default string-based logging provided by
-          -- `OddJobs.ConfigBuilder`. If you want to actually use
-          -- structured-logging you'll need to define your own logging function.
           let jobLogger = defaultTimedLogger logger (defaultLogStr defaultJobType)
-              cfg = mkConfig jobLogger "jobs" dbPool (MaxConcurrentJobs 50) myJobRunner Prelude.id
+          startJobRunner $
+            mkConfig jobLogger "jobs" dbPool (MaxConcurrentJobs 50) myJobRunner cfgOverrideFn
 
-          -- Finally, executing the callback function that was passed to me...
-          callback cfg
+    cliStartWebUI uiStartArgs cfgOverrideFn = do
+      withConnectionPool (Left "dbname=jobs_test user=jobs_test password=jobs_test host=localhost")$ \dbPool -> do
+        tcache <- newTimeCache simpleTimeFormat
+        withTimedFastLogger tcache (LogFileNoRotate "oddjobs-web.log" defaultBufSize) $ \logger -> do
+          let jobLogger = defaultTimedLogger logger (defaultLogStr defaultJobType)
+          defaultWebUI uiStartArgs $
+            mkUIConfig jobLogger "jobs" dbPool cfgOverrideFn
 \end{code}
 
 === 6. Compile and start the Odd Jobs runner

@@ -85,7 +85,7 @@ dependencies:
   - warp
   - unordered-containers
   - optparse-applicative
-  - direct-daemonize
+  - daemons
   - filepath
   - directory
   - generic-deriving

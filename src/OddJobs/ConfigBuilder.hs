@@ -66,14 +66,44 @@ mkConfig logger tname dbpool ccControl jrunner configOverridesFn =
             , cfgTableName = tname
             , cfgOnJobTimeout = (const $ pure ())
             , cfgConcurrencyControl = ccControl
-            , cfgPidFile = Nothing
             , cfgJobType = defaultJobType
             , cfgDefaultJobTimeout = Seconds 600
-            , cfgJobToHtml = defaultJobToHtml (cfgJobType cfg)
-            , cfgAllJobTypes = (defaultDynamicJobTypes (cfgTableName cfg) (cfgJobTypeSql cfg))
-            , cfgJobTypeSql = defaultJobTypeSql
             }
   in cfg
+
+
+mkUIConfig :: (LogLevel -> LogEvent -> IO ())
+           -- ^ "Structured logging" function. Ref: 'uicfgLogger'
+           -> TableName
+           -- ^ DB table which holds your jobs. Ref: 'uicfgTableName'
+           -> Pool Connection
+           -- ^ DB connection-pool to be used by web UI. Ref: 'uicfgDbPool'
+           -> (UIConfig -> UIConfig)
+           -- ^ A function that allows you to modify the \"interim UI config\".
+           -- The \"interim config\" will cotain a bunch of in-built default
+           -- config params, along with the config params that you\'ve just
+           -- provided (i.e. logging function, table name, DB pool, etc). You
+           -- can use this function to override values in the \"interim UI
+           -- config\". If you do not wish to modify the \"interim UI config\"
+           -- just pass 'Prelude.id' as an argument to this parameter. __Note:__
+           -- it is strongly recommended that you __do not__ modify the
+           -- generated 'Config' outside of this function, unless you know what
+           -- you're doing.
+           -> UIConfig
+           -- ^ The final 'UIConfig' that needs to be passed to
+           -- 'OddJobs.Endpoint.mkEnv' and 'OddJobs.Cli.defaultWebUI'
+mkUIConfig logger tname dbpool configOverridesFn =
+  let cfg = configOverridesFn $ UIConfig
+            { uicfgLogger = logger
+            , uicfgDbPool = dbpool
+            , uicfgTableName = tname
+            , uicfgJobType = defaultJobType
+            , uicfgJobToHtml = defaultJobsToHtml (uicfgJobType cfg)
+            , uicfgAllJobTypes = (defaultDynamicJobTypes (uicfgTableName cfg) (uicfgJobTypeSql cfg))
+            , uicfgJobTypeSql = defaultJobTypeSql
+            }
+  in cfg
+
 
 
 
@@ -109,28 +139,30 @@ defaultLogStr jobTypeFn logLevel logEvent =
       LogText t ->
         toLogStr t
 
+defaultJobsToHtml :: (Job -> Text)
+                  -> [Job]
+                  -> IO [Html ()]
+defaultJobsToHtml jobType js = pure $ DL.map (defaultJobToHtml jobType) js
+
+
 defaultJobToHtml :: (Job -> Text)
-                 -> [Job]
-                 -> IO [Html ()]
-defaultJobToHtml jobType js =
-  pure $ DL.map jobToHtml js
-  where
-    jobToHtml :: Job -> Html ()
-    jobToHtml j = do
-      div_ [ class_ "job" ] $ do
-        div_ [ class_ "job-type" ] $ do
-          toHtml $ jobType j
-        div_ [ class_ "job-payload" ] $ do
-          defaultPayloadToHtml $ defaultJobContent $ jobPayload j
-        case jobLastError j of
-          Nothing -> mempty
-          Just e -> do
-            div_ [ class_ "job-error collapsed" ] $ do
-              a_ [ href_ "javascript: void(0);", onclick_ "toggleError(this)" ] $ do
-                span_ [ class_ "badge badge-secondary error-expand" ] "+ Last error"
-                span_ [ class_ "badge badge-secondary error-collapse d-none" ] "- Last error"
-              " "
-              defaultErrorToHtml e
+                 -> Job
+                 -> Html ()
+defaultJobToHtml jobType j =
+  div_ [ class_ "job" ] $ do
+    div_ [ class_ "job-type" ] $ do
+      toHtml $ jobType j
+    div_ [ class_ "job-payload" ] $ do
+      defaultPayloadToHtml $ defaultJobContent $ jobPayload j
+    case jobLastError j of
+      Nothing -> mempty
+      Just e -> do
+        div_ [ class_ "job-error collapsed" ] $ do
+          a_ [ href_ "javascript: void(0);", onclick_ "toggleError(this)" ] $ do
+            span_ [ class_ "badge badge-secondary error-expand" ] "+ Last error"
+            span_ [ class_ "badge badge-secondary error-collapse d-none" ] "- Last error"
+          " "
+          defaultErrorToHtml e
 
 
 defaultErrorToHtml :: Value -> Html ()

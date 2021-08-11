@@ -74,8 +74,8 @@ data Env = Env
   , envJobRunnersRef :: IORef [JobRunnerName]
   }
 
-mkEnv :: (MonadIO m) => Config -> (Text -> Text) -> m Env
-mkEnv cfg@Config{..} linksFn = do
+mkEnv :: (MonadIO m) => UIConfig -> (Text -> Text) -> m Env
+mkEnv cfg@UIConfig{..} linksFn = do
   allJobTypes <- fetchAllJobTypes cfg
   allJobRunners <- fetchAllJobRunners cfg
   envJobTypesRef <- newIORef allJobTypes
@@ -101,7 +101,7 @@ stopApp = pure ()
 
 
 server :: forall m . (MonadIO m)
-       => Config
+       => UIConfig
        -> Env
        -> (forall a . Handler a -> m a)
        -> ServerT FinalAPI m
@@ -118,7 +118,7 @@ server cfg env nt =
       , rRefreshJobRunners = nt $ refreshJobRunners cfg env
       }
 
-server2 :: Config
+server2 :: UIConfig
         -> Env
         -> Routes AsServer
 server2 cfg env = Routes
@@ -131,15 +131,15 @@ server2 cfg env = Routes
   }
 
 
-refreshJobRunners :: Config
+refreshJobRunners :: UIConfig
                   -> Env
                   -> Handler NoContent
-refreshJobRunners cfg@Config{..} Env{envRoutes=Web.Routes{..}, envJobRunnersRef} = do
+refreshJobRunners cfg@UIConfig{..} Env{envRoutes=Web.Routes{..}, envJobRunnersRef} = do
   allJobRunners <- fetchAllJobRunners cfg
   atomicModifyIORef' envJobRunnersRef (\_ -> (allJobRunners, ()))
   throwError $ err302{errHeaders=[("Location", toS $ rFilterResults Nothing)]}
 
-refreshJobTypes :: Config
+refreshJobTypes :: UIConfig
                 -> Env
                 -> Handler NoContent
 refreshJobTypes cfg Env{envRoutes=Web.Routes{..}, envJobTypesRef} = do
@@ -147,30 +147,30 @@ refreshJobTypes cfg Env{envRoutes=Web.Routes{..}, envJobTypesRef} = do
   atomicModifyIORef' envJobTypesRef (\_ -> (allJobTypes, ()))
   throwError $ err302{errHeaders=[("Location", toS $ rFilterResults Nothing)]}
 
-cancelJob :: Config
+cancelJob :: UIConfig
           -> Env
           -> JobId
           -> Handler NoContent
-cancelJob Config{..} env jid = do
-  liftIO $ withResource cfgDbPool $ \conn -> void $ cancelJobIO conn cfgTableName jid
+cancelJob UIConfig{..} env jid = do
+  liftIO $ withResource uicfgDbPool $ \conn -> void $ cancelJobIO conn uicfgTableName jid
   redirectToHome env
 
-runJobNow :: Config
+runJobNow :: UIConfig
           -> Env
           -> JobId
           -> Handler NoContent
-runJobNow Config{..} env jid = do
-  liftIO $ withResource cfgDbPool $ \conn -> void $ runJobNowIO conn cfgTableName jid
+runJobNow UIConfig{..} env jid = do
+  liftIO $ withResource uicfgDbPool $ \conn -> void $ runJobNowIO conn uicfgTableName jid
   redirectToHome env
 
-enqueueJob :: Config
+enqueueJob :: UIConfig
            -> Env
            -> JobId
            -> Handler NoContent
-enqueueJob Config{..} env jid = do
-  liftIO $ withResource cfgDbPool $ \conn -> do
-    void $ unlockJobIO conn cfgTableName jid
-    void $ runJobNowIO conn cfgTableName jid
+enqueueJob UIConfig{..} env jid = do
+  liftIO $ withResource uicfgDbPool $ \conn -> do
+    void $ unlockJobIO conn uicfgTableName jid
+    void $ runJobNowIO conn uicfgTableName jid
   redirectToHome env
 
 redirectToHome :: Env -> Handler NoContent
@@ -178,17 +178,17 @@ redirectToHome Env{envRoutes=Web.Routes{..}} = do
   throwError $ err301{errHeaders=[("Location", toS $ rFilterResults Nothing)]}
 
 
-filterResults :: Config
+filterResults :: UIConfig
               -> Env
               -> Maybe Filter
               -> Handler (Html ())
-filterResults cfg@Config{cfgJobToHtml, cfgDbPool} Env{..}  mFilter = do
+filterResults cfg@UIConfig{uicfgJobToHtml, uicfgDbPool} Env{..}  mFilter = do
   let filters = fromMaybe mempty mFilter
-  (jobs, runningCount) <- liftIO $ Pool.withResource cfgDbPool $ \conn -> (,)
+  (jobs, runningCount) <- liftIO $ Pool.withResource uicfgDbPool $ \conn -> (,)
     <$> (filterJobs cfg conn filters)
     <*> (countJobs cfg conn filters{ filterStatuses = [Job.Locked] })
   t <- liftIO getCurrentTime
-  js <- liftIO $ fmap (DL.zip jobs) $ cfgJobToHtml jobs
+  js <- liftIO $ fmap (DL.zip jobs) $ uicfgJobToHtml jobs
   allJobTypes <- readIORef envJobTypesRef
   let navHtml = Web.sideNav envRoutes allJobTypes [] t filters
       bodyHtml = Web.resultsPanel envRoutes t filters js runningCount
