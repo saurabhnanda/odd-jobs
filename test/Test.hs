@@ -80,6 +80,7 @@ tests appPool jobPool = testGroup "All tests"
                              , testEnsureShutdown appPool jobPool
                              , testGracefulShutdown appPool jobPool
                              , testJobErrHandler appPool jobPool
+                             , testPushFailedJobEndQueue jobPool
                              ]
   -- , testGroup "property tests" [ testEverything appPool jobPool
   --                              -- , propFilterJobs appPool jobPool
@@ -323,6 +324,19 @@ testJobFailure appPool jobPool = testCase "job failure" $ do
       Job{jobAttempts, jobStatus} <- ensureJobId conn tname jobId
       assertEqual "Exepcting job to be in Failed status" Job.Failed jobStatus
       assertEqual ("Expecting job attempts to be 3. Found " <> show jobAttempts)  3 jobAttempts
+
+
+testPushFailedJobEndQueue ::  Pool Connection -> TestTree
+testPushFailedJobEndQueue jobPool = testCase "testPushFailedJobEndQueue" $ do
+  withRandomTable jobPool $ \tname -> do
+    Pool.withResource jobPool $ \conn -> do
+      job1 <- Job.createJob conn tname (PayloadAlwaysFail 0)
+      job2 <- Job.createJob conn tname (PayloadAlwaysFail 0)
+      Job.saveJobIO conn tname (job1 {jobAttempts = 1})
+      [Only resId] <- Job.jobPollingIO conn "testPushFailedJobEndQueue" tname 5
+      assertEqual
+        "Expecting the current job to be 2 since job 1 has been modified"
+        (jobId job2) resId
 
 testJobErrHandler appPool jobPool = testCase "job error handler" $ do
   withRandomTable jobPool $ \tname -> do

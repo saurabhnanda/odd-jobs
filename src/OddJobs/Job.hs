@@ -59,6 +59,7 @@ module OddJobs.Job
   , unlockJobIO
   , cancelJobIO
   , jobDbColumns
+  , jobPollingIO
   , concatJobDbColumns
   , fetchAllJobTypes
   , fetchAllJobRunners
@@ -478,6 +479,21 @@ getConcurrencyControlFn = getConcurrencyControl >>= \case
     pure $ (DL.length curJobs) < maxJobs
   DynamicConcurrency fn -> pure $ liftIO fn
 
+
+jobPollingIO :: Connection -> String -> TableName -> Seconds -> IO [Only JobId]
+jobPollingIO pollerDbConn processName tname lockTimeout = do
+  t <- getCurrentTime
+  PGS.query pollerDbConn jobPollingSql
+             ( tname
+             , Locked
+             , t
+             , processName
+             , tname
+             , t
+             , (In [Queued, Retry])
+             , Locked
+             , (addUTCTime (fromIntegral $ negate $ unSeconds lockTimeout) t))
+
 -- | Executes 'jobPollingSql' every 'cfgPollingInterval' seconds to pick up jobs
 -- for execution. Uses @UPDATE@ along with @SELECT...FOR UPDATE@ to efficiently
 -- find a job that matches /all/ of the following conditions:
@@ -492,7 +508,6 @@ getConcurrencyControlFn = getConcurrencyControl >>= \case
 --         job was picked up execution, but didn't complete on time (possible
 --         because the thread/process executing it crashed without being able to
 --         update the DB)
-
 jobPoller :: (HasJobRunner m) => m ()
 jobPoller = do
   processName <- liftIO jobWorkerName
@@ -510,18 +525,7 @@ jobPoller = do
     True -> do
       nextAction <- mask_ $ do
         log LevelDebug $ LogText $ toS $ "[" <> processName <> "] Polling the job queue.."
-        t <- liftIO getCurrentTime
-        r <- liftIO $
-             PGS.query pollerDbConn jobPollingSql
-             ( tname
-             , Locked
-             , t
-             , processName
-             , tname
-             , t
-             , (In [Queued, Retry])
-             , Locked
-             , (addUTCTime (fromIntegral $ negate $ unSeconds lockTimeout) t))
+        r <- liftIO $ jobPollingIO pollerDbConn processName tname lockTimeout
         case r of
           -- When we don't have any jobs to run, we can relax a bit...
           [] -> pure delayAction
