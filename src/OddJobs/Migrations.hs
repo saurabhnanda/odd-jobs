@@ -90,7 +90,7 @@ createUsageTableQuery = "CREATE TABLE IF NOT EXISTS ?" <>
 
 createUsageFunction :: Query
 createUsageFunction = "CREATE OR REPLACE FUNCTION ?(resourceId text) RETURNS int as $$" <>
-  " SELECT sum(usage) FROM ? AS j INNER JOIN ? AS jr ON j.id = jr.job_id " <>
+  " SELECT coalesce(sum(usage), 0) FROM ? AS j INNER JOIN ? AS jr ON j.id = jr.job_id " <>
   " WHERE jr.resource_id = $1 AND j.status = ? " <>
   " $$ LANGUAGE SQL;"
 
