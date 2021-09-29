@@ -337,6 +337,14 @@ data Config = Config
 
     -- | Should successful jobs be deleted from the queue to save on table space?
   , cfgDeleteSuccessfulJobs :: Bool
+
+    -- | How far into the future should jobs which can be retried be queued for?
+    --
+    -- The 'Int' argument is the number of times the job has been attepted. It will
+    -- always be at least 1, since the job will have to have started at least once
+    -- in order to fail and be retried. The default implementation is an exponential
+    -- backoff of @'Seconds' $ 2 ^ 'jobAttempts'@.
+  , cfgDefaultRetryBackoff :: Int -> IO Seconds
   }
 
 

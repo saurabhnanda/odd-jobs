@@ -69,6 +69,7 @@ mkConfig logger tname dbpool ccControl jrunner configOverridesFn =
             , cfgJobType = defaultJobType
             , cfgDefaultJobTimeout = Seconds 600
             , cfgDeleteSuccessfulJobs = True
+            , cfgDefaultRetryBackoff = \attempts -> pure $ Seconds $ 2 ^ attempts
             }
   in cfg
 
