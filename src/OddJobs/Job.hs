@@ -395,7 +395,7 @@ runJob jid = do
         let newJob = job{jobStatus=Success, jobLockedBy=Nothing, jobLockedAt=Nothing, jobUpdatedAt = endTime}
         if shouldDeleteJob
           then deleteJob jid
-          else void $ saveJob job
+          else void $ saveJob newJob
         log LevelInfo $ LogJobSuccess newJob (diffUTCTime endTime startTime)
         onJobSuccess newJob
         pure ()
