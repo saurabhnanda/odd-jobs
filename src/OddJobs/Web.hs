@@ -1,4 +1,5 @@
 {-# LANGUAGE DeriveGeneric, NamedFieldPuns, TypeOperators, DataKinds, RecordWildCards, DeriveAnyClass #-}
+{-# LANGUAGE CPP #-}
 module OddJobs.Web where
 
 import OddJobs.Types
@@ -24,13 +25,18 @@ import Lucid
 import Lucid.Html5
 import Lucid.Base
 import Data.String.Conv
-import qualified Data.HashMap.Strict as HM
 import Data.List as DL hiding (filter, and)
 import Control.Monad
 import Data.Time.Format.Human (humanReadableTime')
 import Data.Time.Convenience (timeSince, Unit(..), Direction(..))
 import Data.Text.Conversions (fromText, toText)
 import Prelude hiding (filter, and)
+
+# if MIN_VERSION_aeson(2, 0, 0)
+import qualified Data.Aeson.KeyMap as HM
+# else
+import qualified Data.HashMap.Strict as HM
+# endif
 
 data OrderDirection = Asc | Desc deriving (Eq, Show, Generic, Enum)
 
