@@ -168,7 +168,7 @@ logCallbackErrors jid msg action = catchAny action $ \e -> log LevelError $ LogT
 
 instance HasJobRunner RunnerM where
   getPollingInterval = cfgPollingInterval . envConfig <$> ask
-  onJobFailed = cfgOnJobFailed . envConfig  <$> ask
+  onJobFailed = do { env <- ask; cfgOnJobFailed (envConfig env) }
   onJobSuccess job = do
     fn <- cfgOnJobSuccess . envConfig <$> ask
     logCallbackErrors (jobId job) "onJobSuccess" $ liftIO $ fn job
