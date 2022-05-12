@@ -334,6 +334,9 @@ data Config = Config
     -- | How long can a job run after which it is considered to be "crashed" and
     -- picked up for execution again
   , cfgDefaultJobTimeout :: Seconds
+
+    -- | Should successful jobs be deleted from the queue to save on table space?
+  , cfgDeleteSuccessfulJobs :: Bool
   }
 
 

@@ -131,6 +131,7 @@ import Database.PostgreSQL.Simple.ToField as PGS (toField)
 class (MonadUnliftIO m, MonadBaseControl IO m) => HasJobRunner m where
   getPollingInterval :: m Seconds
   onJobSuccess :: Job -> m ()
+  deleteSuccessfulJobs :: m Bool
   onJobFailed :: m [JobErrHandler]
   getJobRunner :: m (Job -> IO ())
   getDbPool :: m (Pool Connection)
@@ -169,9 +170,12 @@ logCallbackErrors jid msg action = catchAny action $ \e -> log LevelError $ LogT
 instance HasJobRunner RunnerM where
   getPollingInterval = cfgPollingInterval . envConfig <$> ask
   onJobFailed = cfgOnJobFailed . envConfig  <$> ask
+
   onJobSuccess job = do
     fn <- cfgOnJobSuccess . envConfig <$> ask
     logCallbackErrors (jobId job) "onJobSuccess" $ liftIO $ fn job
+  deleteSuccessfulJobs = cfgDeleteSuccessfulJobs . envConfig <$> ask
+
   getJobRunner = cfgJobRunner . envConfig <$> ask
   getDbPool = cfgDbPool . envConfig <$> ask
   getTableName = cfgTableName . envConfig <$> ask
@@ -387,8 +391,11 @@ runJob jid = do
       (flip catches) [Handler $ timeoutHandler job startTime, Handler $ exceptionHandler job startTime] $ do
         runJobWithTimeout lockTimeout job
         endTime <- liftIO getCurrentTime
-        deleteJob jid
-        let newJob = job{jobStatus=Success, jobLockedBy=Nothing, jobLockedAt=Nothing}
+        shouldDeleteJob <- deleteSuccessfulJobs
+        let newJob = job{jobStatus=Success, jobLockedBy=Nothing, jobLockedAt=Nothing, jobUpdatedAt = endTime}
+        if shouldDeleteJob
+          then deleteJob jid
+          else void $ saveJob newJob
         log LevelInfo $ LogJobSuccess newJob (diffUTCTime endTime startTime)
         onJobSuccess newJob
         pure ()
