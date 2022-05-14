@@ -78,6 +78,7 @@ mkConfig logger tname dbpool ccControl jrunner configOverridesFn =
             , cfgConcurrencyControl = ccControl
             , cfgJobType = defaultJobType
             , cfgDefaultJobTimeout = Seconds 600
+            , cfgDeleteSuccessfulJobs = True
             }
   in cfg
 
