@@ -142,7 +142,7 @@ class (MonadUnliftIO m, MonadBaseControl IO m) => HasJobRunner m where
   getConcurrencyControl :: m ConcurrencyControl
   log :: LogLevel -> LogEvent -> m ()
   getDefaultJobTimeout :: m Seconds
-
+  getDefaultRetryBackoff :: Int -> m Seconds
 
 -- $logging
 --
@@ -194,6 +194,10 @@ instance HasJobRunner RunnerM where
     liftIO $ loggerFn logLevel logEvent
 
   getDefaultJobTimeout = cfgDefaultJobTimeout . envConfig <$> ask
+
+  getDefaultRetryBackoff attempts = do
+    retryFn <- cfgDefaultRetryBackoff . envConfig <$> ask
+    liftIO $ retryFn attempts
 
 -- | Start the job-runner in the /current/ thread, i.e. you'll need to use
 -- 'forkIO' or 'async' manually, if you want the job-runner to run in the
@@ -410,11 +414,12 @@ runJob jid = do
                                                then ( Failed, FailPermanent, LevelError )
                                                else ( Retry, FailWithRetry, LevelWarn )
       t <- liftIO getCurrentTime
+      backoffInSeconds <- getDefaultRetryBackoff jobAttempts
       newJob <- saveJob job{ jobStatus=newStatus
                            , jobLockedBy=Nothing
                            , jobLockedAt=Nothing
                            , jobLastError=(Just $ toJSON $ show e) -- TODO: convert errors to json properly
-                           , jobRunAt=(addUTCTime (fromIntegral $ (2::Int) ^ jobAttempts) t)
+                           , jobRunAt=(addUTCTime (fromIntegral $ unSeconds backoffInSeconds) t)
                            }
       case fromException e :: Maybe TimeoutException of
         Nothing -> log logLevel $ LogJobFailed newJob e failureMode runTime

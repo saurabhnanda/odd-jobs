@@ -81,6 +81,7 @@ tests appPool jobPool = testGroup "All tests"
                              , testGracefulShutdown appPool jobPool
                              , testJobErrHandler appPool jobPool
                              , testPushFailedJobEndQueue jobPool
+                             , testRetryBackoff appPool jobPool
                              ]
   -- , testGroup "property tests" [ testEverything appPool jobPool
   --                              -- , propFilterJobs appPool jobPool
@@ -355,6 +356,35 @@ testJobErrHandler appPool jobPool = testCase "job error handler" $ do
         delaySeconds (Job.defaultPollingInterval * 3)
       readMVar mvar1 >>= assertEqual "Error Handler 1 doesn't seem to have run" True
       readMVar mvar2 >>= assertEqual "Error Handler 2 doesn't seem to have run" True
+
+testRetryBackoff appPool jobPool = testCase "retry backoff" $ do
+  withRandomTable jobPool $ \tname -> do
+    withNamedJobMonitor tname jobPool modifyRetryBackoff $ \logRef -> do
+      Pool.withResource appPool $ \conn -> do
+        jobQueueTime <- getCurrentTime
+        Job{jobId} <- Job.createJob conn tname (PayloadAlwaysFail 0)
+        delaySeconds (2 * Job.defaultPollingInterval)
+
+        let assertBackedOff = do
+              job@Job{jobAttempts, jobStatus, jobRunAt} <- ensureJobId conn tname jobId
+              assertEqual "Exepcting job to be in Retry status" Job.Retry jobStatus
+              assertBool "Expecting job runAt to be in the future"
+                (jobRunAt >= addUTCTime (fromIntegral $ unSeconds $ backoff jobAttempts) jobQueueTime)
+
+        assertBackedOff
+
+        -- Run it for another attempt and check the backoff scales
+        job <- ensureJobId conn tname jobId
+        Job.saveJobIO conn tname (job {jobRunAt = jobQueueTime})
+        delaySeconds (2 * Job.defaultPollingInterval)
+
+        assertBackedOff
+  where
+
+    backoff attempts = Seconds $ 300 * attempts
+
+    modifyRetryBackoff cfg
+      = cfg { Job.cfgDefaultRetryBackoff = pure . backoff }
 
 data JobEvent = JobStart
               | JobRetry
