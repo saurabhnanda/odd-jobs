@@ -1,5 +1,6 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE CPP #-}
 
 module OddJobs.ConfigBuilder where
 
@@ -13,7 +14,6 @@ import Data.Maybe (fromMaybe)
 import Data.List as DL
 import Data.Aeson as Aeson hiding (Success)
 import qualified Data.Text as T
-import qualified Data.HashMap.Lazy as HM
 import GHC.Generics
 import Data.Proxy (Proxy(..))
 import Generics.Deriving.ConNames
@@ -24,6 +24,16 @@ import qualified Data.ByteString as BS
 import UnliftIO (MonadUnliftIO, withRunInIO, bracket, liftIO)
 import qualified System.Log.FastLogger as FLogger
 
+# if MIN_VERSION_aeson(2, 0, 0)
+import qualified Data.Aeson.KeyMap as HM
+import qualified Data.Aeson.Key as Key
+keyToText :: Key.Key -> T.Text
+keyToText = Key.toText
+# else
+import qualified Data.HashMap.Lazy as HM
+keyToText :: T.Text -> T.Text
+keyToText = id
+# endif
 
 -- | This function gives you a 'Config' with a bunch of sensible defaults
 -- already applied. It requires the bare minimum configuration parameters that
@@ -195,7 +205,7 @@ defaultPayloadToHtml v = case v of
     toHtml ("{ " :: Text)
     forM_ (HM.toList o) $ \(k, v2) -> do
       span_ [ class_ " key-value-pair " ] $ do
-        span_ [ class_ "key" ] $ toHtml $ k <> ":"
+        span_ [ class_ "key" ] $ toHtml $ keyToText k <> ":"
         span_ [ class_ "value" ] $ defaultPayloadToHtml v2
     toHtml (" }" :: Text)
   Aeson.Array a -> do
