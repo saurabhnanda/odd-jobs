@@ -75,7 +75,8 @@ module OddJobs.Job
 where
 
 import OddJobs.Types
-import Data.Pool
+import qualified Data.Pool as Pool
+import Data.Pool(Pool)
 import Data.Text as T
 import Database.PostgreSQL.Simple as PGS
 import Database.PostgreSQL.Simple.Notification
@@ -254,6 +255,10 @@ concatJobDbColumns = concatJobDbColumns_ jobDbColumns ""
 
 findJobByIdQuery :: PGS.Query
 findJobByIdQuery = "SELECT " <> concatJobDbColumns <> " FROM ? WHERE id = ?"
+
+withResource :: MonadUnliftIO m => Pool a -> (a -> m b) -> m b
+withResource pool fa =
+  withRunInIO $ \runInIO -> Pool.withResource pool (runInIO . fa)
 
 withDbConnection :: (HasJobRunner m)
                  => (Connection -> m a)

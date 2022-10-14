@@ -81,7 +81,7 @@ library
     , mtl
     , optparse-applicative
     , postgresql-simple
-    , resource-pool
+    , resource-pool >= 0.2.0.0 && < 0.4.0.0
     , safe
     , servant
     , servant-lucid
