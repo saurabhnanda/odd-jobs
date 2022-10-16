@@ -1,4 +1,5 @@
 {-# LANGUAGE FlexibleInstances, NamedFieldPuns, DeriveGeneric, FlexibleContexts, TypeFamilies, StandaloneDeriving, RankNTypes #-}
+{-# LANGUAGE CPP #-}
 {-# OPTIONS_GHC -Wno-missing-signatures #-}
 module Test where
 
@@ -60,18 +61,31 @@ main = do
                  , connectDatabase = "jobs_test"
                  }
 
-    createAppPool = createPool
-      (PGS.connect connInfo)  -- cretea a new resource
+#if MIN_VERSION_resource_pool(0,3,0)
+    createAppPool = Pool.newPool $ Pool.PoolConfig
+      (PGS.connect connInfo)  -- create a new resource
+      (PGS.close)             -- destroy resource
+      (fromRational 10)       -- number of seconds unused resources are kept around
+      45
+    createJobPool = Pool.newPool $ Pool.PoolConfig
+      (PGS.connect connInfo)  -- create a new resource
+      (PGS.close)             -- destroy resource
+      (fromRational 10)       -- number of seconds unused resources are kept around
+      45
+#else
+    createAppPool = Pool.createPool
+      (PGS.connect connInfo)  -- create a new resource
       (PGS.close)             -- destroy resource
       1                       -- stripes
       (fromRational 10)       -- number of seconds unused resources are kept around
       45
-    createJobPool = createPool
-      (PGS.connect connInfo)  -- cretea a new resource
+    createJobPool = Pool.createPool
+      (PGS.connect connInfo)  -- create a new resource
       (PGS.close)             -- destroy resource
       1                       -- stripes
       (fromRational 10)       -- number of seconds unused resources are kept around
       45
+#endif
 
 tests appPool jobPool = testGroup "All tests"
   [

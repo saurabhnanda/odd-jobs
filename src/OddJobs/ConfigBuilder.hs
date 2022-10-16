@@ -288,10 +288,17 @@ withConnectionPool connConfig action = withRunInIO $ \runInIO -> do
   where
     poolCreator = liftIO $
       case connConfig of
+#if MIN_VERSION_resource_pool(0,3,0)
+        Left connString ->
+          newPool $ PoolConfig (PGS.connectPostgreSQL connString) PGS.close (fromIntegral $ 2 * (unSeconds defaultPollingInterval)) 8
+        Right connInfo ->
+          newPool $ PoolConfig (PGS.connect connInfo) PGS.close (fromIntegral $ 2 * (unSeconds defaultPollingInterval)) 8
+#else
         Left connString ->
           createPool (PGS.connectPostgreSQL connString) PGS.close 1 (fromIntegral $ 2 * (unSeconds defaultPollingInterval)) 8
         Right connInfo ->
           createPool (PGS.connect connInfo) PGS.close 1 (fromIntegral $ 2 * (unSeconds defaultPollingInterval)) 8
+#endif
 
 -- | A convenience function to help you define a timed-logger with some sensible
 -- defaults.
