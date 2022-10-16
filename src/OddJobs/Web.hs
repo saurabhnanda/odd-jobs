@@ -181,7 +181,7 @@ filterJobsQuery UIConfig{uicfgTableName, uicfgJobTypeSql} Filter{..} =
         let qFragment = "(" <> uicfgJobTypeSql <> ")=?"
             build ys (q, vs) = case ys of
               [] -> (q, vs)
-              (y:[]) -> (qFragment <> q, (toField y):vs)
+              [y] -> (qFragment <> q, (toField y):vs)
               (y:ys_) -> build ys_ (" OR " <> qFragment <> q, (toField y):vs)
         in Just $ build xs (mempty, [])
 

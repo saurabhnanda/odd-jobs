@@ -247,7 +247,7 @@ concatJobDbColumns :: (IsString s, Semigroup s) => s
 concatJobDbColumns = concatJobDbColumns_ jobDbColumns ""
   where
     concatJobDbColumns_ [] x = x
-    concatJobDbColumns_ (col:[]) x = x <> col
+    concatJobDbColumns_ [col] x = x <> col
     concatJobDbColumns_ (col:cols) x = concatJobDbColumns_ cols (x <> col <> ", ")
 
 
