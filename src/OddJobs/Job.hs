@@ -533,7 +533,7 @@ jobPoller = do
   concurrencyControlFn <- getConcurrencyControlFn
   withResource pool $ \pollerDbConn -> forever $ concurrencyControlFn >>= \case
     False -> do
-      log LevelWarn $ LogText $ "NOT polling the job queue due to concurrency control"
+      log LevelWarn $ LogText "NOT polling the job queue due to concurrency control"
       -- If we can't run any jobs ATM, relax and wait for resources to free up
       delayAction
     True -> do

@@ -166,7 +166,7 @@ filterJobsQuery UIConfig{uicfgTableName, uicfgJobTypeSql} Filter{..} =
 
     statusClause = if Prelude.null filterStatuses
                    then Nothing
-                   else Just ("status IN ?", toRow $ (Only (In filterStatuses)))
+                   else Just ("status IN ?", toRow (Only (In filterStatuses)))
 
     createdAfterClause = Prelude.fmap (\x -> ("created_at >= ?", toRow $ Only x)) filterCreatedAfter
     createdBeforeClause = Prelude.fmap (\x -> ("created_at < ?", toRow $ Only x)) filterCreatedBefore
@@ -226,10 +226,10 @@ pageNav Routes{..} = do
     div_ [ class_ "navbar-header" ] $ do
       a_ [ class_ "navbar-brand navbar-link", href_ "#", style_ "margin-left: 2px; padding: 0px;" ] $ img_ [ src_ $ rStaticAsset "assets/odd-jobs-color-logo.png", title_ "Odd Jobs Logo" ]
       button_ [ class_ "navbar-toggle collapsed", data_ "toggle" "collapse", data_ "target" "#navcol-1" ] $ do
-        span_ [ class_ "sr-only" ] $ "Toggle navigation"
-        span_ [ class_ "icon-bar" ] $ ""
-        span_ [ class_ "icon-bar" ] $ ""
-        span_ [ class_ "icon-bar" ] $ ""
+        span_ [ class_ "sr-only" ] "Toggle navigation"
+        span_ [ class_ "icon-bar" ] ""
+        span_ [ class_ "icon-bar" ] ""
+        span_ [ class_ "icon-bar" ] ""
     -- div_ [ class_ "collapse navbar-collapse", id_ "navcol-1" ] $ ul_ [ class_ "nav navbar-nav navbar-right" ] $ do
     --   li_ [ class_ "active", role_ "presentation" ] $ a_ [ href_ "#" ] $ "First Item"
     --   li_ [ role_ "presentation" ] $ a_ [ href_ "#" ] $ "Second Item"
@@ -259,9 +259,9 @@ pageLayout routes@Routes{..} navHtml bodyHtml = do
       div_ $ div_ [ class_ "container-fluid", style_ "/*background-color:#f2f2f2;*/" ] $ div_ [ class_ "row" ] $ do
         div_ [ class_ "d-none d-md-block col-md-2" ] navHtml
         div_ [ class_ "col-12 col-md-10" ] bodyHtml
-      script_ [ src_ $ rStaticAsset "assets/js/jquery.min.js" ] $ ("" :: Text)
-      script_ [ src_ $ rStaticAsset "assets/bootstrap/js/bootstrap.min.js" ] $ ("" :: Text)
-      script_ [ src_ $ rStaticAsset "assets/js/custom.js" ] $ ("" :: Text)
+      script_ [ src_ $ rStaticAsset "assets/js/jquery.min.js" ] ("" :: Text)
+      script_ [ src_ $ rStaticAsset "assets/bootstrap/js/bootstrap.min.js" ] ("" :: Text)
+      script_ [ src_ $ rStaticAsset "assets/js/custom.js" ] ("" :: Text)
 
 sideNav :: Routes -> [Text] -> [JobRunnerName] -> UTCTime -> Filter -> Html ()
 sideNav Routes{..} jobTypes jobRunnerNames _t filter@Filter{..} = do
@@ -332,7 +332,7 @@ searchBar Routes{..} _t filter@Filter{filterStatuses, filterCreatedAfter, filter
           maybe mempty (\x -> renderFilter "Run after" (showText x) (rFilterResults $ Just filter{filterRunAfter = Nothing})) filterRunAfter
           forM_ filterJobTypes $ \x -> renderFilter "Job type" x (rFilterResults $ Just filter{filterJobTypes = filterJobTypes \\ [x]})
 
-        button_ [ class_ "btn btn-default search-button", type_ "button" ] $ "Search"
+        button_ [ class_ "btn btn-default search-button", type_ "button" ] "Search"
       -- ul_ [ class_ "list-inline" ] $ do
       --   li_ $ span_ $ strong_ "Common searches:"
       --   li_ $ a_ [ href_ (rFilterResults $ Just mempty) ] $ "All jobs"
@@ -351,7 +351,7 @@ searchBar Routes{..} _t filter@Filter{filterStatuses, filterCreatedAfter, filter
         span_ [ class_ "filter-name" ] $ toHtml k
         span_ [ class_ "filter-value" ] $ do
           toHtml v
-          a_ [ href_ u, class_ "text-danger" ] $ i_ [ class_ "glyphicon glyphicon-remove" ] $ ""
+          a_ [ href_ u, class_ "text-danger" ] $ i_ [ class_ "glyphicon glyphicon-remove" ] ""
 
 
 timeDuration :: UTCTime -> UTCTime -> (Int, String)
@@ -405,26 +405,26 @@ jobRow routes t (job@Job{..}, jobHtml) = do
 actionsFailed :: Routes -> Job -> Html ()
 actionsFailed Routes{..} Job{..} = do
   form_ [ action_ (rEnqueue jobId), method_ "post" ] $ do
-    button_ [ class_ "btn btn-secondary", type_ "submit" ] $ "Enqueue again"
+    button_ [ class_ "btn btn-secondary", type_ "submit" ] "Enqueue again"
 
 actionsRetry :: Routes -> Job -> Html ()
 actionsRetry Routes{..} Job{..} = do
   form_ [ action_ (rRunNow jobId), method_ "post" ] $ do
-    button_ [ class_ "btn btn-secondary", type_ "submit" ] $ "Run now"
+    button_ [ class_ "btn btn-secondary", type_ "submit" ] "Run now"
 
 actionsFuture :: Routes -> Job -> Html ()
 actionsFuture Routes{..} Job{..} = do
   form_ [ action_ (rRunNow jobId), method_ "post" ] $ do
-    button_ [ class_ "btn btn-secondary", type_ "submit" ] $ "Run now"
+    button_ [ class_ "btn btn-secondary", type_ "submit" ] "Run now"
 
 actionsWaiting :: Routes -> Job -> Html ()
 actionsWaiting Routes{..} Job{..} = do
   form_ [ action_ (rCancel jobId), method_ "post" ] $ do
-    button_ [ class_ "btn btn-danger", type_ "submit" ] $ "Cancel"
+    button_ [ class_ "btn btn-danger", type_ "submit" ] "Cancel"
 
 statusSuccess :: UTCTime -> Job -> Html ()
 statusSuccess t Job{..} = do
-  span_ [ class_ "badge badge-success" ] $ "Success"
+  span_ [ class_ "badge badge-success" ] "Success"
   span_ [ class_ "job-run-time" ] $ do
     let (d, s) = timeDuration jobCreatedAt jobUpdatedAt
     abbr_ [ title_ (showText jobUpdatedAt) ] $ toHtml $ "Completed " <> humanReadableTime' t jobUpdatedAt <> ". "
@@ -432,19 +432,19 @@ statusSuccess t Job{..} = do
 
 statusFailed :: UTCTime -> Job -> Html ()
 statusFailed t Job{..} = do
-  span_ [ class_ "badge badge-danger" ] $ "Failed"
+  span_ [ class_ "badge badge-danger" ] "Failed"
   span_ [ class_ "job-run-time" ] $ do
     abbr_ [ title_ (showText jobUpdatedAt) ] $ toHtml $ "Failed " <> humanReadableTime' t jobUpdatedAt <> " after " <> show jobAttempts <> " attempts"
 
 statusFuture :: UTCTime -> Job -> Html ()
 statusFuture t Job{..} = do
-  span_ [ class_ "badge badge-secondary" ] $ "Future"
+  span_ [ class_ "badge badge-secondary" ] "Future"
   span_ [ class_ "job-run-time" ] $ do
     abbr_ [ title_ (showText jobRunAt) ] $ toHtml $ humanReadableTime' t jobRunAt
 
 statusWaiting :: UTCTime -> Job -> Html ()
 statusWaiting _t Job{} = do
-      span_ [ class_ "badge badge-warning" ] $ "Waiting"
+      span_ [ class_ "badge badge-warning" ] "Waiting"
       -- span_ [ class_ "job-run-time" ] ("Waiting to be picked up" :: Text)
 
 statusRetry :: UTCTime -> Job -> Html ()
@@ -487,7 +487,7 @@ resultsPanel routes@Routes{..} t filter@Filter{filterPage} js runningCount = do
             Just (_l, 0) -> ("disabled", "")
             Just (l, o) -> ("", rFilterResults $ Just $ filter {filterPage = Just (l, max 0 $ o - l)})
       li_ [ class_ ("page-item previous " <> extraClass) ] $ do
-        a_ [ class_ "page-link", href_ lnk ] $ "Prev"
+        a_ [ class_ "page-link", href_ lnk ] "Prev"
 
     nextLink = do
       let (extraClass, lnk) = case filterPage of
@@ -500,7 +500,7 @@ resultsPanel routes@Routes{..} t filter@Filter{filterPage} js runningCount = do
               then ("disabled", "")
               else ("", (rFilterResults $ Just $ filter {filterPage = Just (l, o + l)}))
       li_ [ class_ ("page-item next " <> extraClass) ] $ do
-        a_ [ class_ "page-link", href_ lnk ] $ "Next"
+        a_ [ class_ "page-link", href_ lnk ] "Next"
 
 ariaExpanded_ :: Text -> Attribute
 ariaExpanded_ v = makeAttribute "aria-expanded" v
