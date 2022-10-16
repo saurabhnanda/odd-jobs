@@ -143,11 +143,11 @@ jobRunner Job{jobPayload, jobAttempts} = case fromJSON jobPayload of
   Aeson.Error e -> error e
   Success (j :: JobPayload) ->
     let recur pload idx = case pload of
-          PayloadAlwaysFail delay -> delaySeconds delay >> (error $ "Forced error after " <> show delay <> " seconds")
+          PayloadAlwaysFail delay -> delaySeconds delay >> error ("Forced error after " <> show delay <> " seconds")
           PayloadSucceed delay -> void $ delaySeconds delay
           PayloadFail delay innerpload -> if idx<jobAttempts
                                           then recur innerpload (idx + 1)
-                                          else delaySeconds delay >> (error $ "Forced error after " <> show delay <> " seconds. step=" <> show idx)
+                                          else delaySeconds delay >> error ("Forced error after " <> show delay <> " seconds. step=" <> show idx)
           PayloadThrowStringException s -> throwString s
           PayloadThrowDivideByZero -> seq (1 `div` 0 :: Integer) (pure ())
     in recur j 0
@@ -237,7 +237,7 @@ ensureJobId conn tname jid = Job.findJobByIdIO conn tname jid >>= \case
 withRandomTable jobPool action = do
   (tname :: Job.TableName) <- liftIO (fromString . ("jobs_" <>) <$> replicateM 10 (R.randomRIO ('a', 'z')))
   finally
-    ((Pool.withResource jobPool $ \conn -> liftIO $ Migrations.createJobTable conn tname) >> action tname)
+    (Pool.withResource jobPool (\conn -> liftIO $ Migrations.createJobTable conn tname) >> action tname)
     (Pool.withResource jobPool $ \conn -> liftIO $ void $ PGS.execute conn "drop table if exists ?" (Only tname))
 
 testMaxAttempts :: Int
@@ -583,7 +583,7 @@ genFilter t = do
   updatedBefore  <- case updatedAfter of
     Nothing -> Gen.maybe (anyTimeGen t)
     Just x -> Gen.maybe (futureTimeGen x)
-  orderClause <- Gen.maybe ((,) <$> (Gen.element $ enumFrom Web.OrdCreatedAt) <*> (Gen.element $ enumFrom Web.Asc))
+  orderClause <- Gen.maybe ((,) <$> Gen.element (enumFrom Web.OrdCreatedAt) <*> Gen.element (enumFrom Web.Asc))
   limitOffset <- Gen.maybe ((,) <$> Gen.int (Range.constant 5 10) <*> Gen.int (Range.constant 0 30))
   runAfter <- Gen.maybe (futureTimeGen t)
   pure Web.blankFilter

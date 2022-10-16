@@ -134,8 +134,8 @@ data Routes = Routes
 
 filterJobsQuery :: UIConfig -> Filter -> (PGS.Query, [Action])
 filterJobsQuery UIConfig{uicfgTableName, uicfgJobTypeSql} Filter{..} =
-  ( "SELECT " <> Job.concatJobDbColumns <> " FROM ?" <> whereClause <> " " <> (orderClause $ fromMaybe (OrdUpdatedAt, Desc) filterOrder) <> " " <> limitOffsetClause
-  , (toRow $ Only uicfgTableName) ++ whereActions
+  ( "SELECT " <> Job.concatJobDbColumns <> " FROM ?" <> whereClause <> " " <> orderClause (fromMaybe (OrdUpdatedAt, Desc) filterOrder) <> " " <> limitOffsetClause
+  , toRow (Only uicfgTableName) ++ whereActions
   )
   where
     orderClause (flt, dir) =

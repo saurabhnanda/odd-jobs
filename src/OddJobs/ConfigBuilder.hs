@@ -126,10 +126,10 @@ defaultLogStr :: (Job -> Text)
               -> LogEvent
               -> LogStr
 defaultLogStr jobTypeFn logLevel logEvent =
-  (toLogStr $ show logLevel) <> " | " <> str
+  toLogStr (show logLevel) <> " | " <> str
   where
     jobToLogStr job@Job{jobId} =
-      "JobId=" <> (toLogStr $ show jobId) <> " JobType=" <> (toLogStr $ jobTypeFn job)
+      "JobId=" <> toLogStr (show jobId) <> " JobType=" <> toLogStr (jobTypeFn job)
 
     str = case logEvent of
       LogJobStart j ->
@@ -138,12 +138,12 @@ defaultLogStr jobTypeFn logLevel logEvent =
         let tag = case fm of
                     FailWithRetry -> "Failed (retry)"
                     FailPermanent -> "Failed (permanent)"
-        in tag <> " | " <> jobToLogStr j <> " | runtime=" <> (toLogStr $ show t) <> " | error=" <> (toLogStr $ show e)
+        in tag <> " | " <> jobToLogStr j <> " | runtime=" <> toLogStr (show t) <> " | error=" <> toLogStr (show e)
       LogJobSuccess j t ->
-        "Success | " <> jobToLogStr j <> " | runtime=" <> (toLogStr $ show t)
+        "Success | " <> jobToLogStr j <> " | runtime=" <> toLogStr (show t)
       LogJobTimeout j@Job{jobLockedAt, jobLockedBy} ->
-        "Timeout | " <> jobToLogStr j <> " | lockedBy=" <> (toLogStr $ maybe  "unknown" unJobRunnerName jobLockedBy) <>
-        " lockedAt=" <> (toLogStr $ maybe "unknown" show jobLockedAt)
+        "Timeout | " <> jobToLogStr j <> " | lockedBy=" <> toLogStr (maybe  "unknown" unJobRunnerName jobLockedBy) <>
+        " lockedAt=" <> toLogStr (maybe "unknown" show jobLockedAt)
       LogPoll ->
         "Polling jobs table"
       LogWebUIRequest ->

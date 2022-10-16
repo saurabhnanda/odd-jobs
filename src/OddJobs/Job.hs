@@ -568,7 +568,7 @@ jobEventListener = do
 
   let tryLockingJob jid = do
         let q = "UPDATE ? SET status=?, locked_at=now(), locked_by=?, attempts=attempts+1 WHERE id=? AND status in ? RETURNING id"
-        (withDbConnection $ \conn -> liftIO $ PGS.query conn q (tname, Locked, jwName, jid, In [Queued, Retry])) >>= \case
+        withDbConnection (\conn -> liftIO $ PGS.query conn q (tname, Locked, jwName, jid, In [Queued, Retry])) >>= \case
           [] -> do
             log LevelDebug $ LogText $ toS $ "Job was locked by someone else before I could start. Skipping it. JobId=" <> show jid
             pure Nothing

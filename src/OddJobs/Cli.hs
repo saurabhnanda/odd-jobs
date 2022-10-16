@@ -143,7 +143,7 @@ defaultWebUI UIStartArgs{..} uicfg@UIConfig{..} = do
   case uistartAuth of
     AuthNone -> do
       let app = UI.server uicfg env Prelude.id
-      uicfgLogger LevelInfo $ LogText $ "Starting admin UI on port " <> (toS $ show uistartPort)
+      uicfgLogger LevelInfo $ LogText $ "Starting admin UI on port " <> toS (show uistartPort)
       Warp.run uistartPort $ Servant.serve (Proxy :: Proxy UI.FinalAPI) app
     (AuthBasic u p) -> do
       let api = Proxy :: Proxy (BasicAuth "OddJobs Admin UI" OddJobsUser :> UI.FinalAPI)
@@ -151,7 +151,7 @@ defaultWebUI UIStartArgs{..} uicfg@UIConfig{..} = do
           -- Now the app will receive an extra argument for OddJobsUser,
           -- which we aren't really interested in.
           app _ = UI.server uicfg env Prelude.id
-      uicfgLogger LevelInfo $ LogText $ "Starting admin UI on port " <> (toS $ show uistartPort)
+      uicfgLogger LevelInfo $ LogText $ "Starting admin UI on port " <> toS (show uistartPort)
       Warp.run uistartPort $ Servant.serveWithContext api ctx app
 
 {-| Used by 'defaultMain' if 'Stop' command is issued via the CLI. Sends a
@@ -167,7 +167,7 @@ defaultStopCommand StopArgs{..} = do
   if shutTimeout == Seconds 0
     then Daemon.brutalKill shutPidFile
     else do putStrLn $ "Sending sigINT to " <> show progName <>
-              " and waiting " <> (show $ unSeconds shutTimeout) <> " seconds for graceful stop"
+              " and waiting " <> show (unSeconds shutTimeout) <> " seconds for graceful stop"
             readFile shutPidFile >>= Sig.signalProcess Sig.sigINT . read
             Async.race (delaySeconds shutTimeout) checkProcessStatus >>= \case
               Right _ -> do
