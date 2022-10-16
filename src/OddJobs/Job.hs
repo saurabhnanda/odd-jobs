@@ -168,7 +168,7 @@ logCallbackErrors jid msg action = catchAny action $ \e -> log LevelError $ LogT
 
 instance HasJobRunner RunnerM where
   getPollingInterval = cfgPollingInterval . envConfig <$> ask
-  onJobFailed = do { env <- ask; pure (cfgOnJobFailed (envConfig env)) }
+  onJobFailed = cfgOnJobFailed . envConfig <$> ask
   onJobSuccess job = do
     fn <- cfgOnJobSuccess . envConfig <$> ask
     logCallbackErrors (jobId job) "onJobSuccess" $ liftIO $ fn job
@@ -338,7 +338,7 @@ runJobNowIO conn tname jid = do
 -- and somehow send an uninterruptibleCancel to that thread.
 unlockJobIO :: Connection -> TableName -> JobId -> IO (Maybe Job)
 unlockJobIO conn tname jid = do
-  fmap listToMaybe $ PGS.query conn q (tname, Retry, jid, In [Locked])
+  listToMaybe <$> PGS.query conn q (tname, Retry, jid, In [Locked])
   where
     q = "update ? set status=?, run_at=now(), locked_at=null, locked_by=null where id=? and status in ? returning " <> concatJobDbColumns
 
@@ -351,7 +351,7 @@ updateJobHelper :: TableName
                 -> (Status, [Status], Maybe UTCTime, JobId)
                 -> IO (Maybe Job)
 updateJobHelper tname conn (newStatus, existingStates, mRunAt, jid) =
-  fmap listToMaybe $ PGS.query conn q (tname, newStatus, runAt, jid, PGS.In existingStates)
+  listToMaybe <$> PGS.query conn q (tname, newStatus, runAt, jid, PGS.In existingStates)
   where
     q = "update ? set attempts=0, status=?, run_at=? where id=? and status in ? returning " <> concatJobDbColumns
     runAt = case mRunAt of
@@ -714,5 +714,5 @@ fetchAllJobRunners :: (MonadIO m)
                    => UIConfig
                    -> m [JobRunnerName]
 fetchAllJobRunners UIConfig{uicfgTableName, uicfgDbPool} = liftIO $ withResource uicfgDbPool $ \conn -> do
-  fmap (mapMaybe fromOnly) $ PGS.query conn "select distinct locked_by from ?" (Only uicfgTableName)
+  mapMaybe fromOnly <$> PGS.query conn "select distinct locked_by from ?" (Only uicfgTableName)
 

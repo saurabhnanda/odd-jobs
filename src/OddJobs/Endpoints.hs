@@ -188,7 +188,7 @@ filterResults cfg@UIConfig{uicfgJobToHtml, uicfgDbPool} Env{..}  mFilter = do
     <$> (filterJobs cfg conn filters)
     <*> (countJobs cfg conn filters{ filterStatuses = [Job.Locked] })
   t <- liftIO getCurrentTime
-  js <- liftIO $ fmap (DL.zip jobs) $ uicfgJobToHtml jobs
+  js <- liftIO (DL.zip jobs <$> uicfgJobToHtml jobs)
   allJobTypes <- readIORef envJobTypesRef
   let navHtml = Web.sideNav envRoutes allJobTypes [] t filters
       bodyHtml = Web.resultsPanel envRoutes t filters js runningCount
