@@ -6,9 +6,8 @@ module OddJobs.Cli where
 
 import Options.Applicative as Opts
 import Data.Text
-import OddJobs.Job (startJobRunner, Config(..))
-import OddJobs.Types (UIConfig(..))
-import OddJobs.Job(LogLevel(..), LogEvent(..))
+import OddJobs.Job (startJobRunner, Config(..), LogLevel(..), LogEvent(..))
+import OddJobs.Types (UIConfig(..), Seconds(..), delaySeconds)
 -- import System.Daemonize (DaemonOptions(..), daemonize)
 import qualified System.Posix.Daemon as Daemon
 import System.FilePath (FilePath)
@@ -16,7 +15,6 @@ import System.Posix.Process (getProcessID)
 import qualified System.Directory as Dir
 import qualified System.Exit as Exit
 import System.Environment (getProgName)
-import OddJobs.Types (Seconds(..), delaySeconds)
 import qualified System.Posix.Signals as Sig
 import qualified UnliftIO.Async as Async
 import UnliftIO (bracket_)
