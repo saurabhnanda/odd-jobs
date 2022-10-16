@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveGeneric, NamedFieldPuns, TypeOperators, DataKinds, RecordWildCards, DeriveAnyClass #-}
+{-# LANGUAGE DeriveGeneric, NamedFieldPuns, DataKinds, RecordWildCards #-}
 {-# LANGUAGE CPP #-}
 module OddJobs.Web where
 
