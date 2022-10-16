@@ -372,9 +372,7 @@ showText a = toS $ show a
 
 jobContent :: Value -> Value
 jobContent v = case v of
-  Aeson.Object o -> case HM.lookup "contents" o of
-    Nothing -> v
-    Just c -> c
+  Aeson.Object o -> fromMaybe v (HM.lookup "contents" o)
   _ -> v
 
 jobRow :: Routes -> UTCTime -> (Job, Html ()) -> Html ()
