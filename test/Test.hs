@@ -628,9 +628,8 @@ filterJobs Web.Filter{filterStatuses, filterCreatedAfter, filterCreatedBefore, f
               Web.Desc -> LT
       in sortBy comparer lst
 
-    filterByStatus Job.Job{jobStatus} = if Prelude.null filterStatuses
-                                        then True
-                                        else jobStatus `elem` filterStatuses
+    filterByStatus Job.Job{jobStatus} = Prelude.null filterStatuses
+                                        || (jobStatus `elem` filterStatuses)
     filterByCreatedAfter Job.Job{jobCreatedAt} = maybe True (<= jobCreatedAt) filterCreatedAfter
     filterByCreatedBefore Job.Job{jobCreatedAt} = maybe True (> jobCreatedAt) filterCreatedBefore
     filterByUpdatedAfter Job.Job{jobUpdatedAt} = maybe True (<= jobUpdatedAt) filterUpdatedAfter
