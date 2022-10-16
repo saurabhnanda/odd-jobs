@@ -167,34 +167,34 @@ logCallbackErrors :: (HasJobRunner m) => JobId -> Text -> m () -> m ()
 logCallbackErrors jid msg action = catchAny action $ \e -> log LevelError $ LogText $ msg <> " Job ID=" <> toS (show jid) <> ": " <> toS (show e)
 
 instance HasJobRunner RunnerM where
-  getPollingInterval = cfgPollingInterval . envConfig <$> ask
-  onJobFailed = cfgOnJobFailed . envConfig <$> ask
+  getPollingInterval = asks (cfgPollingInterval . envConfig)
+  onJobFailed = asks (cfgOnJobFailed . envConfig)
   onJobSuccess job = do
-    fn <- cfgOnJobSuccess . envConfig <$> ask
+    fn <- asks (cfgOnJobSuccess . envConfig)
     logCallbackErrors (jobId job) "onJobSuccess" $ liftIO $ fn job
-  deleteSuccessfulJobs = cfgDeleteSuccessfulJobs . envConfig <$> ask
+  deleteSuccessfulJobs = asks (cfgDeleteSuccessfulJobs . envConfig)
 
-  getJobRunner = cfgJobRunner . envConfig <$> ask
-  getDbPool = cfgDbPool . envConfig <$> ask
-  getTableName = cfgTableName . envConfig <$> ask
+  getJobRunner = asks (cfgJobRunner . envConfig)
+  getDbPool = asks (cfgDbPool . envConfig)
+  getTableName = asks (cfgTableName . envConfig)
   onJobStart job = do
-    fn <- cfgOnJobStart . envConfig <$> ask
+    fn <- asks (cfgOnJobStart . envConfig)
     logCallbackErrors (jobId job) "onJobStart" $ liftIO $ fn job
 
-  getDefaultMaxAttempts = cfgDefaultMaxAttempts . envConfig <$> ask
+  getDefaultMaxAttempts = asks (cfgDefaultMaxAttempts . envConfig)
 
   getRunnerEnv = ask
 
-  getConcurrencyControl = (cfgConcurrencyControl . envConfig <$> ask)
+  getConcurrencyControl = asks (cfgConcurrencyControl . envConfig)
 
   log logLevel logEvent = do
-    loggerFn <- cfgLogger . envConfig <$> ask
+    loggerFn <- asks (cfgLogger . envConfig)
     liftIO $ loggerFn logLevel logEvent
 
-  getDefaultJobTimeout = cfgDefaultJobTimeout . envConfig <$> ask
+  getDefaultJobTimeout = asks (cfgDefaultJobTimeout . envConfig)
 
   getDefaultRetryBackoff attempts = do
-    retryFn <- cfgDefaultRetryBackoff . envConfig <$> ask
+    retryFn <- asks (cfgDefaultRetryBackoff . envConfig)
     liftIO $ retryFn attempts
 
 -- | Start the job-runner in the /current/ thread, i.e. you'll need to use
