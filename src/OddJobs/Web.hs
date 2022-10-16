@@ -274,7 +274,7 @@ sideNav Routes{..} jobTypes jobRunnerNames _t filter@Filter{..} = do
       h6_ "Filter by job status"
       div_ [ class_ "card" ] $ do
         ul_ [ class_ "list-group list-group-flush" ] $ do
-          li_ [ class_ ("list-group-item " <> if filterStatuses == [] then "active-nav" else "") ] $ do
+          li_ [ class_ ("list-group-item " <> if null filterStatuses then "active-nav" else "") ] $ do
             let lnk = rFilterResults $ Just filter{filterStatuses = [], filterPage = OddJobs.Web.filterPage blankFilter}
             a_ [ href_ lnk ] $ do
               "all"
@@ -295,7 +295,7 @@ sideNav Routes{..} jobTypes jobRunnerNames _t filter@Filter{..} = do
 
       div_ [ class_ "card" ] $ do
         ul_ [ class_ "list-group list-group-flush" ] $ do
-          li_ [ class_ ("list-group-item " <> if filterJobRunner == [] then "active-nav" else "") ] $ do
+          li_ [ class_ ("list-group-item " <> if null filterJobRunner then "active-nav" else "") ] $ do
             let lnk = rFilterResults $ Just filter{filterJobRunner = [], filterPage = OddJobs.Web.filterPage blankFilter}
             a_ [ href_ lnk ] "all"
           forM_ jobRunnerNames $ \jr -> do
@@ -311,7 +311,7 @@ sideNav Routes{..} jobTypes jobRunnerNames _t filter@Filter{..} = do
 
       div_ [ class_ "card" ] $ do
         ul_ [ class_ "list-group list-group-flush" ] $ do
-          li_ [ class_ ("list-group-item " <> if filterJobTypes == [] then "active-nav" else "") ] $ do
+          li_ [ class_ ("list-group-item " <> if null filterJobTypes then "active-nav" else "") ] $ do
             let lnk = rFilterResults $ Just filter{filterJobTypes = [], filterPage = OddJobs.Web.filterPage blankFilter}
             a_ [ href_ lnk ] "all"
           forM_ jobTypes $ \jt -> do
