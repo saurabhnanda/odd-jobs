@@ -261,7 +261,7 @@ startCmdParser cliType = Start
   <*> (case cliType of
          CliOnlyJobRunner _ -> pure Nothing
          CliOnlyWebUi _     -> Just <$> uiStartArgsParser
-         CliBoth _ _        -> (Just <$> uiStartArgsParser) <|> pure Nothing
+         CliBoth _ _        -> optional uiStartArgsParser
       )
 
 data WebUiAuth
