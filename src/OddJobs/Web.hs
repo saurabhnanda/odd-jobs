@@ -264,7 +264,7 @@ pageLayout routes@Routes{..} navHtml bodyHtml = do
       script_ [ src_ $ rStaticAsset "assets/js/custom.js" ] $ ("" :: Text)
 
 sideNav :: Routes -> [Text] -> [JobRunnerName] -> UTCTime -> Filter -> Html ()
-sideNav Routes{..} jobTypes jobRunnerNames t filter@Filter{..} = do
+sideNav Routes{..} jobTypes jobRunnerNames _t filter@Filter{..} = do
   div_ [ class_ "filters mt-3" ] $ do
     jobStatusFilters
     jobTypeFilters
@@ -319,7 +319,7 @@ sideNav Routes{..} jobTypes jobRunnerNames t filter@Filter{..} = do
               a_ [ href_ (rFilterResults $ Just filter{filterJobTypes=[jt]}) ] $ toHtml jt
 
 searchBar :: Routes -> UTCTime -> Filter -> Html ()
-searchBar Routes{..} t filter@Filter{filterStatuses, filterCreatedAfter, filterCreatedBefore, filterUpdatedAfter, filterUpdatedBefore, filterJobTypes, filterRunAfter} = do
+searchBar Routes{..} _t filter@Filter{filterStatuses, filterCreatedAfter, filterCreatedBefore, filterUpdatedAfter, filterUpdatedBefore, filterJobTypes, filterRunAfter} = do
   form_ [ style_ "padding-top: 2em;" ] $ do
     div_ [ class_ "form-group" ] $ do
       div_ [ class_ "search-container" ] $ do
@@ -365,7 +365,7 @@ timeDuration from to = (diff, str)
     diff = (abs $ round $ diffUTCTime from to)
     (m', s) = diff `divMod` 60
     (h', m) = m' `divMod` 60
-    (d, h) = h' `divMod` 24
+    (d, _h) = h' `divMod` 24
 
 showText :: (Show a) => a -> Text
 showText a = toS $ show a
@@ -445,7 +445,7 @@ statusFuture t Job{..} = do
     abbr_ [ title_ (showText jobRunAt) ] $ toHtml $ humanReadableTime' t jobRunAt
 
 statusWaiting :: UTCTime -> Job -> Html ()
-statusWaiting t Job{..} = do
+statusWaiting _t Job{} = do
       span_ [ class_ "badge badge-warning" ] $ "Waiting"
       -- span_ [ class_ "job-run-time" ] ("Waiting to be picked up" :: Text)
 
@@ -457,7 +457,7 @@ statusRetry t Job{..} = do
     abbr_ [ title_ (showText jobRunAt)] $ toHtml $ "Next retry in " <> humanReadableTime' t jobRunAt
 
 statusLocked :: UTCTime -> Job -> Html ()
-statusLocked t Job{..} = do
+statusLocked _t Job{} = do
   span_ [ class_ "badge badge-info" ] $ toHtml ("Locked"  :: Text)
   -- span_ [ class_ "job-run-time" ] $ do
   --   abbr_ [ title_ (showText jobUpdatedAt) ] $ toHtml $ "Retried " <> humanReadableTime' t jobUpdatedAt <> ". "
@@ -486,7 +486,7 @@ resultsPanel routes@Routes{..} t filter@Filter{filterPage} js runningCount = do
     prevLink = do
       let (extraClass, lnk) = case filterPage of
             Nothing -> ("disabled", "")
-            Just (l, 0) -> ("disabled", "")
+            Just (_l, 0) -> ("disabled", "")
             Just (l, o) -> ("", rFilterResults $ Just $ filter {filterPage = Just (l, max 0 $ o - l)})
       li_ [ class_ ("page-item previous " <> extraClass) ] $ do
         a_ [ class_ "page-link", href_ lnk ] $ "Prev"

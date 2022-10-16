@@ -288,7 +288,7 @@ findJobByIdIO :: Connection -> TableName -> JobId -> IO (Maybe Job)
 findJobByIdIO conn tname jid = PGS.query conn findJobByIdQuery (tname, jid) >>= \case
   [] -> pure Nothing
   [j] -> pure (Just j)
-  js -> Prelude.error $ "Not expecting to find multiple jobs by id=" <> (show jid)
+  _js -> Prelude.error $ "Not expecting to find multiple jobs by id=" <> (show jid)
 
 
 saveJobQuery :: PGS.Query
@@ -318,7 +318,7 @@ saveJobIO conn tname Job{jobRunAt, jobStatus, jobPayload, jobLastError, jobAttem
   case rs of
     [] -> Prelude.error $ "Could not find job while updating it id=" <> (show jobId)
     [j] -> pure j
-    js -> Prelude.error $ "Not expecting multiple rows to ber returned when updating job id=" <> (show jobId)
+    _js -> Prelude.error $ "Not expecting multiple rows to ber returned when updating job id=" <> (show jobId)
 
 deleteJob :: (HasJobRunner m) => JobId -> m ()
 deleteJob jid = do
@@ -372,7 +372,7 @@ runJobWithTimeout timeoutSec job = do
 
   a <- async $ liftIO $ jobRunner_ job
 
-  x <- atomicModifyIORef' threadsRef $ \threads -> (a:threads, DL.map asyncThreadId (a:threads))
+  _x <- atomicModifyIORef' threadsRef $ \threads -> (a:threads, DL.map asyncThreadId (a:threads))
   -- liftIO $ putStrLn $ "Threads: " <> show x
   log LevelDebug $ LogText $ toS $ "Spawned job in " <> show (asyncThreadId a)
 

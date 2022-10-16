@@ -1,4 +1,5 @@
 {-# LANGUAGE FlexibleInstances, NamedFieldPuns, DeriveGeneric, FlexibleContexts, TypeFamilies, StandaloneDeriving, RankNTypes #-}
+{-# OPTIONS_GHC -Wno-missing-signatures #-}
 module Test where
 
 import Test.Tasty as Tasty
@@ -133,7 +134,7 @@ jobRunner Job{jobPayload, jobAttempts} = case (fromJSON jobPayload) of
                                           then recur innerpload (idx + 1)
                                           else (delaySeconds delay) >> (error $ "Forced error after " <> show delay <> " seconds. step=" <> show idx)
           PayloadThrowStringException s -> throwString s
-          PayloadThrowDivideByZero -> seq (1 `div` 0) (pure ())
+          PayloadThrowDivideByZero -> seq (1 `div` 0 :: Integer) (pure ())
     in recur j 0
 
 data JobPayload = PayloadSucceed Seconds
@@ -170,7 +171,7 @@ assertJobIdStatus :: (HasCallStack)
                   -> Assertion
 assertJobIdStatus conn tname logRef msg st jid = do
   logs <- readIORef logRef
-  let mjid = Just jid
+  let _mjid = Just jid
   case st of
     Job.Success ->
       assertBool (msg <> ": Success event not found in job-logs for JobId=" <> show jid) $
@@ -237,7 +238,7 @@ withNamedJobMonitor tname jobPool cfgFn actualTest = do
     let flogger logLevel logEvent = do
           tlogger $ \t -> toLogStr t <> " | " <> (Job.defaultLogStr Job.defaultJobType logLevel logEvent)
           atomicModifyIORef' logRef (\logs -> (logEvent:logs, ()))
-        cfg = Job.mkConfig flogger tname jobPool Job.UnlimitedConcurrentJobs jobRunner (\cfg -> cfgFn $ cfg{Job.cfgDefaultMaxAttempts=testMaxAttempts})
+        cfg = Job.mkConfig flogger tname jobPool Job.UnlimitedConcurrentJobs jobRunner (\cfg' -> cfgFn $ cfg'{Job.cfgDefaultMaxAttempts=testMaxAttempts})
     withAsync (Job.startJobRunner cfg) (const $ actualTest logRef)
 
 payloadGen :: MonadGen m => m JobPayload
@@ -279,7 +280,7 @@ testGracefulShutdown appPool jobPool = testCase "ensure graceful shutdown" $ do
   where
     -- When this block completes execution, the graceful shutdown should have happened.
     setupPreconditions i tname =
-      if i==0
+      if i == (0 :: Integer)
       then pure Nothing
       else do
         withNamedJobMonitor tname jobPool Prelude.id $ \logRef -> do
@@ -310,15 +311,15 @@ testJobScheduling appPool jobPool = testCase "job scheduling" $ do
   withNewJobMonitor jobPool $ \tname logRef -> do
     Pool.withResource appPool $ \conn -> do
       t <- getCurrentTime
-      job@Job{jobId} <- Job.scheduleJob conn tname (PayloadSucceed 0) (addUTCTime (fromIntegral 3600) t)
+      job@Job{jobId} <- Job.scheduleJob conn tname (PayloadSucceed 0) (addUTCTime (fromIntegral (3600 :: Integer)) t)
       delaySeconds $ Seconds 2
       assertJobIdStatus conn tname logRef "Job is scheduled in the future. It should NOT have been successful by now" Job.Queued jobId
-      j <- Job.saveJobIO conn tname job{jobRunAt = (addUTCTime (fromIntegral (-1)) t)}
+      _ <- Job.saveJobIO conn tname job{jobRunAt = (addUTCTime (fromIntegral (-1 :: Integer)) t)}
       delaySeconds (Job.defaultPollingInterval + (Seconds 2))
       assertJobIdStatus conn tname logRef "Job had a runAt date in the past. It should have been successful by now" Job.Success jobId
 
 testJobFailure appPool jobPool = testCase "job failure" $ do
-  withNewJobMonitor jobPool $ \tname logRef -> do
+  withNewJobMonitor jobPool $ \tname _logRef -> do
     Pool.withResource appPool $ \conn -> do
       Job{jobId} <- Job.createJob conn tname (PayloadAlwaysFail 0)
       delaySeconds $ (calculateRetryDelay testMaxAttempts) + (Seconds 3)
@@ -333,7 +334,7 @@ testPushFailedJobEndQueue jobPool = testCase "testPushFailedJobEndQueue" $ do
     Pool.withResource jobPool $ \conn -> do
       job1 <- Job.createJob conn tname (PayloadAlwaysFail 0)
       job2 <- Job.createJob conn tname (PayloadAlwaysFail 0)
-      Job.saveJobIO conn tname (job1 {jobAttempts = 1})
+      _ <- Job.saveJobIO conn tname (job1 {jobAttempts = 1})
       [Only resId] <- Job.jobPollingIO conn "testPushFailedJobEndQueue" tname 5
       assertEqual
         "Expecting the current job to be 2 since job 1 has been modified"
@@ -342,31 +343,31 @@ testPushFailedJobEndQueue jobPool = testCase "testPushFailedJobEndQueue" $ do
 testJobErrHandler appPool jobPool = testCase "job error handler" $ do
   withRandomTable jobPool $ \tname -> do
     Pool.withResource appPool $ \conn -> do
-      Job.createJob conn tname (PayloadThrowStringException "forced exception")
-      Job.createJob conn tname PayloadThrowDivideByZero
+      _ <- Job.createJob conn tname (PayloadThrowStringException "forced exception")
+      _ <- Job.createJob conn tname PayloadThrowDivideByZero
       mvar1 <- newMVar False
       mvar2 <- newMVar False
       let addErrHandlers cfg = cfg { Job.cfgOnJobFailed = [ Job.JobErrHandler errHandler2
                                                           , Job.JobErrHandler errHandler1
                                                           ]
                                    }
-          errHandler1 (e :: StringException) _ _ = swapMVar mvar1 True
-          errHandler2 (e :: ArithException) _ _ = swapMVar mvar2 True
-      withNamedJobMonitor tname jobPool addErrHandlers $ \logRef -> do
+          errHandler1 (_ :: StringException) _ _ = swapMVar mvar1 True
+          errHandler2 (_ :: ArithException) _ _ = swapMVar mvar2 True
+      withNamedJobMonitor tname jobPool addErrHandlers $ \_logRef -> do
         delaySeconds (Job.defaultPollingInterval * 3)
       readMVar mvar1 >>= assertEqual "Error Handler 1 doesn't seem to have run" True
       readMVar mvar2 >>= assertEqual "Error Handler 2 doesn't seem to have run" True
 
 testRetryBackoff appPool jobPool = testCase "retry backoff" $ do
   withRandomTable jobPool $ \tname -> do
-    withNamedJobMonitor tname jobPool modifyRetryBackoff $ \logRef -> do
+    withNamedJobMonitor tname jobPool modifyRetryBackoff $ \_logRef -> do
       Pool.withResource appPool $ \conn -> do
         jobQueueTime <- getCurrentTime
         Job{jobId} <- Job.createJob conn tname (PayloadAlwaysFail 0)
         delaySeconds (2 * Job.defaultPollingInterval)
 
         let assertBackedOff = do
-              job@Job{jobAttempts, jobStatus, jobRunAt} <- ensureJobId conn tname jobId
+              Job{jobAttempts, jobStatus, jobRunAt} <- ensureJobId conn tname jobId
               assertEqual "Exepcting job to be in Retry status" Job.Retry jobStatus
               assertBool "Expecting job runAt to be in the future"
                 (jobRunAt >= addUTCTime (fromIntegral $ unSeconds $ backoff jobAttempts) jobQueueTime)
@@ -375,7 +376,7 @@ testRetryBackoff appPool jobPool = testCase "retry backoff" $ do
 
         -- Run it for another attempt and check the backoff scales
         job <- ensureJobId conn tname jobId
-        Job.saveJobIO conn tname (job {jobRunAt = jobQueueTime})
+        _ <- Job.saveJobIO conn tname (job {jobRunAt = jobQueueTime})
         delaySeconds (2 * Job.defaultPollingInterval)
 
         assertBackedOff
