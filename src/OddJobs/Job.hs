@@ -537,20 +537,20 @@ jobPoller = do
       -- If we can't run any jobs ATM, relax and wait for resources to free up
       delayAction
     True -> do
-      nextAction <- mask_ $ do
-        log LevelDebug $ LogText $ toS $ "[" <> processName <> "] Polling the job queue.."
-        r <- liftIO $ jobPollingIO pollerDbConn processName tname lockTimeout
-        case r of
-          -- When we don't have any jobs to run, we can relax a bit...
-          [] -> pure delayAction
+      join
+        (mask_ $ do
+          log LevelDebug $ LogText $ toS $ "[" <> processName <> "] Polling the job queue.."
+          r <- liftIO $ jobPollingIO pollerDbConn processName tname lockTimeout
+          case r of
+            -- When we don't have any jobs to run, we can relax a bit...
+            [] -> pure delayAction
 
-          -- When we find a job to run, fork and try to find the next job without any delay...
-          [Only (jid :: JobId)] -> do
-            void $ async $ runJob jid
-            pure noDelayAction
+            -- When we find a job to run, fork and try to find the next job without any delay...
+            [Only (jid :: JobId)] -> do
+              void $ async $ runJob jid
+              pure noDelayAction
 
-          x -> error $ "WTF just happened? I was supposed to get only a single row, but got: " ++ (show x)
-      nextAction
+            x -> error $ "WTF just happened? I was supposed to get only a single row, but got: " ++ (show x))
   where
     delayAction = delaySeconds =<< getPollingInterval
     noDelayAction = pure ()

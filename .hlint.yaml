@@ -8,7 +8,6 @@
 - ignore: {name: "Replace case with fromMaybe"} # 2 hints
 - ignore: {name: "Use <$>"} # 6 hints
 - ignore: {name: "Use asks"} # 12 hints
-- ignore: {name: "Use join"} # 1 hint
 - ignore: {name: "Use lambda-case"} # 5 hints
 - ignore: {name: "Use list literal pattern"} # 2 hints
 - ignore: {name: "Use newtype instead of data"} # 1 hint
