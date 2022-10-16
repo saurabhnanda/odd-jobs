@@ -115,11 +115,10 @@ defaultStartCommand :: CommonStartArgs
                     -> CliType
                     -> IO ()
 defaultStartCommand CommonStartArgs{..} mUIArgs cliType = do
-  case startDaemonize of
-    False ->
-      coreStartupFn
-    True -> do
-      Daemon.runDetached (Just startPidFile) (Daemon.ToFile "/tmp/oddjobs.out") coreStartupFn
+  if startDaemonize then do
+    Daemon.runDetached (Just startPidFile) (Daemon.ToFile "/tmp/oddjobs.out") coreStartupFn
+  else
+    coreStartupFn
   where
     uiArgs = fromJustNote "Please specify Web UI Startup Args" $ traceShowId mUIArgs
     coreStartupFn =
