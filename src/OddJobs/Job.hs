@@ -690,7 +690,7 @@ throwParsePayloadWith :: (Aeson.Value -> Aeson.Parser a)
                       -> Job
                       -> IO a
 throwParsePayloadWith parser job =
-  either throwString (pure . Prelude.id) (eitherParsePayloadWith parser job)
+  either throwString pure (eitherParsePayloadWith parser job)
 
 
 -- | Used by the web\/admin UI to fetch a \"master list\" of all known

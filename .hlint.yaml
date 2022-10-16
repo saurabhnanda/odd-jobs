@@ -3,7 +3,6 @@
 - ignore: {name: "Move brackets to avoid $"} # 19 hints
 - ignore: {name: "Redundant $"} # 21 hints
 - ignore: {name: "Redundant bracket"} # 121 hints
-- ignore: {name: "Redundant id"} # 1 hint
 - ignore: {name: "Redundant if"} # 1 hint
 - ignore: {name: "Redundant lambda"} # 1 hint
 - ignore: {name: "Replace case with fromMaybe"} # 2 hints
