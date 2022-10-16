@@ -190,36 +190,38 @@ assertJobIdStatus conn tname logRef msg st jid = do
   case st of
     Job.Success ->
       assertBool (msg <> ": Success event not found in job-logs for JobId=" <> show jid) $
-      (flip DL.any) logs $ \logEvent -> case logEvent of
-                                          Job.LogJobSuccess j _ -> jid == Job.jobId j
-                                          _ -> False
+      (flip DL.any) logs $ \case
+        Job.LogJobSuccess j _ -> jid == Job.jobId j
+        _ -> False
+
     Job.Queued ->
       assertBool (msg <> ": Not expecting to find a queued job in the the job-logs JobId=" <> show jid) $
-      not $ (flip DL.any) logs $ \logEvent -> case logEvent of
-                                           Job.LogJobStart j -> jid == Job.jobId j
-                                           Job.LogJobSuccess j _ -> jid == Job.jobId j
-                                           Job.LogJobFailed j _ _ _ -> jid == Job.jobId j
-                                           Job.LogJobTimeout j -> jid == Job.jobId j
-                                           Job.LogWebUIRequest -> False
-                                           Job.LogText _ -> False
-                                           Job.LogPoll -> False
+      not $ (flip DL.any) logs $ \case
+        Job.LogJobStart j -> jid == Job.jobId j
+        Job.LogJobSuccess j _ -> jid == Job.jobId j
+        Job.LogJobFailed j _ _ _ -> jid == Job.jobId j
+        Job.LogJobTimeout j -> jid == Job.jobId j
+        Job.LogWebUIRequest -> False
+        Job.LogText _ -> False
+        Job.LogPoll -> False
+
     Job.Failed ->
       assertBool (msg <> ": Failed event not found in job-logs for JobId=" <> show jid) $
-      (flip DL.any) logs $ \logEvent -> case logEvent of
-                                          Job.LogJobFailed j _ _ _ -> jid == Job.jobId j
-                                          _ -> False
+      (flip DL.any) logs $ \case
+        Job.LogJobFailed j _ _ _ -> jid == Job.jobId j
+        _ -> False
 
     Job.Retry ->
       assertBool (msg <> ": Failed event not found in job-logs for JobId=" <> show jid) $
-      (flip DL.any) logs $ \logEvent -> case logEvent of
-                                          Job.LogJobFailed j _ _ _ -> jid == Job.jobId j
-                                          _ -> False
+      (flip DL.any) logs $ \case
+        Job.LogJobFailed j _ _ _ -> jid == Job.jobId j
+        _ -> False
 
     Job.Locked ->
       assertBool (msg <> ": Start event should be present in the log for a locked job JobId=" <> show jid) $
-      (flip DL.any) logs $ \logEvent -> case logEvent of
-                                          Job.LogJobStart j -> jid == Job.jobId j
-                                          _ -> False
+      (flip DL.any) logs $ \case
+        Job.LogJobStart j -> jid == Job.jobId j
+        _ -> False
 
   when (st /= Job.Success) $ do
     Job.findJobByIdIO conn tname jid >>= \case
