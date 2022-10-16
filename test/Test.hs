@@ -618,7 +618,7 @@ filterJobs Web.Filter{filterStatuses, filterCreatedAfter, filterCreatedBefore, f
             Web.OrdLockedAt -> (comparing jobLockedAt)
             Web.OrdStatus -> (comparing jobStatus)
             Web.OrdJobType -> comparing Job.defaultJobType
-          resultOrder fn = \x y -> case fn x y of
+          resultOrder fn x y = case fn x y of
             EQ -> compare (Down $ jobId x) (Down $ jobId y)
             LT -> case dir of
               Web.Asc -> LT
