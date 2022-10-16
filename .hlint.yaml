@@ -4,7 +4,6 @@
 - ignore: {name: "Redundant $"} # 21 hints
 - ignore: {name: "Redundant <$>"} # 1 hint
 - ignore: {name: "Redundant bracket"} # 121 hints
-- ignore: {name: "Redundant fromIntegral"} # 1 hint
 - ignore: {name: "Redundant id"} # 1 hint
 - ignore: {name: "Redundant if"} # 1 hint
 - ignore: {name: "Redundant lambda"} # 1 hint
