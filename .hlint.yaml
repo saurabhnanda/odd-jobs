@@ -2,12 +2,11 @@
 - ignore: {name: "Eta reduce"} # 6 hints
 - ignore: {name: "Move brackets to avoid $"} # 19 hints
 - ignore: {name: "Redundant $"} # 21 hints
-- ignore: {name: "Redundant bracket"} # 121 hints
+- ignore: {name: "Redundant bracket"} # 119 hints
 - ignore: {name: "Redundant if"} # 1 hint
 - ignore: {name: "Redundant lambda"} # 1 hint
 - ignore: {name: "Replace case with fromMaybe"} # 2 hints
 - ignore: {name: "Use <$>"} # 6 hints
-- ignore: {name: "Use <&>"} # 1 hint
 - ignore: {name: "Use asks"} # 12 hints
 - ignore: {name: "Use const"} # 2 hints
 - ignore: {name: "Use if"} # 1 hint

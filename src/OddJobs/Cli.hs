@@ -169,7 +169,7 @@ defaultStopCommand StopArgs{..} = do
     then Daemon.brutalKill shutPidFile
     else do putStrLn $ "Sending sigINT to " <> show progName <>
               " and waiting " <> (show $ unSeconds shutTimeout) <> " seconds for graceful stop"
-            readFile shutPidFile >>= (pure . read) >>= Sig.signalProcess Sig.sigINT
+            readFile shutPidFile >>= Sig.signalProcess Sig.sigINT . read
             (Async.race (delaySeconds shutTimeout) checkProcessStatus) >>= \case
               Right _ -> do
                 putStrLn $ progName <> " seems to have exited gracefully."
