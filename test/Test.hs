@@ -65,24 +65,24 @@ main = do
 #if MIN_VERSION_resource_pool(0,3,0)
     createAppPool = Pool.newPool $ Pool.PoolConfig
       (PGS.connect connInfo)  -- create a new resource
-      (PGS.close)             -- destroy resource
+      PGS.close               -- destroy resource
       (fromRational 10)       -- number of seconds unused resources are kept around
       45
     createJobPool = Pool.newPool $ Pool.PoolConfig
       (PGS.connect connInfo)  -- create a new resource
-      (PGS.close)             -- destroy resource
+      PGS.close               -- destroy resource
       (fromRational 10)       -- number of seconds unused resources are kept around
       45
 #else
     createAppPool = Pool.createPool
       (PGS.connect connInfo)  -- create a new resource
-      (PGS.close)             -- destroy resource
+      PGS.close               -- destroy resource
       1                       -- stripes
       (fromRational 10)       -- number of seconds unused resources are kept around
       45
     createJobPool = Pool.createPool
       (PGS.connect connInfo)  -- create a new resource
-      (PGS.close)             -- destroy resource
+      PGS.close               -- destroy resource
       1                       -- stripes
       (fromRational 10)       -- number of seconds unused resources are kept around
       45
@@ -139,15 +139,15 @@ testPayload :: Value
 testPayload = toJSON (10 :: Int)
 
 jobRunner :: Job.Job -> IO ()
-jobRunner Job{jobPayload, jobAttempts} = case (fromJSON jobPayload) of
+jobRunner Job{jobPayload, jobAttempts} = case fromJSON jobPayload of
   Aeson.Error e -> error e
   Success (j :: JobPayload) ->
     let recur pload idx = case pload of
-          PayloadAlwaysFail delay -> (delaySeconds delay) >> (error $ "Forced error after " <> show delay <> " seconds")
+          PayloadAlwaysFail delay -> delaySeconds delay >> (error $ "Forced error after " <> show delay <> " seconds")
           PayloadSucceed delay -> void $ delaySeconds delay
           PayloadFail delay innerpload -> if idx<jobAttempts
                                           then recur innerpload (idx + 1)
-                                          else (delaySeconds delay) >> (error $ "Forced error after " <> show delay <> " seconds. step=" <> show idx)
+                                          else delaySeconds delay >> (error $ "Forced error after " <> show delay <> " seconds. step=" <> show idx)
           PayloadThrowStringException s -> throwString s
           PayloadThrowDivideByZero -> seq (1 `div` 0 :: Integer) (pure ())
     in recur j 0
@@ -176,7 +176,7 @@ logEventToJob le = case le of
   Job.LogWebUIRequest -> Nothing
   Job.LogText _ -> Nothing
 
-assertJobIdStatus :: (HasCallStack)
+assertJobIdStatus :: HasCallStack
                   => Connection
                   -> Job.TableName
                   -> IORef [Job.LogEvent]
@@ -190,13 +190,13 @@ assertJobIdStatus conn tname logRef msg st jid = do
   case st of
     Job.Success ->
       assertBool (msg <> ": Success event not found in job-logs for JobId=" <> show jid) $
-      (flip DL.any) logs $ \case
+      flip DL.any logs $ \case
         Job.LogJobSuccess j _ -> jid == Job.jobId j
         _ -> False
 
     Job.Queued ->
       assertBool (msg <> ": Not expecting to find a queued job in the the job-logs JobId=" <> show jid) $
-      not $ (flip DL.any) logs $ \case
+      not $ flip DL.any logs $ \case
         Job.LogJobStart j -> jid == Job.jobId j
         Job.LogJobSuccess j _ -> jid == Job.jobId j
         Job.LogJobFailed j _ _ _ -> jid == Job.jobId j
@@ -207,19 +207,19 @@ assertJobIdStatus conn tname logRef msg st jid = do
 
     Job.Failed ->
       assertBool (msg <> ": Failed event not found in job-logs for JobId=" <> show jid) $
-      (flip DL.any) logs $ \case
+      flip DL.any logs $ \case
         Job.LogJobFailed j _ _ _ -> jid == Job.jobId j
         _ -> False
 
     Job.Retry ->
       assertBool (msg <> ": Failed event not found in job-logs for JobId=" <> show jid) $
-      (flip DL.any) logs $ \case
+      flip DL.any logs $ \case
         Job.LogJobFailed j _ _ _ -> jid == Job.jobId j
         _ -> False
 
     Job.Locked ->
       assertBool (msg <> ": Start event should be present in the log for a locked job JobId=" <> show jid) $
-      (flip DL.any) logs $ \case
+      flip DL.any logs $ \case
         Job.LogJobStart j -> jid == Job.jobId j
         _ -> False
 
@@ -228,16 +228,16 @@ assertJobIdStatus conn tname logRef msg st jid = do
       Nothing -> assertFailure $ "Not expecting job to be deleted. JobId=" <> show jid
       Just (Job{jobStatus}) -> assertEqual msg st jobStatus
 
-ensureJobId :: (HasCallStack) => Connection -> Job.TableName -> JobId -> IO Job
+ensureJobId :: HasCallStack => Connection -> Job.TableName -> JobId -> IO Job
 ensureJobId conn tname jid = Job.findJobByIdIO conn tname jid >>= \case
   Nothing -> error $ "Not expecting job to be deleted. JobId=" <> show jid
   Just j -> pure j
 
 -- withRandomTable :: (MonadIO m) => Pool Connection -> (Job.TableName -> m a) -> m a
 withRandomTable jobPool action = do
-  (tname :: Job.TableName) <- liftIO ((fromString . ("jobs_" <>)) <$> (replicateM 10 (R.randomRIO ('a', 'z'))))
+  (tname :: Job.TableName) <- liftIO (fromString . ("jobs_" <>) <$> replicateM 10 (R.randomRIO ('a', 'z')))
   finally
-    ((Pool.withResource jobPool $ \conn -> (liftIO $ Migrations.createJobTable conn tname)) >> (action tname))
+    ((Pool.withResource jobPool $ \conn -> liftIO $ Migrations.createJobTable conn tname) >> action tname)
     (Pool.withResource jobPool $ \conn -> liftIO $ void $ PGS.execute conn "drop table if exists ?" (Only tname))
 
 testMaxAttempts :: Int
@@ -253,7 +253,7 @@ withNamedJobMonitor tname jobPool cfgFn actualTest = do
   tcache <- newTimeCache simpleTimeFormat'
   withTimedFastLogger tcache LogNone $ \tlogger -> do
     let flogger logLevel logEvent = do
-          tlogger $ \t -> toLogStr t <> " | " <> (Job.defaultLogStr Job.defaultJobType logLevel logEvent)
+          tlogger $ \t -> toLogStr t <> " | " <> Job.defaultLogStr Job.defaultJobType logLevel logEvent
           atomicModifyIORef' logRef (\logs -> (logEvent:logs, ()))
         cfg = Job.mkConfig flogger tname jobPool Job.UnlimitedConcurrentJobs jobRunner (\cfg' -> cfgFn $ cfg'{Job.cfgDefaultMaxAttempts=testMaxAttempts})
     withAsync (Job.startJobRunner cfg) (const $ actualTest logRef)
@@ -263,7 +263,7 @@ payloadGen = Gen.recursive  Gen.choice nonRecursive recursive
   where
     nonRecursive = [ PayloadAlwaysFail <$> Gen.element [1, 2, 3]
                    , PayloadSucceed <$> Gen.element [1, 2, 3]]
-    recursive = [ PayloadFail <$> (Gen.element [1, 2, 3]) <*> payloadGen ]
+    recursive = [ PayloadFail <$> Gen.element [1, 2, 3] <*> payloadGen ]
 
 testJobCreation appPool jobPool = testCase "job creation" $ do
   withNewJobMonitor jobPool $ \tname logRef -> do
@@ -282,7 +282,7 @@ testEnsureShutdown appPool jobPool = testCase "ensure shutdown" $ do
     scheduleJob tname = withNamedJobMonitor tname jobPool Prelude.id $ \logRef -> do
       t <- getCurrentTime
       Pool.withResource appPool $ \conn -> do
-        Job{jobId} <- Job.scheduleJob conn tname (PayloadSucceed 0) (addUTCTime (fromIntegral (2 * (unSeconds Job.defaultPollingInterval))) t)
+        Job{jobId} <- Job.scheduleJob conn tname (PayloadSucceed 0) (addUTCTime (fromIntegral (2 * unSeconds Job.defaultPollingInterval)) t)
         assertJobIdStatus conn tname logRef "Job is scheduled in future, should still be queueud" Job.Queued jobId
         pure (jobId, logRef)
 
@@ -331,15 +331,15 @@ testJobScheduling appPool jobPool = testCase "job scheduling" $ do
       job@Job{jobId} <- Job.scheduleJob conn tname (PayloadSucceed 0) (addUTCTime (fromIntegral (3600 :: Integer)) t)
       delaySeconds $ Seconds 2
       assertJobIdStatus conn tname logRef "Job is scheduled in the future. It should NOT have been successful by now" Job.Queued jobId
-      _ <- Job.saveJobIO conn tname job{jobRunAt = (addUTCTime (fromIntegral (-1 :: Integer)) t)}
-      delaySeconds (Job.defaultPollingInterval + (Seconds 2))
+      _ <- Job.saveJobIO conn tname job{jobRunAt = addUTCTime (fromIntegral (-1 :: Integer)) t}
+      delaySeconds (Job.defaultPollingInterval + Seconds 2)
       assertJobIdStatus conn tname logRef "Job had a runAt date in the past. It should have been successful by now" Job.Success jobId
 
 testJobFailure appPool jobPool = testCase "job failure" $ do
   withNewJobMonitor jobPool $ \tname _logRef -> do
     Pool.withResource appPool $ \conn -> do
       Job{jobId} <- Job.createJob conn tname (PayloadAlwaysFail 0)
-      delaySeconds $ (calculateRetryDelay testMaxAttempts) + (Seconds 3)
+      delaySeconds $ calculateRetryDelay testMaxAttempts + Seconds 3
       Job{jobAttempts, jobStatus} <- ensureJobId conn tname jobId
       assertEqual "Exepcting job to be in Failed status" Job.Failed jobStatus
       assertEqual ("Expecting job attempts to be 3. Found " <> show jobAttempts)  3 jobAttempts
@@ -531,7 +531,7 @@ timeGen t d = do
   pure $ Time.timeSince t (fromInteger i) u d
 
 anyTimeGen :: MonadGen m => UTCTime -> m UTCTime
-anyTimeGen t = (Gen.element (enumFrom Time.Ago)) >>= (timeGen t)
+anyTimeGen t = Gen.element (enumFrom Time.Ago) >>= timeGen t
 
 futureTimeGen :: MonadGen m => UTCTime -> m UTCTime
 futureTimeGen t = timeGen t Time.FromThat
@@ -584,7 +584,7 @@ genFilter t = do
     Nothing -> Gen.maybe (anyTimeGen t)
     Just x -> Gen.maybe (futureTimeGen x)
   orderClause <- Gen.maybe ((,) <$> (Gen.element $ enumFrom Web.OrdCreatedAt) <*> (Gen.element $ enumFrom Web.Asc))
-  limitOffset <- Gen.maybe ((,) <$> (Gen.int (Range.constant 5 10)) <*> (Gen.int (Range.constant 0 30)))
+  limitOffset <- Gen.maybe ((,) <$> Gen.int (Range.constant 5 10) <*> Gen.int (Range.constant 0 30))
   runAfter <- Gen.maybe (futureTimeGen t)
   pure Web.blankFilter
     { filterStatuses = statuses
@@ -602,21 +602,21 @@ filterJobs :: Filter -> [Job] -> [Job]
 filterJobs Web.Filter{filterStatuses, filterCreatedAfter, filterCreatedBefore, filterUpdatedAfter, filterUpdatedBefore, filterOrder, filterPage, filterRunAfter} js =
   applyLimitOffset $
   applyOrdering (fromMaybe (Web.OrdUpdatedAt, Web.Desc) filterOrder) $
-  (flip DL.filter) js $ \j -> (filterByStatus j) &&
-                              (filterByCreatedAfter j) &&
-                              (filterByCreatedBefore j) &&
-                              (filterByUpdatedAfter j) &&
-                              (filterByUpdatedBefore j) &&
-                              (filterByRunAfter j)
+  flip DL.filter js $ \j -> filterByStatus j &&
+                              filterByCreatedAfter j &&
+                              filterByCreatedBefore j &&
+                              filterByUpdatedAfter j &&
+                              filterByUpdatedBefore j &&
+                              filterByRunAfter j
   where
-    applyLimitOffset = maybe Prelude.id (\(l, o) -> (Prelude.take l). (Prelude.drop o)) filterPage
+    applyLimitOffset = maybe Prelude.id (\(l, o) -> Prelude.take l . Prelude.drop o) filterPage
 
     applyOrdering (fld, dir) lst =
       let comparer = resultOrder $ case fld of
-            Web.OrdCreatedAt -> (comparing jobCreatedAt)
-            Web.OrdUpdatedAt -> (comparing jobUpdatedAt)
-            Web.OrdLockedAt -> (comparing jobLockedAt)
-            Web.OrdStatus -> (comparing jobStatus)
+            Web.OrdCreatedAt -> comparing jobCreatedAt
+            Web.OrdUpdatedAt -> comparing jobUpdatedAt
+            Web.OrdLockedAt -> comparing jobLockedAt
+            Web.OrdStatus -> comparing jobStatus
             Web.OrdJobType -> comparing Job.defaultJobType
           resultOrder fn x y = case fn x y of
             EQ -> compare (Down $ jobId x) (Down $ jobId y)

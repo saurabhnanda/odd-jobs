@@ -216,7 +216,7 @@ jobWorkerName :: IO String
 jobWorkerName = do
   pid <- getProcessID
   hname <- getHostName
-  pure $ hname ++ ":" ++ (show pid)
+  pure $ hname ++ ":" ++ show pid
 
 -- | If you are writing SQL queries where you want to return ALL columns from
 -- the jobs table it is __recommended__ that you do not issue a @SELECT *@ or
@@ -288,7 +288,7 @@ findJobByIdIO :: Connection -> TableName -> JobId -> IO (Maybe Job)
 findJobByIdIO conn tname jid = PGS.query conn findJobByIdQuery (tname, jid) >>= \case
   [] -> pure Nothing
   [j] -> pure (Just j)
-  _js -> Prelude.error $ "Not expecting to find multiple jobs by id=" <> (show jid)
+  _js -> Prelude.error $ "Not expecting to find multiple jobs by id=" <> show jid
 
 
 saveJobQuery :: PGS.Query
@@ -316,9 +316,9 @@ saveJobIO conn tname Job{jobRunAt, jobStatus, jobPayload, jobLastError, jobAttem
         , jobId
         )
   case rs of
-    [] -> Prelude.error $ "Could not find job while updating it id=" <> (show jobId)
+    [] -> Prelude.error $ "Could not find job while updating it id=" <> show jobId
     [j] -> pure j
-    _js -> Prelude.error $ "Not expecting multiple rows to ber returned when updating job id=" <> (show jobId)
+    _js -> Prelude.error $ "Not expecting multiple rows to ber returned when updating job id=" <> show jobId
 
 deleteJob :: (HasJobRunner m) => JobId -> m ()
 deleteJob jid = do
@@ -388,13 +388,13 @@ runJobWithTimeout timeoutSec job = do
 
 runJob :: (HasJobRunner m) => JobId -> m ()
 runJob jid = do
-  (findJobById jid) >>= \case
+  findJobById jid >>= \case
     Nothing -> Prelude.error $ "Could not find job id=" <> show jid
     Just job -> do
       startTime <- liftIO getCurrentTime
       lockTimeout <- getDefaultJobTimeout
       log LevelInfo $ LogJobStart job
-      (flip catches) [Handler $ timeoutHandler job startTime, Handler $ exceptionHandler job startTime] $ do
+      flip catches [Handler $ timeoutHandler job startTime, Handler $ exceptionHandler job startTime] $ do
         runJobWithTimeout lockTimeout job
         endTime <- liftIO getCurrentTime
         shouldDeleteJob <- deleteSuccessfulJobs
@@ -420,8 +420,8 @@ runJob jid = do
       newJob <- saveJob job{ jobStatus=newStatus
                            , jobLockedBy=Nothing
                            , jobLockedAt=Nothing
-                           , jobLastError=(Just $ toJSON $ show e) -- TODO: convert errors to json properly
-                           , jobRunAt=(addUTCTime (fromIntegral $ unSeconds backoffInSeconds) t)
+                           , jobLastError=Just $ toJSON $ show e -- TODO: convert errors to json properly
+                           , jobRunAt=addUTCTime (fromIntegral $ unSeconds backoffInSeconds) t
                            }
       case fromException e :: Maybe TimeoutException of
         Nothing -> log logLevel $ LogJobFailed newJob e failureMode runTime
@@ -440,7 +440,7 @@ restartUponCrash name_ action = do
   traceM "restartUponCrash top"
   a <- async action
   finally (waitCatch a >>= fn) $ do
-    (log LevelInfo $ LogText $ "Received shutdown: " <> toS name_)
+    log LevelInfo $ LogText $ "Received shutdown: " <> toS name_
     cancel a
   where
     fn x = do
@@ -480,7 +480,7 @@ waitForJobs = do
     as -> do
       tid <- myThreadId
       void $ waitAnyCatch as
-      log LevelDebug $ LogText $ toS $ "Waiting for " <> show (DL.length as) <> " jobs to complete before shutting down. myThreadId=" <> (show tid)
+      log LevelDebug $ LogText $ toS $ "Waiting for " <> show (DL.length as) <> " jobs to complete before shutting down. myThreadId=" <> show tid
       delaySeconds (Seconds 1)
       waitForJobs
 
@@ -490,7 +490,7 @@ getConcurrencyControlFn = getConcurrencyControl >>= \case
   UnlimitedConcurrentJobs -> pure $ pure True
   MaxConcurrentJobs maxJobs -> pure $ do
     curJobs <- getRunnerEnv >>= (readIORef . envJobThreadsRef)
-    pure $ (DL.length curJobs) < maxJobs
+    pure $ DL.length curJobs < maxJobs
   DynamicConcurrency fn -> pure $ liftIO fn
 
 
@@ -504,9 +504,9 @@ jobPollingIO pollerDbConn processName tname lockTimeout = do
              , processName
              , tname
              , t
-             , (In [Queued, Retry])
+             , In [Queued, Retry]
              , Locked
-             , (addUTCTime (fromIntegral $ negate $ unSeconds lockTimeout) t))
+             , addUTCTime (fromIntegral $ negate $ unSeconds lockTimeout) t)
 
 -- | Executes 'jobPollingSql' every 'cfgPollingInterval' seconds to pick up jobs
 -- for execution. Uses @UPDATE@ along with @SELECT...FOR UPDATE@ to efficiently
@@ -550,7 +550,7 @@ jobPoller = do
               void $ async $ runJob jid
               pure noDelayAction
 
-            x -> error $ "WTF just happened? I was supposed to get only a single row, but got: " ++ (show x))
+            x -> error $ "WTF just happened? I was supposed to get only a single row, but got: " ++ show x)
   where
     delayAction = delaySeconds =<< getPollingInterval
     noDelayAction = pure ()
@@ -568,15 +568,15 @@ jobEventListener = do
 
   let tryLockingJob jid = do
         let q = "UPDATE ? SET status=?, locked_at=now(), locked_by=?, attempts=attempts+1 WHERE id=? AND status in ? RETURNING id"
-        (withDbConnection $ \conn -> (liftIO $ PGS.query conn q (tname, Locked, jwName, jid, In [Queued, Retry]))) >>= \case
+        (withDbConnection $ \conn -> liftIO $ PGS.query conn q (tname, Locked, jwName, jid, In [Queued, Retry])) >>= \case
           [] -> do
             log LevelDebug $ LogText $ toS $ "Job was locked by someone else before I could start. Skipping it. JobId=" <> show jid
             pure Nothing
           [Only (_ :: JobId)] -> pure $ Just jid
-          x -> error $ "WTF just happned? Was expecting a single row to be returned, received " ++ (show x)
+          x -> error $ "WTF just happned? Was expecting a single row to be returned, received " ++ show x
 
   withResource pool $ \monitorDbConn -> do
-    void $ liftIO $ PGS.execute monitorDbConn ("LISTEN ?") (Only $ pgEventName tname)
+    void $ liftIO $ PGS.execute monitorDbConn "LISTEN ?" (Only $ pgEventName tname)
     forever $ do
       log LevelDebug $ LogText "[LISTEN/NOTIFY] Event loop"
       notif <- liftIO $ getNotification monitorDbConn
@@ -585,16 +585,16 @@ jobEventListener = do
         True -> do
           let pload = notificationData notif
           log LevelDebug $ LogText $ toS $ "NOTIFY | " <> show pload
-          case (eitherDecode $ toS pload) of
+          case eitherDecode $ toS pload of
             Left e -> log LevelError $ LogText $ toS $  "Unable to decode notification payload received from Postgres. Payload=" <> show pload <> " Error=" <> show e
 
             -- Checking if job needs to be fired immediately AND it is not already
             -- taken by some othe thread, by the time it got to us
-            Right (v :: Value) -> case (Aeson.parseMaybe parser v) of
+            Right (v :: Value) -> case Aeson.parseMaybe parser v of
               Nothing -> log LevelError $ LogText $ toS $ "Unable to extract id/run_at/locked_at from " <> show pload
               Just (jid, runAt_, mLockedAt_) -> do
                 t <- liftIO getCurrentTime
-                if (runAt_ <= t) && (isNothing mLockedAt_)
+                if (runAt_ <= t) && isNothing mLockedAt_
                   then do log LevelDebug $ LogText $ toS $ "Job needs needs to be run immediately. Attempting to fork in background. JobId=" <> show jid
                           void $ async $ do
                             -- Let's try to lock the job first... it is possible that it has already
@@ -654,12 +654,12 @@ scheduleJob :: ToJSON p
             -> IO Job
 scheduleJob conn tname payload runAt = do
   let args = ( tname, runAt, Queued, toJSON payload, Nothing :: Maybe Value, 0 :: Int, Nothing :: Maybe Text, Nothing :: Maybe Text )
-      queryFormatter = toS <$> (PGS.formatQuery conn createJobQuery args)
+      queryFormatter = toS <$> PGS.formatQuery conn createJobQuery args
   rs <- PGS.query conn createJobQuery args
   case rs of
-    [] -> (Prelude.error . (<> "Not expecting a blank result set when creating a job. Query=")) <$> queryFormatter
+    [] -> Prelude.error . (<> "Not expecting a blank result set when creating a job. Query=") <$> queryFormatter
     [r] -> pure r
-    _ -> (Prelude.error . (<> "Not expecting multiple rows when creating a single job. Query=")) <$> queryFormatter 
+    _ -> Prelude.error . (<> "Not expecting multiple rows when creating a single job. Query=") <$> queryFormatter 
 
 
 -- getRunnerEnv :: (HasJobRunner m) => m RunnerEnv

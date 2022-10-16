@@ -65,7 +65,7 @@ data Routes route = Routes
 
 
 type FinalAPI =
-  (ToServant Routes AsApi) :<|>
+  ToServant Routes AsApi :<|>
   "assets" :> StaticAssetRoutes
 
 data Env = Env
@@ -106,14 +106,14 @@ server :: forall m . (MonadIO m)
        -> (forall a . Handler a -> m a)
        -> ServerT FinalAPI m
 server cfg env nt =
-  (toServant routeServer) :<|> staticAssetServer
+  toServant routeServer :<|> staticAssetServer
   where
     routeServer :: Routes (AsServerT m)
     routeServer = Routes
-      { rFilterResults = nt . (filterResults cfg env)
-      , rEnqueue = nt . (enqueueJob cfg env)
-      , rCancel = nt . (cancelJob cfg env)
-      , rRunNow = nt . (runJobNow cfg env)
+      { rFilterResults = nt . filterResults cfg env
+      , rEnqueue = nt . enqueueJob cfg env
+      , rCancel = nt . cancelJob cfg env
+      , rRunNow = nt . runJobNow cfg env
       , rRefreshJobTypes = nt $ refreshJobTypes cfg env
       , rRefreshJobRunners = nt $ refreshJobRunners cfg env
       }
@@ -122,10 +122,10 @@ server2 :: UIConfig
         -> Env
         -> Routes AsServer
 server2 cfg env = Routes
-  { rFilterResults = (filterResults cfg env)
-  , rEnqueue = (enqueueJob cfg env)
-  , rCancel = (cancelJob cfg env)
-  , rRunNow = (runJobNow cfg env)
+  { rFilterResults = filterResults cfg env
+  , rEnqueue = enqueueJob cfg env
+  , rCancel = cancelJob cfg env
+  , rRunNow = runJobNow cfg env
   , rRefreshJobTypes = refreshJobTypes cfg env
   , rRefreshJobRunners = refreshJobRunners cfg env
   }
@@ -185,8 +185,8 @@ filterResults :: UIConfig
 filterResults cfg@UIConfig{uicfgJobToHtml, uicfgDbPool} Env{..}  mFilter = do
   let filters = fromMaybe mempty mFilter
   (jobs, runningCount) <- liftIO $ Pool.withResource uicfgDbPool $ \conn -> (,)
-    <$> (filterJobs cfg conn filters)
-    <*> (countJobs cfg conn filters{ filterStatuses = [Job.Locked] })
+    <$> filterJobs cfg conn filters
+    <*> countJobs cfg conn filters{ filterStatuses = [Job.Locked] }
   t <- liftIO getCurrentTime
   js <- liftIO (DL.zip jobs <$> uicfgJobToHtml jobs)
   allJobTypes <- readIORef envJobTypesRef

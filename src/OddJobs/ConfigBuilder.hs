@@ -66,15 +66,15 @@ mkConfig :: (LogLevel -> LogEvent -> IO ())
 mkConfig logger tname dbpool ccControl jrunner configOverridesFn =
   let cfg = configOverridesFn $ Config
             { cfgPollingInterval = defaultPollingInterval
-            , cfgOnJobSuccess = (const $ pure ())
+            , cfgOnJobSuccess = const $ pure ()
             , cfgOnJobFailed = []
             , cfgJobRunner = jrunner
             , cfgLogger = logger
             , cfgDbPool = dbpool
-            , cfgOnJobStart = (const $ pure ())
+            , cfgOnJobStart = const $ pure ()
             , cfgDefaultMaxAttempts = 10
             , cfgTableName = tname
-            , cfgOnJobTimeout = (const $ pure ())
+            , cfgOnJobTimeout = const $ pure ()
             , cfgConcurrencyControl = ccControl
             , cfgJobType = defaultJobType
             , cfgDefaultJobTimeout = Seconds 600
@@ -111,7 +111,7 @@ mkUIConfig logger tname dbpool configOverridesFn =
             , uicfgTableName = tname
             , uicfgJobType = defaultJobType
             , uicfgJobToHtml = defaultJobsToHtml (uicfgJobType cfg)
-            , uicfgAllJobTypes = (defaultDynamicJobTypes (uicfgTableName cfg) (uicfgJobTypeSql cfg))
+            , uicfgAllJobTypes = defaultDynamicJobTypes (uicfgTableName cfg) (uicfgJobTypeSql cfg)
             , uicfgJobTypeSql = defaultJobTypeSql
             }
   in cfg
@@ -140,7 +140,7 @@ defaultLogStr jobTypeFn logLevel logEvent =
                     FailPermanent -> "Failed (permanent)"
         in tag <> " | " <> jobToLogStr j <> " | runtime=" <> (toLogStr $ show t) <> " | error=" <> (toLogStr $ show e)
       LogJobSuccess j t ->
-        "Success | " <> (jobToLogStr j) <> " | runtime=" <> (toLogStr $ show t)
+        "Success | " <> jobToLogStr j <> " | runtime=" <> (toLogStr $ show t)
       LogJobTimeout j@Job{jobLockedAt, jobLockedBy} ->
         "Timeout | " <> jobToLogStr j <> " | lockedBy=" <> (toLogStr $ maybe  "unknown" unJobRunnerName jobLockedBy) <>
         " lockedAt=" <> (toLogStr $ maybe "unknown" show jobLockedAt)
@@ -288,14 +288,14 @@ withConnectionPool connConfig action = withRunInIO $ \runInIO -> do
       case connConfig of
 #if MIN_VERSION_resource_pool(0,3,0)
         Left connString ->
-          newPool $ PoolConfig (PGS.connectPostgreSQL connString) PGS.close (fromIntegral $ 2 * (unSeconds defaultPollingInterval)) 8
+          newPool $ PoolConfig (PGS.connectPostgreSQL connString) PGS.close (fromIntegral $ 2 * unSeconds defaultPollingInterval) 8
         Right connInfo ->
-          newPool $ PoolConfig (PGS.connect connInfo) PGS.close (fromIntegral $ 2 * (unSeconds defaultPollingInterval)) 8
+          newPool $ PoolConfig (PGS.connect connInfo) PGS.close (fromIntegral $ 2 * unSeconds defaultPollingInterval) 8
 #else
         Left connString ->
-          createPool (PGS.connectPostgreSQL connString) PGS.close 1 (fromIntegral $ 2 * (unSeconds defaultPollingInterval)) 8
+          createPool (PGS.connectPostgreSQL connString) PGS.close 1 (fromIntegral $ 2 * unSeconds defaultPollingInterval) 8
         Right connInfo ->
-          createPool (PGS.connect connInfo) PGS.close 1 (fromIntegral $ 2 * (unSeconds defaultPollingInterval)) 8
+          createPool (PGS.connect connInfo) PGS.close 1 (fromIntegral $ 2 * unSeconds defaultPollingInterval) 8
 #endif
 
 -- | A convenience function to help you define a timed-logger with some sensible
@@ -308,8 +308,8 @@ defaultTimedLogger :: FLogger.TimedFastLogger
 defaultTimedLogger logger logStrFn logLevel logEvent =
   if logLevel == LevelDebug
   then pure ()
-  else logger $ \t -> (toLogStr t) <> " | " <>
-                      (logStrFn logLevel logEvent) <>
+  else logger $ \t -> toLogStr t <> " | " <>
+                      logStrFn logLevel logEvent <>
                       "\n"
 
 
@@ -318,7 +318,7 @@ defaultJsonLogEvent logEvent =
   case logEvent of
     LogJobStart job ->
       Aeson.object [ "tag" Aeson..= ("LogJobStart" :: Text)
-                   , "contents" Aeson..= (defaultJsonJob job) ]
+                   , "contents" Aeson..= defaultJsonJob job ]
     LogJobSuccess job runTime ->
       Aeson.object [ "tag" Aeson..= ("LogJobSuccess" :: Text)
                    , "contents" Aeson..= (defaultJsonJob job, runTime) ]
@@ -327,7 +327,7 @@ defaultJsonLogEvent logEvent =
                    , "contents" Aeson..= (defaultJsonJob job, show e, defaultJsonFailureMode fm, runTime) ]
     LogJobTimeout job ->
       Aeson.object [ "tag" Aeson..= ("LogJobTimeout" :: Text)
-                   , "contents" Aeson..= (defaultJsonJob job) ]
+                   , "contents" Aeson..= defaultJsonJob job ]
     LogPoll ->
       Aeson.object [ "tag" Aeson..= ("LogJobPoll" :: Text)]
     LogWebUIRequest ->

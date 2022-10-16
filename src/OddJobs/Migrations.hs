@@ -69,6 +69,6 @@ createJobTable conn tname = void $ do
     , fnName
     )
   where
-    fnName = PGS.Identifier $ "notify_job_monitor_for_" <> (getTnameTxt tname)
-    trgName = PGS.Identifier $ "trg_notify_job_monitor_for_" <> (getTnameTxt tname)
+    fnName = PGS.Identifier $ "notify_job_monitor_for_" <> getTnameTxt tname
+    trgName = PGS.Identifier $ "trg_notify_job_monitor_for_" <> getTnameTxt tname
     getTnameTxt (PGS.QualifiedIdentifier _ tname') = tname'

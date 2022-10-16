@@ -181,8 +181,8 @@ filterJobsQuery UIConfig{uicfgTableName, uicfgJobTypeSql} Filter{..} =
         let qFragment = "(" <> uicfgJobTypeSql <> ")=?"
             build ys (q, vs) = case ys of
               [] -> (q, vs)
-              [y] -> (qFragment <> q, (toField y):vs)
-              (y:ys_) -> build ys_ (" OR " <> qFragment <> q, (toField y):vs)
+              [y] -> (qFragment <> q, toField y : vs)
+              (y:ys_) -> build ys_ (" OR " <> qFragment <> q, toField y : vs)
         in Just $ build xs (mempty, [])
 
     jobRunnerClause :: Maybe (Query, [Action])
@@ -275,13 +275,13 @@ sideNav Routes{..} jobTypes jobRunnerNames _t filter@Filter{..} = do
       div_ [ class_ "card" ] $ do
         ul_ [ class_ "list-group list-group-flush" ] $ do
           li_ [ class_ ("list-group-item " <> if filterStatuses == [] then "active-nav" else "") ] $ do
-            let lnk = (rFilterResults $ Just filter{filterStatuses = [], filterPage = (OddJobs.Web.filterPage blankFilter)})
+            let lnk = rFilterResults $ Just filter{filterStatuses = [], filterPage = OddJobs.Web.filterPage blankFilter}
             a_ [ href_ lnk ] $ do
               "all"
               -- span_ [ class_ "badge badge-pill badge-secondary float-right" ] "12"
           forM_ ((\\) (enumFrom minBound) [Job.Success]) $ \st -> do
-            li_ [ class_ ("list-group-item " <> if (st `elem` filterStatuses) then "active-nav" else "") ] $ do
-              let lnk = (rFilterResults $ Just filter{filterStatuses = [st], filterPage = Nothing})
+            li_ [ class_ ("list-group-item " <> if st `elem` filterStatuses then "active-nav" else "") ] $ do
+              let lnk = rFilterResults $ Just filter{filterStatuses = [st], filterPage = Nothing}
               a_ [ href_ lnk ] $ do
                 toHtml $ toText st
                 -- span_ [ class_ "badge badge-pill badge-secondary float-right" ] "12"
@@ -296,10 +296,10 @@ sideNav Routes{..} jobTypes jobRunnerNames _t filter@Filter{..} = do
       div_ [ class_ "card" ] $ do
         ul_ [ class_ "list-group list-group-flush" ] $ do
           li_ [ class_ ("list-group-item " <> if filterJobRunner == [] then "active-nav" else "") ] $ do
-            let lnk = (rFilterResults $ Just filter{filterJobRunner = [], filterPage = (OddJobs.Web.filterPage blankFilter)})
+            let lnk = rFilterResults $ Just filter{filterJobRunner = [], filterPage = OddJobs.Web.filterPage blankFilter}
             a_ [ href_ lnk ] "all"
           forM_ jobRunnerNames $ \jr -> do
-            li_ [ class_ ("list-group-item" <> if (jr `elem` filterJobRunner) then " active-nav" else "")] $ do
+            li_ [ class_ ("list-group-item" <> if jr `elem` filterJobRunner then " active-nav" else "")] $ do
               a_ [ href_ "#" ] $ toHtml $ unJobRunnerName jr
 
     jobTypeFilters = do
@@ -312,10 +312,10 @@ sideNav Routes{..} jobTypes jobRunnerNames _t filter@Filter{..} = do
       div_ [ class_ "card" ] $ do
         ul_ [ class_ "list-group list-group-flush" ] $ do
           li_ [ class_ ("list-group-item " <> if filterJobTypes == [] then "active-nav" else "") ] $ do
-            let lnk = (rFilterResults $ Just filter{filterJobTypes = [], filterPage = (OddJobs.Web.filterPage blankFilter)})
+            let lnk = rFilterResults $ Just filter{filterJobTypes = [], filterPage = OddJobs.Web.filterPage blankFilter}
             a_ [ href_ lnk ] "all"
           forM_ jobTypes $ \jt -> do
-            li_ [ class_ ("list-group-item" <> if (jt `elem` filterJobTypes) then " active-nav" else "")] $ do
+            li_ [ class_ ("list-group-item" <> if jt `elem` filterJobTypes then " active-nav" else "")] $ do
               a_ [ href_ (rFilterResults $ Just filter{filterJobTypes=[jt]}) ] $ toHtml jt
 
 searchBar :: Routes -> UTCTime -> Filter -> Html ()
@@ -359,10 +359,10 @@ timeDuration from to = (diff, str)
   where
     str = if diff <= 0
           then "under 1s"
-          else (if d>0 then (show d) <> "d" else "") <>
-               (if m>0 then (show m) <> "m" else "") <>
-               (if s>0 then (show s) <> "s" else "")
-    diff = (abs $ round $ diffUTCTime from to)
+          else (if d>0 then show d <> "d" else "") <>
+               (if m>0 then show m <> "m" else "") <>
+               (if s>0 then show s <> "s" else "")
+    diff = abs $ round $ diffUTCTime from to
     (m', s) = diff `divMod` 60
     (h', m) = m' `divMod` 60
     (d, _h) = h' `divMod` 24
@@ -392,13 +392,13 @@ jobRow routes t (job@Job{..}, jobHtml) = do
     td_ jobHtml
     td_ $ do
       let actionsFn = case jobStatus of
-            Job.Success -> (const mempty)
+            Job.Success -> const mempty
             Job.Failed -> actionsFailed
             Job.Queued -> if jobRunAt > t
                           then actionsFuture
                           else actionsWaiting
             Job.Retry -> actionsRetry
-            Job.Locked -> (const mempty)
+            Job.Locked -> const mempty
       actionsFn routes job
 
 
@@ -492,13 +492,13 @@ resultsPanel routes@Routes{..} t filter@Filter{filterPage} js runningCount = do
     nextLink = do
       let (extraClass, lnk) = case filterPage of
             Nothing ->
-              if (DL.length js) < 10
+              if DL.length js < 10
               then ("disabled", "")
-              else ("", (rFilterResults $ Just $ filter {filterPage = Just (10, 10)}))
+              else ("", rFilterResults $ Just $ filter {filterPage = Just (10, 10)})
             Just (l, o) ->
-              if (DL.length js) < l
+              if DL.length js < l
               then ("disabled", "")
-              else ("", (rFilterResults $ Just $ filter {filterPage = Just (l, o + l)}))
+              else ("", rFilterResults $ Just $ filter {filterPage = Just (l, o + l)})
       li_ [ class_ ("page-item next " <> extraClass) ] $ do
         a_ [ class_ "page-link", href_ lnk ] "Next"
 

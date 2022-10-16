@@ -164,12 +164,12 @@ defaultStopCommand :: StopArgs
 defaultStopCommand StopArgs{..} = do
   progName <- getProgName
   -- pid <- read <$> (readFile shutPidFile)
-  if (shutTimeout == Seconds 0)
+  if shutTimeout == Seconds 0
     then Daemon.brutalKill shutPidFile
     else do putStrLn $ "Sending sigINT to " <> show progName <>
               " and waiting " <> (show $ unSeconds shutTimeout) <> " seconds for graceful stop"
             readFile shutPidFile >>= Sig.signalProcess Sig.sigINT . read
-            (Async.race (delaySeconds shutTimeout) checkProcessStatus) >>= \case
+            Async.race (delaySeconds shutTimeout) checkProcessStatus >>= \case
               Right _ -> do
                 putStrLn $ progName <> " seems to have exited gracefully."
                 Exit.exitSuccess
@@ -204,7 +204,7 @@ data Args = Args
 
 -- | The top-level command-line parser
 argParser :: CliType -> Parser Args
-argParser cliType = Args <$> (commandParser cliType)
+argParser cliType = Args <$> commandParser cliType
 
 -- ** Top-level command parser
 
@@ -261,7 +261,7 @@ startCmdParser cliType = Start
   <*> (case cliType of
          CliOnlyJobRunner _ -> pure Nothing
          CliOnlyWebUi _     -> Just <$> uiStartArgsParser
-         CliBoth _ _        -> (Just <$> uiStartArgsParser) <|> (pure Nothing)
+         CliBoth _ _        -> (Just <$> uiStartArgsParser) <|> pure Nothing
       )
 
 data WebUiAuth
@@ -342,7 +342,7 @@ defaultCliParserPrefs = prefs $
 
 defaultCliInfo :: CliType -> ParserInfo Args
 defaultCliInfo cliType =
-  info ((argParser cliType)  <**> helper) fullDesc
+  info (argParser cliType <**> helper) fullDesc
 
 -- defaultDaemonOptions :: DaemonOptions
 -- defaultDaemonOptions = DaemonOptions

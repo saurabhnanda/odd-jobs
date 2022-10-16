@@ -71,7 +71,7 @@ In this example, the core job-runner function is in the `IO` monad. In all proba
 \begin{code}
 myJobRunner :: Job -> IO ()
 myJobRunner job = do
-  (throwParsePayload job) >>= \case
+  throwParsePayload job >>= \case
     SendWelcomeEmail _userId -> do
       putStrLn $ "This should call the function that actually sends the welcome email. " <>
         "\nWe are purposely waiting 60 seconds before completing this job so that graceful shutdown can be demonstrated."
