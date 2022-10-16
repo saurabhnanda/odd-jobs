@@ -136,7 +136,7 @@ refreshJobRunners :: UIConfig
                   -> Handler NoContent
 refreshJobRunners cfg@UIConfig{} Env{envRoutes=Web.Routes{..}, envJobRunnersRef} = do
   allJobRunners <- fetchAllJobRunners cfg
-  atomicModifyIORef' envJobRunnersRef (\_ -> (allJobRunners, ()))
+  atomicModifyIORef' envJobRunnersRef (const (allJobRunners, ()))
   throwError $ err302{errHeaders=[("Location", toS $ rFilterResults Nothing)]}
 
 refreshJobTypes :: UIConfig
@@ -144,7 +144,7 @@ refreshJobTypes :: UIConfig
                 -> Handler NoContent
 refreshJobTypes cfg Env{envRoutes=Web.Routes{..}, envJobTypesRef} = do
   allJobTypes <- fetchAllJobTypes cfg
-  atomicModifyIORef' envJobTypesRef (\_ -> (allJobTypes, ()))
+  atomicModifyIORef' envJobTypesRef (const (allJobTypes, ()))
   throwError $ err302{errHeaders=[("Location", toS $ rFilterResults Nothing)]}
 
 cancelJob :: UIConfig
