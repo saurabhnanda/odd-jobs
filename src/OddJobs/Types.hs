@@ -205,9 +205,10 @@ instance (StringConv Text a) => FromText (Either a Status) where
     x -> Left $ toS $ "Unknown job status: " <> x
 
 instance FromField Status where
-  fromField f mBS = (fromText <$> (fromField f mBS)) >>= \case
+  fromField f mBS = fromField f mBS >>= (\case
     Left e -> FromField.returnError PGS.ConversionFailed f e
-    Right s -> pure s
+    Right s -> pure s)
+    . fromText
 
 instance ToField Status where
   toField s = toField $ toText s
