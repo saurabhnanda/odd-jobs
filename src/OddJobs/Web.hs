@@ -503,5 +503,5 @@ resultsPanel routes@Routes{..} t filter@Filter{filterPage} js runningCount = do
         a_ [ class_ "page-link", href_ lnk ] "Next"
 
 ariaExpanded_ :: Text -> Attribute
-ariaExpanded_ v = makeAttribute "aria-expanded" v
+ariaExpanded_ = makeAttribute "aria-expanded"
 

@@ -505,7 +505,7 @@ data JobEvent = JobStart
 
 
 payloadDelay :: Seconds -> JobPayload -> Seconds
-payloadDelay jobPollingInterval pload = payloadDelay_ (Seconds 0) pload
+payloadDelay jobPollingInterval = payloadDelay_ (Seconds 0)
   where
     payloadDelay_ total p =
       let defaultDelay x = total + x + jobPollingInterval

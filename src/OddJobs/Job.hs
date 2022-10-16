@@ -668,14 +668,14 @@ scheduleJob conn tname payload runAt = do
 eitherParsePayload :: (FromJSON a)
                    => Job
                    -> Either String a
-eitherParsePayload job =
-  eitherParsePayloadWith parseJSON job
+eitherParsePayload =
+  eitherParsePayloadWith parseJSON
 
 throwParsePayload :: (FromJSON a)
                   => Job
                   -> IO a
-throwParsePayload job =
-  throwParsePayloadWith parseJSON job
+throwParsePayload =
+  throwParsePayloadWith parseJSON
 
 eitherParsePayloadWith :: (Aeson.Value -> Aeson.Parser a)
                        -> Job

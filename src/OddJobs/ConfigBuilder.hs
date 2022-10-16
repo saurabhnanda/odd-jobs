@@ -337,7 +337,7 @@ defaultJsonLogEvent logEvent =
                    , "contents" Aeson..= t ]
 
 defaultJsonJob :: Job -> Aeson.Value
-defaultJsonJob job = genericToJSON Aeson.defaultOptions job
+defaultJsonJob = genericToJSON Aeson.defaultOptions
 
 defaultJsonFailureMode :: FailureMode -> Aeson.Value
-defaultJsonFailureMode fm = genericToJSON Aeson.defaultOptions fm
+defaultJsonFailureMode = genericToJSON Aeson.defaultOptions
