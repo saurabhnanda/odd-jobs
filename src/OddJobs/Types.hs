@@ -20,7 +20,7 @@ import Data.Text (Text)
 import GHC.Generics
 import Data.Aeson as Aeson hiding (Success)
 import Data.String.Conv
-import Lucid (Html(..))
+import Lucid (Html)
 import Data.Pool (Pool)
 import Control.Monad.Logger (LogLevel)
 
