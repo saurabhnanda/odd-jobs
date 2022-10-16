@@ -18,4 +18,3 @@
 - ignore: {name: "Use newtype instead of data"} # 1 hint
 - ignore: {name: "Use null"} # 3 hints
 - ignore: {name: "Use optional"} # 1 hint
-- ignore: {name: "Use void"} # 1 hint

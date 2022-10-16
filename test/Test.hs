@@ -12,6 +12,7 @@ import Data.Pool as Pool
 import Test.Tasty.HUnit
 import Debug.Trace
 -- import Control.Exception.Lifted (finally, catch, bracket)
+import Control.Monad (void)
 import Control.Monad.Logger
 import Control.Monad.Reader
 import Data.Aeson as Aeson
@@ -143,7 +144,7 @@ jobRunner Job{jobPayload, jobAttempts} = case (fromJSON jobPayload) of
   Success (j :: JobPayload) ->
     let recur pload idx = case pload of
           PayloadAlwaysFail delay -> (delaySeconds delay) >> (error $ "Forced error after " <> show delay <> " seconds")
-          PayloadSucceed delay -> (delaySeconds delay) >> pure ()
+          PayloadSucceed delay -> void $ delaySeconds delay
           PayloadFail delay innerpload -> if idx<jobAttempts
                                           then recur innerpload (idx + 1)
                                           else (delaySeconds delay) >> (error $ "Forced error after " <> show delay <> " seconds. step=" <> show idx)
