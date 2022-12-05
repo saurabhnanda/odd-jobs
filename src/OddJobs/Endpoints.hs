@@ -45,6 +45,8 @@ import UnliftIO.IORef
 import Debug.Trace
 import qualified OddJobs.ConfigBuilder as Builder
 import Servant.Static.TH (createApiAndServerDecs)
+import qualified Network.Wai as Wai
+import Data.Text.Encoding (decodeUtf8)
 
 -- startApp :: IO ()
 -- startApp = undefined
@@ -209,3 +211,35 @@ routes linkFn = Web.Routes
 
 -- absText :: Link -> Text
 -- absText l = "/" <> (toS $ show $ linkURI l)
+
+
+data OddJobsUser = OddJobsUser !Text !Text deriving (Eq, Show)
+
+defaultBasicAuth :: (Text, Text) -> BasicAuthCheck OddJobsUser
+defaultBasicAuth (user, pass) = BasicAuthCheck $ \b ->
+  let u = decodeUtf8 (basicAuthUsername b)
+      p = decodeUtf8 (basicAuthPassword b)
+  in if u==user && p==pass
+     then pure (Authorized $ OddJobsUser u p)
+     else pure BadPassword
+
+data WebUiAuth = AuthNone
+               | AuthBasic !Text !Text
+               deriving (Eq, Show)
+
+defaultWaiApp :: WebUiAuth
+              -> UIConfig
+              -> IO Wai.Application
+defaultWaiApp auth uicfg@UIConfig{..} = do
+  env <- mkEnv uicfg ("/" <>)
+  pure $ case auth of
+    AuthNone ->
+      let app = server uicfg env Prelude.id
+      in Servant.serve (Proxy :: Proxy FinalAPI) app
+    (AuthBasic u p) -> do
+      let api = Proxy :: Proxy (BasicAuth "OddJobs Admin UI" OddJobsUser :> FinalAPI)
+          ctx = defaultBasicAuth (u, p) Servant.:. EmptyContext
+          -- Now the app will receive an extra argument for OddJobsUser,
+          -- which we aren't really interested in.
+          app _ = server uicfg env Prelude.id
+       in Servant.serveWithContext api ctx app

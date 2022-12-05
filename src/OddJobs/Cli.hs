@@ -25,7 +25,6 @@ import qualified OddJobs.Endpoints as UI
 import Servant.Server as Servant
 import Servant.API
 import Data.Proxy
-import Data.Text.Encoding (decodeUtf8)
 import Network.Wai.Handler.Warp as Warp
 import Debug.Trace
 import Data.String.Conv (toS)
@@ -141,21 +140,10 @@ defaultStartCommand CommonStartArgs{..} mUIArgs cliType = do
 defaultWebUI :: UIStartArgs
              -> UIConfig
              -> IO ()
-defaultWebUI UIStartArgs{..} uicfg@UIConfig{..} = do
-  env <- UI.mkEnv uicfg ("/" <>)
-  case uistartAuth of
-    AuthNone -> do
-      let app = UI.server uicfg env Prelude.id
-      uicfgLogger LevelInfo $ LogText $ "Starting admin UI on port " <> (toS $ show uistartPort)
-      Warp.run uistartPort $ Servant.serve (Proxy :: Proxy UI.FinalAPI) app
-    (AuthBasic u p) -> do
-      let api = Proxy :: Proxy (BasicAuth "OddJobs Admin UI" OddJobsUser :> UI.FinalAPI)
-          ctx = defaultBasicAuth (u, p) :. EmptyContext
-          -- Now the app will receive an extra argument for OddJobsUser,
-          -- which we aren't really interested in.
-          app _ = UI.server uicfg env Prelude.id
-      uicfgLogger LevelInfo $ LogText $ "Starting admin UI on port " <> (toS $ show uistartPort)
-      Warp.run uistartPort $ Servant.serveWithContext api ctx app
+defaultWebUI UIStartArgs{..} uiCfg@UIConfig{uicfgLogger} = do
+  app <- UI.defaultWaiApp uistartAuth uiCfg
+  uicfgLogger LevelInfo $ LogText $ "Starting admin UI on port " <> (toS $ show uistartPort)
+  Warp.run uistartPort app
 
 {-| Used by 'defaultMain' if 'Stop' command is issued via the CLI. Sends a
 @SIGINT@ signal to the process indicated by 'shutPidFile'. Waits for a maximum
@@ -228,7 +216,7 @@ commandParser cliType = hsubparser
 
 
 data UIStartArgs = UIStartArgs
-  { uistartAuth :: !WebUiAuth
+  { uistartAuth :: !UI.WebUiAuth
   , uistartPort :: !Int
   } deriving (Eq, Show)
 
@@ -267,20 +255,16 @@ startCmdParser cliType = Start
          CliBoth _ _        -> (Just <$> uiStartArgsParser) <|> (pure Nothing)
       )
 
-data WebUiAuth
-  = AuthNone
-  | AuthBasic !Text !Text
-  deriving (Eq, Show)
 
 -- | Pick one of the following auth mechanisms for the web UI:
 --
 --   * No auth - @--web-ui-no-auth@  __NOT RECOMMENDED__
 --   * Basic auth - @--web-ui-basic-auth-user <USER>@ and
 --     @--web-ui-basic-auth-password <PASS>@
-webUiAuthParser :: Parser WebUiAuth
+webUiAuthParser :: Parser UI.WebUiAuth
 webUiAuthParser = basicAuthParser <|> noAuthParser
   where
-    basicAuthParser = AuthBasic
+    basicAuthParser = UI.AuthBasic
       <$> strOption ( long "web-ui-basic-auth-user" <>
                       metavar "USER" <>
                       help "Username for basic auth"
@@ -289,7 +273,7 @@ webUiAuthParser = basicAuthParser <|> noAuthParser
                       metavar "PASS" <>
                       help "Password for basic auth"
                     )
-    noAuthParser = flag' AuthNone
+    noAuthParser = flag' UI.AuthNone
       ( long "web-ui-no-auth" <>
         help "Start the web UI with any authentication. NOT RECOMMENDED."
       )
@@ -361,12 +345,4 @@ defaultCliInfo cliType =
 
 -- *** Basic Auth
 
-data OddJobsUser = OddJobsUser !Text !Text deriving (Eq, Show)
 
-defaultBasicAuth :: (Text, Text) -> BasicAuthCheck OddJobsUser
-defaultBasicAuth (user, pass) = BasicAuthCheck $ \b ->
-  let u = decodeUtf8 (basicAuthUsername b)
-      p = decodeUtf8 (basicAuthPassword b)
-  in if u==user && p==pass
-     then pure (Authorized $ OddJobsUser u p)
-     else pure BadPassword
