@@ -65,7 +65,7 @@ data Routes route = Routes
 
 
 type FinalAPI =
-  (ToServant Routes AsApi) :<|>
+  ToServant Routes AsApi :<|>
   "assets" :> StaticAssetRoutes
 
 data Env = Env
@@ -75,7 +75,7 @@ data Env = Env
   }
 
 mkEnv :: (MonadIO m) => UIConfig -> (Text -> Text) -> m Env
-mkEnv cfg@UIConfig{..} linksFn = do
+mkEnv cfg@UIConfig{} linksFn = do
   allJobTypes <- fetchAllJobTypes cfg
   allJobRunners <- fetchAllJobRunners cfg
   envJobTypesRef <- newIORef allJobTypes
@@ -106,14 +106,14 @@ server :: forall m . (MonadIO m)
        -> (forall a . Handler a -> m a)
        -> ServerT FinalAPI m
 server cfg env nt =
-  (toServant routeServer) :<|> staticAssetServer
+  toServant routeServer :<|> staticAssetServer
   where
     routeServer :: Routes (AsServerT m)
     routeServer = Routes
-      { rFilterResults = nt . (filterResults cfg env)
-      , rEnqueue = nt . (enqueueJob cfg env)
-      , rCancel = nt . (cancelJob cfg env)
-      , rRunNow = nt . (runJobNow cfg env)
+      { rFilterResults = nt . filterResults cfg env
+      , rEnqueue = nt . enqueueJob cfg env
+      , rCancel = nt . cancelJob cfg env
+      , rRunNow = nt . runJobNow cfg env
       , rRefreshJobTypes = nt $ refreshJobTypes cfg env
       , rRefreshJobRunners = nt $ refreshJobRunners cfg env
       }
@@ -122,10 +122,10 @@ server2 :: UIConfig
         -> Env
         -> Routes AsServer
 server2 cfg env = Routes
-  { rFilterResults = (filterResults cfg env)
-  , rEnqueue = (enqueueJob cfg env)
-  , rCancel = (cancelJob cfg env)
-  , rRunNow = (runJobNow cfg env)
+  { rFilterResults = filterResults cfg env
+  , rEnqueue = enqueueJob cfg env
+  , rCancel = cancelJob cfg env
+  , rRunNow = runJobNow cfg env
   , rRefreshJobTypes = refreshJobTypes cfg env
   , rRefreshJobRunners = refreshJobRunners cfg env
   }
@@ -134,9 +134,9 @@ server2 cfg env = Routes
 refreshJobRunners :: UIConfig
                   -> Env
                   -> Handler NoContent
-refreshJobRunners cfg@UIConfig{..} Env{envRoutes=Web.Routes{..}, envJobRunnersRef} = do
+refreshJobRunners cfg@UIConfig{} Env{envRoutes=Web.Routes{..}, envJobRunnersRef} = do
   allJobRunners <- fetchAllJobRunners cfg
-  atomicModifyIORef' envJobRunnersRef (\_ -> (allJobRunners, ()))
+  atomicModifyIORef' envJobRunnersRef (const (allJobRunners, ()))
   throwError $ err302{errHeaders=[("Location", toS $ rFilterResults Nothing)]}
 
 refreshJobTypes :: UIConfig
@@ -144,7 +144,7 @@ refreshJobTypes :: UIConfig
                 -> Handler NoContent
 refreshJobTypes cfg Env{envRoutes=Web.Routes{..}, envJobTypesRef} = do
   allJobTypes <- fetchAllJobTypes cfg
-  atomicModifyIORef' envJobTypesRef (\_ -> (allJobTypes, ()))
+  atomicModifyIORef' envJobTypesRef (const (allJobTypes, ()))
   throwError $ err302{errHeaders=[("Location", toS $ rFilterResults Nothing)]}
 
 cancelJob :: UIConfig
@@ -185,10 +185,10 @@ filterResults :: UIConfig
 filterResults cfg@UIConfig{uicfgJobToHtml, uicfgDbPool} Env{..}  mFilter = do
   let filters = fromMaybe mempty mFilter
   (jobs, runningCount) <- liftIO $ Pool.withResource uicfgDbPool $ \conn -> (,)
-    <$> (filterJobs cfg conn filters)
-    <*> (countJobs cfg conn filters{ filterStatuses = [Job.Locked] })
+    <$> filterJobs cfg conn filters
+    <*> countJobs cfg conn filters{ filterStatuses = [Job.Locked] }
   t <- liftIO getCurrentTime
-  js <- liftIO $ fmap (DL.zip jobs) $ uicfgJobToHtml jobs
+  js <- liftIO (DL.zip jobs <$> uicfgJobToHtml jobs)
   allJobTypes <- readIORef envJobTypesRef
   let navHtml = Web.sideNav envRoutes allJobTypes [] t filters
       bodyHtml = Web.resultsPanel envRoutes t filters js runningCount

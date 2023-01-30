@@ -44,7 +44,7 @@ createNotificationTrigger = "create or replace function ?() returns trigger as $
 createJobTable :: Connection -> TableName -> IO ()
 createJobTable conn tname = void $ do
   let tnameTxt = getTnameTxt tname
-  PGS.execute conn createJobTableQuery
+  _ <- PGS.execute conn createJobTableQuery
     ( tname
     , PGS.Identifier $ "idx_" <> tnameTxt <> "_created_at"
     , tname
@@ -69,6 +69,6 @@ createJobTable conn tname = void $ do
     , fnName
     )
   where
-    fnName = PGS.Identifier $ "notify_job_monitor_for_" <> (getTnameTxt tname)
-    trgName = PGS.Identifier $ "trg_notify_job_monitor_for_" <> (getTnameTxt tname)
+    fnName = PGS.Identifier $ "notify_job_monitor_for_" <> getTnameTxt tname
+    trgName = PGS.Identifier $ "trg_notify_job_monitor_for_" <> getTnameTxt tname
     getTnameTxt (PGS.QualifiedIdentifier _ tname') = tname'

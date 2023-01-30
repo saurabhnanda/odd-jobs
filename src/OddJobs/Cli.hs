@@ -6,9 +6,8 @@ module OddJobs.Cli where
 
 import Options.Applicative as Opts
 import Data.Text
-import OddJobs.Job (startJobRunner, Config(..))
-import OddJobs.Types (UIConfig(..))
-import OddJobs.Job(LogLevel(..), LogEvent(..))
+import OddJobs.Job (startJobRunner, Config(..), LogLevel(..), LogEvent(..))
+import OddJobs.Types (UIConfig(..), Seconds(..), delaySeconds)
 -- import System.Daemonize (DaemonOptions(..), daemonize)
 import qualified System.Posix.Daemon as Daemon
 import System.FilePath (FilePath)
@@ -16,7 +15,6 @@ import System.Posix.Process (getProcessID)
 import qualified System.Directory as Dir
 import qualified System.Exit as Exit
 import System.Environment (getProgName)
-import OddJobs.Types (Seconds(..), delaySeconds)
 import qualified System.Posix.Signals as Sig
 import qualified UnliftIO.Async as Async
 import UnliftIO (bracket_)
@@ -117,11 +115,10 @@ defaultStartCommand :: CommonStartArgs
                     -> CliType
                     -> IO ()
 defaultStartCommand CommonStartArgs{..} mUIArgs cliType = do
-  case startDaemonize of
-    False ->
-      coreStartupFn
-    True -> do
-      Daemon.runDetached (Just startPidFile) (Daemon.ToFile "/tmp/oddjobs.out") coreStartupFn
+  if startDaemonize then do
+    Daemon.runDetached (Just startPidFile) (Daemon.ToFile "/tmp/oddjobs.out") coreStartupFn
+  else
+    coreStartupFn
   where
     uiArgs = fromJustNote "Please specify Web UI Startup Args" $ traceShowId mUIArgs
     coreStartupFn =
@@ -146,7 +143,7 @@ defaultWebUI UIStartArgs{..} uicfg@UIConfig{..} = do
   case uistartAuth of
     AuthNone -> do
       let app = UI.server uicfg env Prelude.id
-      uicfgLogger LevelInfo $ LogText $ "Starting admin UI on port " <> (toS $ show uistartPort)
+      uicfgLogger LevelInfo $ LogText $ "Starting admin UI on port " <> toS (show uistartPort)
       Warp.run uistartPort $ Servant.serve (Proxy :: Proxy UI.FinalAPI) app
     (AuthBasic u p) -> do
       let api = Proxy :: Proxy (BasicAuth "OddJobs Admin UI" OddJobsUser :> UI.FinalAPI)
@@ -154,7 +151,7 @@ defaultWebUI UIStartArgs{..} uicfg@UIConfig{..} = do
           -- Now the app will receive an extra argument for OddJobsUser,
           -- which we aren't really interested in.
           app _ = UI.server uicfg env Prelude.id
-      uicfgLogger LevelInfo $ LogText $ "Starting admin UI on port " <> (toS $ show uistartPort)
+      uicfgLogger LevelInfo $ LogText $ "Starting admin UI on port " <> toS (show uistartPort)
       Warp.run uistartPort $ Servant.serveWithContext api ctx app
 
 {-| Used by 'defaultMain' if 'Stop' command is issued via the CLI. Sends a
@@ -167,12 +164,12 @@ defaultStopCommand :: StopArgs
 defaultStopCommand StopArgs{..} = do
   progName <- getProgName
   -- pid <- read <$> (readFile shutPidFile)
-  if (shutTimeout == Seconds 0)
+  if shutTimeout == Seconds 0
     then Daemon.brutalKill shutPidFile
     else do putStrLn $ "Sending sigINT to " <> show progName <>
-              " and waiting " <> (show $ unSeconds shutTimeout) <> " seconds for graceful stop"
-            readFile shutPidFile >>= (pure . read) >>= Sig.signalProcess Sig.sigINT
-            (Async.race (delaySeconds shutTimeout) checkProcessStatus) >>= \case
+              " and waiting " <> show (unSeconds shutTimeout) <> " seconds for graceful stop"
+            readFile shutPidFile >>= Sig.signalProcess Sig.sigINT . read
+            Async.race (delaySeconds shutTimeout) checkProcessStatus >>= \case
               Right _ -> do
                 putStrLn $ progName <> " seems to have exited gracefully."
                 Exit.exitSuccess
@@ -207,7 +204,7 @@ data Args = Args
 
 -- | The top-level command-line parser
 argParser :: CliType -> Parser Args
-argParser cliType = Args <$> (commandParser cliType)
+argParser cliType = Args <$> commandParser cliType
 
 -- ** Top-level command parser
 
@@ -264,7 +261,7 @@ startCmdParser cliType = Start
   <*> (case cliType of
          CliOnlyJobRunner _ -> pure Nothing
          CliOnlyWebUi _     -> Just <$> uiStartArgsParser
-         CliBoth _ _        -> (Just <$> uiStartArgsParser) <|> (pure Nothing)
+         CliBoth _ _        -> optional uiStartArgsParser
       )
 
 data WebUiAuth
@@ -345,7 +342,7 @@ defaultCliParserPrefs = prefs $
 
 defaultCliInfo :: CliType -> ParserInfo Args
 defaultCliInfo cliType =
-  info ((argParser cliType)  <**> helper) fullDesc
+  info (argParser cliType <**> helper) fullDesc
 
 -- defaultDaemonOptions :: DaemonOptions
 -- defaultDaemonOptions = DaemonOptions

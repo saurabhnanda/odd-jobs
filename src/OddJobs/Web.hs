@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveGeneric, NamedFieldPuns, TypeOperators, DataKinds, RecordWildCards, DeriveAnyClass #-}
+{-# LANGUAGE DeriveGeneric, NamedFieldPuns, DataKinds, RecordWildCards #-}
 {-# LANGUAGE CPP #-}
 module OddJobs.Web where
 
@@ -134,8 +134,8 @@ data Routes = Routes
 
 filterJobsQuery :: UIConfig -> Filter -> (PGS.Query, [Action])
 filterJobsQuery UIConfig{uicfgTableName, uicfgJobTypeSql} Filter{..} =
-  ( "SELECT " <> Job.concatJobDbColumns <> " FROM ?" <> whereClause <> " " <> (orderClause $ fromMaybe (OrdUpdatedAt, Desc) filterOrder) <> " " <> limitOffsetClause
-  , (toRow $ Only uicfgTableName) ++ whereActions
+  ( "SELECT " <> Job.concatJobDbColumns <> " FROM ?" <> whereClause <> " " <> orderClause (fromMaybe (OrdUpdatedAt, Desc) filterOrder) <> " " <> limitOffsetClause
+  , toRow (Only uicfgTableName) ++ whereActions
   )
   where
     orderClause (flt, dir) =
@@ -166,7 +166,7 @@ filterJobsQuery UIConfig{uicfgTableName, uicfgJobTypeSql} Filter{..} =
 
     statusClause = if Prelude.null filterStatuses
                    then Nothing
-                   else Just ("status IN ?", toRow $ (Only (In filterStatuses)))
+                   else Just ("status IN ?", toRow (Only (In filterStatuses)))
 
     createdAfterClause = Prelude.fmap (\x -> ("created_at >= ?", toRow $ Only x)) filterCreatedAfter
     createdBeforeClause = Prelude.fmap (\x -> ("created_at < ?", toRow $ Only x)) filterCreatedBefore
@@ -181,8 +181,8 @@ filterJobsQuery UIConfig{uicfgTableName, uicfgJobTypeSql} Filter{..} =
         let qFragment = "(" <> uicfgJobTypeSql <> ")=?"
             build ys (q, vs) = case ys of
               [] -> (q, vs)
-              (y:[]) -> (qFragment <> q, (toField y):vs)
-              (y:ys_) -> build ys_ (" OR " <> qFragment <> q, (toField y):vs)
+              [y] -> (qFragment <> q, toField y : vs)
+              (y:ys_) -> build ys_ (" OR " <> qFragment <> q, toField y : vs)
         in Just $ build xs (mempty, [])
 
     jobRunnerClause :: Maybe (Query, [Action])
@@ -226,10 +226,10 @@ pageNav Routes{..} = do
     div_ [ class_ "navbar-header" ] $ do
       a_ [ class_ "navbar-brand navbar-link", href_ "#", style_ "margin-left: 2px; padding: 0px;" ] $ img_ [ src_ $ rStaticAsset "assets/odd-jobs-color-logo.png", title_ "Odd Jobs Logo" ]
       button_ [ class_ "navbar-toggle collapsed", data_ "toggle" "collapse", data_ "target" "#navcol-1" ] $ do
-        span_ [ class_ "sr-only" ] $ "Toggle navigation"
-        span_ [ class_ "icon-bar" ] $ ""
-        span_ [ class_ "icon-bar" ] $ ""
-        span_ [ class_ "icon-bar" ] $ ""
+        span_ [ class_ "sr-only" ] "Toggle navigation"
+        span_ [ class_ "icon-bar" ] ""
+        span_ [ class_ "icon-bar" ] ""
+        span_ [ class_ "icon-bar" ] ""
     -- div_ [ class_ "collapse navbar-collapse", id_ "navcol-1" ] $ ul_ [ class_ "nav navbar-nav navbar-right" ] $ do
     --   li_ [ class_ "active", role_ "presentation" ] $ a_ [ href_ "#" ] $ "First Item"
     --   li_ [ role_ "presentation" ] $ a_ [ href_ "#" ] $ "Second Item"
@@ -259,12 +259,12 @@ pageLayout routes@Routes{..} navHtml bodyHtml = do
       div_ $ div_ [ class_ "container-fluid", style_ "/*background-color:#f2f2f2;*/" ] $ div_ [ class_ "row" ] $ do
         div_ [ class_ "d-none d-md-block col-md-2" ] navHtml
         div_ [ class_ "col-12 col-md-10" ] bodyHtml
-      script_ [ src_ $ rStaticAsset "assets/js/jquery.min.js" ] $ ("" :: Text)
-      script_ [ src_ $ rStaticAsset "assets/bootstrap/js/bootstrap.min.js" ] $ ("" :: Text)
-      script_ [ src_ $ rStaticAsset "assets/js/custom.js" ] $ ("" :: Text)
+      script_ [ src_ $ rStaticAsset "assets/js/jquery.min.js" ] ("" :: Text)
+      script_ [ src_ $ rStaticAsset "assets/bootstrap/js/bootstrap.min.js" ] ("" :: Text)
+      script_ [ src_ $ rStaticAsset "assets/js/custom.js" ] ("" :: Text)
 
 sideNav :: Routes -> [Text] -> [JobRunnerName] -> UTCTime -> Filter -> Html ()
-sideNav Routes{..} jobTypes jobRunnerNames t filter@Filter{..} = do
+sideNav Routes{..} jobTypes jobRunnerNames _t filter@Filter{..} = do
   div_ [ class_ "filters mt-3" ] $ do
     jobStatusFilters
     jobTypeFilters
@@ -274,14 +274,14 @@ sideNav Routes{..} jobTypes jobRunnerNames t filter@Filter{..} = do
       h6_ "Filter by job status"
       div_ [ class_ "card" ] $ do
         ul_ [ class_ "list-group list-group-flush" ] $ do
-          li_ [ class_ ("list-group-item " <> if filterStatuses == [] then "active-nav" else "") ] $ do
-            let lnk = (rFilterResults $ Just filter{filterStatuses = [], filterPage = (OddJobs.Web.filterPage blankFilter)})
+          li_ [ class_ ("list-group-item " <> if null filterStatuses then "active-nav" else "") ] $ do
+            let lnk = rFilterResults $ Just filter{filterStatuses = [], filterPage = OddJobs.Web.filterPage blankFilter}
             a_ [ href_ lnk ] $ do
               "all"
               -- span_ [ class_ "badge badge-pill badge-secondary float-right" ] "12"
           forM_ ((\\) (enumFrom minBound) [Job.Success]) $ \st -> do
-            li_ [ class_ ("list-group-item " <> if (st `elem` filterStatuses) then "active-nav" else "") ] $ do
-              let lnk = (rFilterResults $ Just filter{filterStatuses = [st], filterPage = Nothing})
+            li_ [ class_ ("list-group-item " <> if st `elem` filterStatuses then "active-nav" else "") ] $ do
+              let lnk = rFilterResults $ Just filter{filterStatuses = [st], filterPage = Nothing}
               a_ [ href_ lnk ] $ do
                 toHtml $ toText st
                 -- span_ [ class_ "badge badge-pill badge-secondary float-right" ] "12"
@@ -295,11 +295,11 @@ sideNav Routes{..} jobTypes jobRunnerNames t filter@Filter{..} = do
 
       div_ [ class_ "card" ] $ do
         ul_ [ class_ "list-group list-group-flush" ] $ do
-          li_ [ class_ ("list-group-item " <> if filterJobRunner == [] then "active-nav" else "") ] $ do
-            let lnk = (rFilterResults $ Just filter{filterJobRunner = [], filterPage = (OddJobs.Web.filterPage blankFilter)})
+          li_ [ class_ ("list-group-item " <> if null filterJobRunner then "active-nav" else "") ] $ do
+            let lnk = rFilterResults $ Just filter{filterJobRunner = [], filterPage = OddJobs.Web.filterPage blankFilter}
             a_ [ href_ lnk ] "all"
           forM_ jobRunnerNames $ \jr -> do
-            li_ [ class_ ("list-group-item" <> if (jr `elem` filterJobRunner) then " active-nav" else "")] $ do
+            li_ [ class_ ("list-group-item" <> if jr `elem` filterJobRunner then " active-nav" else "")] $ do
               a_ [ href_ "#" ] $ toHtml $ unJobRunnerName jr
 
     jobTypeFilters = do
@@ -311,15 +311,15 @@ sideNav Routes{..} jobTypes jobRunnerNames t filter@Filter{..} = do
 
       div_ [ class_ "card" ] $ do
         ul_ [ class_ "list-group list-group-flush" ] $ do
-          li_ [ class_ ("list-group-item " <> if filterJobTypes == [] then "active-nav" else "") ] $ do
-            let lnk = (rFilterResults $ Just filter{filterJobTypes = [], filterPage = (OddJobs.Web.filterPage blankFilter)})
+          li_ [ class_ ("list-group-item " <> if null filterJobTypes then "active-nav" else "") ] $ do
+            let lnk = rFilterResults $ Just filter{filterJobTypes = [], filterPage = OddJobs.Web.filterPage blankFilter}
             a_ [ href_ lnk ] "all"
           forM_ jobTypes $ \jt -> do
-            li_ [ class_ ("list-group-item" <> if (jt `elem` filterJobTypes) then " active-nav" else "")] $ do
+            li_ [ class_ ("list-group-item" <> if jt `elem` filterJobTypes then " active-nav" else "")] $ do
               a_ [ href_ (rFilterResults $ Just filter{filterJobTypes=[jt]}) ] $ toHtml jt
 
 searchBar :: Routes -> UTCTime -> Filter -> Html ()
-searchBar Routes{..} t filter@Filter{filterStatuses, filterCreatedAfter, filterCreatedBefore, filterUpdatedAfter, filterUpdatedBefore, filterJobTypes, filterRunAfter} = do
+searchBar Routes{..} _t filter@Filter{filterStatuses, filterCreatedAfter, filterCreatedBefore, filterUpdatedAfter, filterUpdatedBefore, filterJobTypes, filterRunAfter} = do
   form_ [ style_ "padding-top: 2em;" ] $ do
     div_ [ class_ "form-group" ] $ do
       div_ [ class_ "search-container" ] $ do
@@ -332,7 +332,7 @@ searchBar Routes{..} t filter@Filter{filterStatuses, filterCreatedAfter, filterC
           maybe mempty (\x -> renderFilter "Run after" (showText x) (rFilterResults $ Just filter{filterRunAfter = Nothing})) filterRunAfter
           forM_ filterJobTypes $ \x -> renderFilter "Job type" x (rFilterResults $ Just filter{filterJobTypes = filterJobTypes \\ [x]})
 
-        button_ [ class_ "btn btn-default search-button", type_ "button" ] $ "Search"
+        button_ [ class_ "btn btn-default search-button", type_ "button" ] "Search"
       -- ul_ [ class_ "list-inline" ] $ do
       --   li_ $ span_ $ strong_ "Common searches:"
       --   li_ $ a_ [ href_ (rFilterResults $ Just mempty) ] $ "All jobs"
@@ -351,7 +351,7 @@ searchBar Routes{..} t filter@Filter{filterStatuses, filterCreatedAfter, filterC
         span_ [ class_ "filter-name" ] $ toHtml k
         span_ [ class_ "filter-value" ] $ do
           toHtml v
-          a_ [ href_ u, class_ "text-danger" ] $ i_ [ class_ "glyphicon glyphicon-remove" ] $ ""
+          a_ [ href_ u, class_ "text-danger" ] $ i_ [ class_ "glyphicon glyphicon-remove" ] ""
 
 
 timeDuration :: UTCTime -> UTCTime -> (Int, String)
@@ -359,22 +359,20 @@ timeDuration from to = (diff, str)
   where
     str = if diff <= 0
           then "under 1s"
-          else (if d>0 then (show d) <> "d" else "") <>
-               (if m>0 then (show m) <> "m" else "") <>
-               (if s>0 then (show s) <> "s" else "")
-    diff = (abs $ round $ diffUTCTime from to)
+          else (if d>0 then show d <> "d" else "") <>
+               (if m>0 then show m <> "m" else "") <>
+               (if s>0 then show s <> "s" else "")
+    diff = abs $ round $ diffUTCTime from to
     (m', s) = diff `divMod` 60
     (h', m) = m' `divMod` 60
-    (d, h) = h' `divMod` 24
+    (d, _h) = h' `divMod` 24
 
 showText :: (Show a) => a -> Text
 showText a = toS $ show a
 
 jobContent :: Value -> Value
 jobContent v = case v of
-  Aeson.Object o -> case HM.lookup "contents" o of
-    Nothing -> v
-    Just c -> c
+  Aeson.Object o -> fromMaybe v (HM.lookup "contents" o)
   _ -> v
 
 jobRow :: Routes -> UTCTime -> (Job, Html ()) -> Html ()
@@ -394,39 +392,39 @@ jobRow routes t (job@Job{..}, jobHtml) = do
     td_ jobHtml
     td_ $ do
       let actionsFn = case jobStatus of
-            Job.Success -> (const mempty)
+            Job.Success -> const mempty
             Job.Failed -> actionsFailed
             Job.Queued -> if jobRunAt > t
                           then actionsFuture
                           else actionsWaiting
             Job.Retry -> actionsRetry
-            Job.Locked -> (const mempty)
+            Job.Locked -> const mempty
       actionsFn routes job
 
 
 actionsFailed :: Routes -> Job -> Html ()
 actionsFailed Routes{..} Job{..} = do
   form_ [ action_ (rEnqueue jobId), method_ "post" ] $ do
-    button_ [ class_ "btn btn-secondary", type_ "submit" ] $ "Enqueue again"
+    button_ [ class_ "btn btn-secondary", type_ "submit" ] "Enqueue again"
 
 actionsRetry :: Routes -> Job -> Html ()
 actionsRetry Routes{..} Job{..} = do
   form_ [ action_ (rRunNow jobId), method_ "post" ] $ do
-    button_ [ class_ "btn btn-secondary", type_ "submit" ] $ "Run now"
+    button_ [ class_ "btn btn-secondary", type_ "submit" ] "Run now"
 
 actionsFuture :: Routes -> Job -> Html ()
 actionsFuture Routes{..} Job{..} = do
   form_ [ action_ (rRunNow jobId), method_ "post" ] $ do
-    button_ [ class_ "btn btn-secondary", type_ "submit" ] $ "Run now"
+    button_ [ class_ "btn btn-secondary", type_ "submit" ] "Run now"
 
 actionsWaiting :: Routes -> Job -> Html ()
 actionsWaiting Routes{..} Job{..} = do
   form_ [ action_ (rCancel jobId), method_ "post" ] $ do
-    button_ [ class_ "btn btn-danger", type_ "submit" ] $ "Cancel"
+    button_ [ class_ "btn btn-danger", type_ "submit" ] "Cancel"
 
 statusSuccess :: UTCTime -> Job -> Html ()
 statusSuccess t Job{..} = do
-  span_ [ class_ "badge badge-success" ] $ "Success"
+  span_ [ class_ "badge badge-success" ] "Success"
   span_ [ class_ "job-run-time" ] $ do
     let (d, s) = timeDuration jobCreatedAt jobUpdatedAt
     abbr_ [ title_ (showText jobUpdatedAt) ] $ toHtml $ "Completed " <> humanReadableTime' t jobUpdatedAt <> ". "
@@ -434,19 +432,19 @@ statusSuccess t Job{..} = do
 
 statusFailed :: UTCTime -> Job -> Html ()
 statusFailed t Job{..} = do
-  span_ [ class_ "badge badge-danger" ] $ "Failed"
+  span_ [ class_ "badge badge-danger" ] "Failed"
   span_ [ class_ "job-run-time" ] $ do
     abbr_ [ title_ (showText jobUpdatedAt) ] $ toHtml $ "Failed " <> humanReadableTime' t jobUpdatedAt <> " after " <> show jobAttempts <> " attempts"
 
 statusFuture :: UTCTime -> Job -> Html ()
 statusFuture t Job{..} = do
-  span_ [ class_ "badge badge-secondary" ] $ "Future"
+  span_ [ class_ "badge badge-secondary" ] "Future"
   span_ [ class_ "job-run-time" ] $ do
     abbr_ [ title_ (showText jobRunAt) ] $ toHtml $ humanReadableTime' t jobRunAt
 
 statusWaiting :: UTCTime -> Job -> Html ()
-statusWaiting t Job{..} = do
-      span_ [ class_ "badge badge-warning" ] $ "Waiting"
+statusWaiting _t Job{} = do
+      span_ [ class_ "badge badge-warning" ] "Waiting"
       -- span_ [ class_ "job-run-time" ] ("Waiting to be picked up" :: Text)
 
 statusRetry :: UTCTime -> Job -> Html ()
@@ -457,7 +455,7 @@ statusRetry t Job{..} = do
     abbr_ [ title_ (showText jobRunAt)] $ toHtml $ "Next retry in " <> humanReadableTime' t jobRunAt
 
 statusLocked :: UTCTime -> Job -> Html ()
-statusLocked t Job{..} = do
+statusLocked _t Job{} = do
   span_ [ class_ "badge badge-info" ] $ toHtml ("Locked"  :: Text)
   -- span_ [ class_ "job-run-time" ] $ do
   --   abbr_ [ title_ (showText jobUpdatedAt) ] $ toHtml $ "Retried " <> humanReadableTime' t jobUpdatedAt <> ". "
@@ -486,24 +484,24 @@ resultsPanel routes@Routes{..} t filter@Filter{filterPage} js runningCount = do
     prevLink = do
       let (extraClass, lnk) = case filterPage of
             Nothing -> ("disabled", "")
-            Just (l, 0) -> ("disabled", "")
+            Just (_l, 0) -> ("disabled", "")
             Just (l, o) -> ("", rFilterResults $ Just $ filter {filterPage = Just (l, max 0 $ o - l)})
       li_ [ class_ ("page-item previous " <> extraClass) ] $ do
-        a_ [ class_ "page-link", href_ lnk ] $ "Prev"
+        a_ [ class_ "page-link", href_ lnk ] "Prev"
 
     nextLink = do
       let (extraClass, lnk) = case filterPage of
             Nothing ->
-              if (DL.length js) < 10
+              if DL.length js < 10
               then ("disabled", "")
-              else ("", (rFilterResults $ Just $ filter {filterPage = Just (10, 10)}))
+              else ("", rFilterResults $ Just $ filter {filterPage = Just (10, 10)})
             Just (l, o) ->
-              if (DL.length js) < l
+              if DL.length js < l
               then ("disabled", "")
-              else ("", (rFilterResults $ Just $ filter {filterPage = Just (l, o + l)}))
+              else ("", rFilterResults $ Just $ filter {filterPage = Just (l, o + l)})
       li_ [ class_ ("page-item next " <> extraClass) ] $ do
-        a_ [ class_ "page-link", href_ lnk ] $ "Next"
+        a_ [ class_ "page-link", href_ lnk ] "Next"
 
 ariaExpanded_ :: Text -> Attribute
-ariaExpanded_ v = makeAttribute "aria-expanded" v
+ariaExpanded_ = makeAttribute "aria-expanded"
 

@@ -18,7 +18,6 @@ Ideally, this module should be compiled into a separate executable and should de
 \begin{code}
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE RecordWildCards #-}
@@ -72,16 +71,16 @@ In this example, the core job-runner function is in the `IO` monad. In all proba
 \begin{code}
 myJobRunner :: Job -> IO ()
 myJobRunner job = do
-  (throwParsePayload job) >>= \case
-    SendWelcomeEmail userId -> do
+  throwParsePayload job >>= \case
+    SendWelcomeEmail _userId -> do
       putStrLn $ "This should call the function that actually sends the welcome email. " <>
         "\nWe are purposely waiting 60 seconds before completing this job so that graceful shutdown can be demonstrated."
       delaySeconds (Seconds 60)
       putStrLn "60 second wait is now over..."
-    SendPasswordResetEmail tkn ->
+    SendPasswordResetEmail _tkn ->
       putStrLn "This should call the function that actually sends the password-reset email"
-    SetupSampleData userId -> do
-      Prelude.error "User onboarding is incomplete"
+    SetupSampleData _userId -> do
+      _ <- Prelude.error "User onboarding is incomplete"
       putStrLn "This should call the function that actually sets up sample data in a newly registered user's account"
 \end{code}
 
