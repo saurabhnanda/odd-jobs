@@ -383,9 +383,9 @@ testOnJobStart appPool jobPool = testCase "onJobStart" $ do
   withRandomTable jobPool $ \tname -> do
     callbackRef <- newIORef False
     let callback = const $ modifyIORef' callbackRef (const True)
-    withNamedJobMonitor tname jobPool (\cfg -> cfg{Job.cfgOnJobStart=callback}) $ \logRef -> do
+    withNamedJobMonitor tname jobPool (\cfg -> cfg{Job.cfgOnJobStart=callback}) $ \_logRef -> do
       Pool.withResource appPool $ \conn -> do
-        Job.createJob conn tname (PayloadSucceed 0)
+        _ <- Job.createJob conn tname (PayloadSucceed 0)
         delaySeconds (2 * Job.defaultPollingInterval)
         readIORef callbackRef >>= assertBool "It seems that onJobStart callback has not been called"
 
@@ -393,9 +393,9 @@ testOnJobSuccess appPool jobPool = testCase "onJobSuccess" $ do
   withRandomTable jobPool $ \tname -> do
     callbackRef <- newIORef False
     let callback = const $ modifyIORef' callbackRef (const True)
-    withNamedJobMonitor tname jobPool (\cfg -> cfg{Job.cfgOnJobSuccess=callback}) $ \logRef -> do
+    withNamedJobMonitor tname jobPool (\cfg -> cfg{Job.cfgOnJobSuccess=callback}) $ \_logRef -> do
       Pool.withResource appPool $ \conn -> do
-        Job.createJob conn tname (PayloadSucceed 0)
+        _ <- Job.createJob conn tname (PayloadSucceed 0)
         delaySeconds (2 * Job.defaultPollingInterval)
         readIORef callbackRef >>= assertBool "It seems that onJobSuccess callback has not been called"
 
@@ -403,9 +403,9 @@ testOnJobTimeout appPool jobPool = testCase "onJobTimeout" $ do
   withRandomTable jobPool $ \tname -> do
     callbackRef <- newIORef False
     let callback = const $ modifyIORef' callbackRef (const True)
-    withNamedJobMonitor tname jobPool (\cfg -> cfg{Job.cfgOnJobTimeout=callback, Job.cfgDefaultJobTimeout=Seconds 2}) $ \logRef -> do
+    withNamedJobMonitor tname jobPool (\cfg -> cfg{Job.cfgOnJobTimeout=callback, Job.cfgDefaultJobTimeout=Seconds 2}) $ \_logRef -> do
       Pool.withResource appPool $ \conn -> do
-        Job.createJob conn tname (PayloadSucceed 10)
+        _ <- Job.createJob conn tname (PayloadSucceed 10)
         delaySeconds (2 * Job.defaultPollingInterval)
         readIORef callbackRef >>= assertBool "It seems that onJobTimeout callback has not been called"
 

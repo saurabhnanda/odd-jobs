@@ -141,6 +141,7 @@ class (MonadUnliftIO m, MonadBaseControl IO m) => HasJobRunner m where
   getConcurrencyControl :: m ConcurrencyControl
   log :: LogLevel -> LogEvent -> m ()
   getDefaultJobTimeout :: m Seconds
+  onJobTimeout :: Job -> m ()
   getDefaultRetryBackoff :: Int -> m Seconds
 
 -- $logging
@@ -192,6 +193,9 @@ instance HasJobRunner RunnerM where
     liftIO $ loggerFn logLevel logEvent
 
   getDefaultJobTimeout = asks (cfgDefaultJobTimeout . envConfig)
+  onJobTimeout job = do
+    fn <- asks (cfgOnJobTimeout . envConfig)
+    logCallbackErrors (jobId job) "onJobTimeout" $ liftIO $ fn job
 
   getDefaultRetryBackoff attempts = do
     retryFn <- asks (cfgDefaultRetryBackoff . envConfig)
@@ -378,7 +382,6 @@ runJobWithTimeout timeoutSec job = do
 
   t <- async $ do
     delaySeconds timeoutSec
-    uninterruptibleCancel a
     throwIO TimeoutException
 
   void $ finally
@@ -394,7 +397,7 @@ runJob jid = do
       startTime <- liftIO getCurrentTime
       lockTimeout <- getDefaultJobTimeout
       log LevelInfo $ LogJobStart job
-      flip catches [Handler $ timeoutHandler job startTime, Handler $ exceptionHandler job startTime] $ do
+      flip catch (exceptionHandler job startTime) $ do
         onJobStart job
         runJobWithTimeout lockTimeout job
         endTime <- liftIO getCurrentTime
@@ -407,7 +410,6 @@ runJob jid = do
         onJobSuccess newJob
         pure ()
   where
-    timeoutHandler job startTime (e :: TimeoutException) = retryOrFail (toException e) job startTime
     exceptionHandler job startTime (e :: SomeException) = retryOrFail (toException e) job startTime
     retryOrFail e job@Job{jobAttempts} startTime = do
       endTime <- liftIO getCurrentTime
@@ -425,14 +427,18 @@ runJob jid = do
                            , jobRunAt=addUTCTime (fromIntegral $ unSeconds backoffInSeconds) t
                            }
       case fromException e :: Maybe TimeoutException of
-        Nothing -> log logLevel $ LogJobFailed newJob e failureMode runTime
-        Just _ -> log logLevel $ LogJobTimeout newJob
+        Nothing -> do
+          log logLevel $ LogJobFailed newJob e failureMode runTime
+          let tryHandler (JobErrHandler handler) res = case fromException e of
+                Nothing -> res
+                Just e_ -> void $ handler e_ newJob failureMode
+          handlers <- onJobFailed
+          liftIO $ void $ Prelude.foldr tryHandler (throwIO e) handlers
 
-      let tryHandler (JobErrHandler handler) res = case fromException e of
-            Nothing -> res
-            Just e_ -> void $ handler e_ newJob failureMode
-      handlers <- onJobFailed
-      liftIO $ void $ Prelude.foldr tryHandler (throwIO e) handlers
+        Just _ -> do
+          log logLevel $ LogJobTimeout newJob
+          onJobTimeout newJob
+
       pure ()
 
 -- TODO: This might have a resource leak.
