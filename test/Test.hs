@@ -1,6 +1,8 @@
 {-# LANGUAGE FlexibleInstances, NamedFieldPuns, DeriveGeneric, FlexibleContexts, TypeFamilies, StandaloneDeriving, RankNTypes #-}
 {-# LANGUAGE CPP #-}
-{-# OPTIONS_GHC -Wno-missing-signatures #-}
+{-# LANGUAGE PartialTypeSignatures #-}
+{-# LANGUAGE RecordWildCards #-}
+{-# OPTIONS_GHC -Wno-missing-signatures -Wno-partial-type-signatures #-}
 module Test where
 
 import Test.Tasty as Tasty
@@ -103,6 +105,7 @@ tests appPool jobPool = testGroup "All tests"
                                , testOnJobSuccess appPool jobPool
                                , testOnJobTimeout appPool jobPool
                                ]
+                             , testResourceLimitedScheduling appPool jobPool
                              ]
   -- , testGroup "property tests" [ testEverything appPool jobPool
   --                              -- , propFilterJobs appPool jobPool
@@ -238,12 +241,30 @@ ensureJobId conn tname jid = Job.findJobByIdIO conn tname jid >>= \case
   Nothing -> error $ "Not expecting job to be deleted. JobId=" <> show jid
   Just j -> pure j
 
--- withRandomTable :: (MonadIO m) => Pool Connection -> (Job.TableName -> m a) -> m a
+withRandomTable :: _ => Pool Connection -> (Job.TableName -> m a) -> m a
 withRandomTable jobPool action = do
   (tname :: Job.TableName) <- liftIO (fromString . ("jobs_" <>) <$> replicateM 10 (R.randomRIO ('a', 'z')))
   finally
     (Pool.withResource jobPool (\conn -> liftIO $ Migrations.createJobTable conn tname) >> action tname)
     (Pool.withResource jobPool $ \conn -> liftIO $ void $ PGS.execute conn "drop table if exists ?" (Only tname))
+
+withRandomResourceTables :: _ => Int -> Pool Connection -> Job.TableName -> (Job.ResourceCfg -> m a) -> m a
+withRandomResourceTables defaultLimit jobPool tname action = do
+  resCfgResourceTable <- liftIO $ fromString . ("resources_" <>) <$> replicateM 10 (R.randomRIO ('a', 'z'))
+  resCfgUsageTable <- liftIO $ fromString . ("usage_" <>) <$> replicateM 10 (R.randomRIO ('a', 'z'))
+  resCfgCheckResourceFunction <- liftIO $ fromString . ("check_resource_fn_" <>) <$> replicateM 10 (R.randomRIO ('a', 'z'))
+  let resCfg = Job.ResourceCfg
+        { Job.resCfgDefaultLimit = defaultLimit
+        , ..
+        }
+
+  finally
+    (do
+      Pool.withResource jobPool $ \conn -> liftIO $ Migrations.createResourceTables conn tname resCfg
+      action resCfg)
+    (Pool.withResource jobPool $ \conn -> liftIO $ void $ PGS.execute conn
+        "drop function if exists ?; drop table if exists ?; drop table if exists ?"
+        (resCfgCheckResourceFunction, resCfgUsageTable, resCfgResourceTable))
 
 testMaxAttempts :: Int
 testMaxAttempts = 3
@@ -437,6 +458,149 @@ testRetryBackoff appPool jobPool = testCase "retry backoff" $ do
 
     modifyRetryBackoff cfg
       = cfg { Job.cfgDefaultRetryBackoff = pure . backoff }
+
+testResourceLimitedScheduling appPool jobPool = testGroup "concurrency control by resources"
+  [ testCase "resources control how jobs run" $ setup $ \tname resCfg logRef conn -> do
+      let firstResource = [(Job.ResourceId "first", 1)]
+          secondResource = [(Job.ResourceId "second", 1)]
+
+      Job{jobId = firstJob} <- Job.createJobWithResources conn tname resCfg (PayloadSucceed 10) firstResource
+      Job{jobId = secondJob} <- Job.createJobWithResources conn tname resCfg (PayloadSucceed 10) firstResource
+      Job{jobId = thirdJob} <- Job.createJobWithResources conn tname resCfg (PayloadSucceed 10) secondResource
+
+      delaySeconds $ Job.defaultPollingInterval + Seconds 2
+
+      assertJobIdStatus conn tname logRef "Job was created first - it should be running" Job.Locked firstJob
+      assertJobIdStatus conn tname logRef "Job uses same resources as first - it shouldn't be running" Job.Queued secondJob
+      assertJobIdStatus conn tname logRef "Job uses different resources - it should be running" Job.Locked thirdJob
+
+  , testCase "resource-less jobs run normally" $ setup $ \tname resCfg logRef conn -> do
+      Job{jobId = firstJob} <- Job.createJobWithResources conn tname resCfg (PayloadSucceed 10) []
+      Job{jobId = secondJob} <- Job.createJobWithResources conn tname resCfg (PayloadSucceed 10) []
+
+      delaySeconds $ Job.defaultPollingInterval + Seconds 2
+
+      assertJobIdStatus conn tname logRef "First job uses no resources - it should be running" Job.Locked firstJob
+      assertJobIdStatus conn tname logRef "Second job uses no resources - it should be running" Job.Locked secondJob
+
+  , testCase "jobs can hold multiple resources" $ setup $ \tname resCfg logRef conn -> do
+      let firstResource = [(Job.ResourceId "first", 1)]
+          secondResource = [(Job.ResourceId "second", 1)]
+
+      Job{jobId = firstJob} <- Job.createJobWithResources conn tname resCfg (PayloadSucceed 10) (firstResource <> secondResource)
+      Job{jobId = secondJob} <- Job.createJobWithResources conn tname resCfg (PayloadSucceed 10) firstResource
+      Job{jobId = thirdJob} <- Job.createJobWithResources conn tname resCfg (PayloadSucceed 10) secondResource
+
+      delaySeconds $ Job.defaultPollingInterval + Seconds 2
+
+      assertJobIdStatus conn tname logRef "Job was created first - it should be running" Job.Locked firstJob
+      assertJobIdStatus conn tname logRef "Job uses same resources as first - it shouldn't be running" Job.Queued secondJob
+      assertJobIdStatus conn tname logRef "Job uses same resources as first - it shouldn't be running" Job.Queued thirdJob
+
+  , testCase "resources are freed when jobs succeed" $ setup $ \tname resCfg logRef conn -> do
+      let firstResource = [(Job.ResourceId "first", 1)]
+
+      Job{jobId = firstJob} <- Job.createJobWithResources conn tname resCfg (PayloadSucceed 10) firstResource
+      Job{jobId = secondJob} <- Job.createJobWithResources conn tname resCfg (PayloadSucceed 10) firstResource
+
+      delaySeconds $ Job.defaultPollingInterval + Seconds 2
+
+      assertJobIdStatus conn tname logRef "Job was created first - it should be running" Job.Locked firstJob
+      assertJobIdStatus conn tname logRef "Job uses same resources as first - it shouldn't be running" Job.Queued secondJob
+
+      delaySeconds $ (Job.defaultPollingInterval * 2) + Seconds 8
+
+      assertJobIdStatus conn tname logRef "First job should have succeeded by now" Job.Success firstJob
+      assertJobIdStatus conn tname logRef "Second job should be running after first job suceeded" Job.Locked secondJob
+
+  , testCase "resources are freed when jobs fail" $ setup $ \tname resCfg logRef conn -> do
+      let firstResource = [(Job.ResourceId "first", 1)]
+
+      Job{jobId = firstJob} <- Job.createJobWithResources conn tname resCfg (PayloadAlwaysFail 10) firstResource
+      Job{jobId = secondJob} <- Job.createJobWithResources conn tname resCfg (PayloadSucceed 10) firstResource
+
+      delaySeconds $ Job.defaultPollingInterval + Seconds 2
+
+      assertJobIdStatus conn tname logRef "Job was created first - it should be running" Job.Locked firstJob
+      assertJobIdStatus conn tname logRef "Job uses same resources as first - it shouldn't be running" Job.Queued secondJob
+
+      delaySeconds $ (Job.defaultPollingInterval * 2) + Seconds 8
+
+      assertJobIdStatus conn tname logRef "First job should have failed by now" Job.Failed firstJob
+      assertJobIdStatus conn tname logRef "Second job should be running after first job failed" Job.Locked secondJob
+
+  , testCase "resources allow for multiple usage" $ setup $ \tname resCfg logRef conn -> do
+      let firstResource = [(Job.ResourceId "first", 1)]
+          resCfg' = resCfg { Job.resCfgDefaultLimit = 2 }
+
+      Job{jobId = firstJob} <- Job.createJobWithResources conn tname resCfg' (PayloadSucceed 10) firstResource
+      Job{jobId = secondJob} <- Job.createJobWithResources conn tname resCfg' (PayloadSucceed 10) firstResource
+
+      delaySeconds $ Job.defaultPollingInterval + Seconds 2
+
+      assertJobIdStatus conn tname logRef "First job uses some resources - it should be running" Job.Locked firstJob
+      assertJobIdStatus conn tname logRef "Second job uses some resources - it should be running" Job.Locked secondJob
+
+  , testCase "resource usage can differ by job" $ setup $ \tname resCfg logRef conn -> do
+      let firstResource n = [(Job.ResourceId "first", n)]
+          resCfg' = resCfg { Job.resCfgDefaultLimit = 5 }
+
+      Job{jobId = firstJob} <- Job.createJobWithResources conn tname resCfg' (PayloadSucceed 10) (firstResource 4)
+      Job{jobId = secondJob} <- Job.createJobWithResources conn tname resCfg' (PayloadSucceed 10) (firstResource 3)
+      Job{jobId = thirdJob} <- Job.createJobWithResources conn tname resCfg' (PayloadSucceed 10) (firstResource 2)
+
+      delaySeconds $ Job.defaultPollingInterval + Seconds 2
+
+      assertJobIdStatus conn tname logRef "Job was created first - it should be running" Job.Locked firstJob
+      assertJobIdStatus conn tname logRef "Job doesn't fit alongside first job - it shouldn't be running" Job.Queued secondJob
+      assertJobIdStatus conn tname logRef "Job doesn't fit alongside first job - it shouldn't be running" Job.Queued thirdJob
+
+      delaySeconds $ (Job.defaultPollingInterval * 2) + Seconds 8
+
+      assertJobIdStatus conn tname logRef "First job should have succeeded by now" Job.Success firstJob
+      assertJobIdStatus conn tname logRef "Second job should be running after first job suceeded" Job.Locked secondJob
+      assertJobIdStatus conn tname logRef "Third job fits alongside second job - it should be running after first job suceeded" Job.Locked thirdJob
+
+  , testCase "resource limits permanently block too-big jobs" $ setup $ \tname resCfg logRef conn -> do
+      let firstResource = [(Job.ResourceId "first", 2)]
+
+      Job{jobId = firstJob} <- Job.createJobWithResources conn tname resCfg (PayloadSucceed 10) firstResource
+
+      delaySeconds $ Job.defaultPollingInterval + Seconds 2
+
+      assertJobIdStatus conn tname logRef "Job requires too many resources - shouldn't be running" Job.Queued firstJob
+
+  , testCase "resources with 0 limit block jobs" $ setup' 0 $ \tname resCfg logRef conn -> do
+      let firstResource = [(Job.ResourceId "first", 1)]
+
+      Job{jobId = firstJob} <- Job.createJobWithResources conn tname resCfg (PayloadSucceed 10) firstResource
+
+      delaySeconds $ Job.defaultPollingInterval + Seconds 2
+
+      assertJobIdStatus conn tname logRef "Job can't access 0-limited resources - shouldn't be running" Job.Queued firstJob
+
+  , testCase "resources with negative limit block jobs" $ setup' (-5) $ \tname resCfg logRef conn -> do
+      let firstResource = [(Job.ResourceId "first", 1)]
+
+      Job{jobId = firstJob} <- Job.createJobWithResources conn tname resCfg (PayloadSucceed 10) firstResource
+
+      delaySeconds $ Job.defaultPollingInterval + Seconds 2
+
+      assertJobIdStatus conn tname logRef "Job can't access negative-limited resources - shouldn't be running" Job.Queued firstJob
+  ]
+  where
+    setup = setup' 1
+
+    setup' defaultLimit action =
+      withRandomTable jobPool $ \tname ->
+        withRandomResourceTables defaultLimit jobPool tname $ \resCfg ->
+          withNamedJobMonitor tname jobPool (cfgFn resCfg) $ \logRef -> do
+            Pool.withResource appPool $ \conn -> action tname resCfg logRef conn
+
+    cfgFn resCfg cfg = cfg
+        { Job.cfgDefaultMaxAttempts = 1 -- Simplifies some tests where we have a failing job
+        , Job.cfgConcurrencyControl = Job.ResourceLimits resCfg
+        }
 
 data JobEvent = JobStart
               | JobRetry
