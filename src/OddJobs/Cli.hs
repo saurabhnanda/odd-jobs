@@ -8,7 +8,6 @@ import Options.Applicative as Opts
 import Data.Text
 import OddJobs.Job (startJobRunner, Config(..), LogLevel(..), LogEvent(..))
 import OddJobs.Types (UIConfig(..), Seconds(..), delaySeconds)
--- import System.Daemonize (DaemonOptions(..), daemonize)
 import qualified System.Posix.Daemon as Daemon
 import System.FilePath (FilePath)
 import System.Posix.Process (getProcessID)
@@ -163,7 +162,6 @@ defaultStopCommand :: StopArgs
                    -> IO ()
 defaultStopCommand StopArgs{..} = do
   progName <- getProgName
-  -- pid <- read <$> (readFile shutPidFile)
   if shutTimeout == Seconds 0
     then Daemon.brutalKill shutPidFile
     else do putStrLn $ "Sending sigINT to " <> show progName <>
@@ -310,8 +308,6 @@ stopParser = fmap Stop $ StopArgs
   <$> option (Seconds <$> auto) ( long "timeout" <>
                                   metavar "TIMEOUT" <>
                                   help "Maximum seconds to wait before force-killing the background daemon."
-                                  -- value defaultTimeout <>
-                                  -- showDefaultWith (show . unSeconds)
                                 )
   <*> pidFileParser
 
@@ -343,16 +339,6 @@ defaultCliParserPrefs = prefs $
 defaultCliInfo :: CliType -> ParserInfo Args
 defaultCliInfo cliType =
   info (argParser cliType <**> helper) fullDesc
-
--- defaultDaemonOptions :: DaemonOptions
--- defaultDaemonOptions = DaemonOptions
---   { daemonShouldChangeDirectory = False
---   , daemonShouldCloseStandardStreams = False
---   , daemonShouldIgnoreSignals = True
---   , daemonUserToChangeTo = Nothing
---   , daemonGroupToChangeTo = Nothing
---   }
-
 
 -- ** Auth implementations for the default Web UI
 
