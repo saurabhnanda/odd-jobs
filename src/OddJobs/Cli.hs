@@ -5,12 +5,17 @@
 module OddJobs.Cli where
 
 import Options.Applicative as Opts
+import Control.Concurrent.Async (race)
+import Control.Concurrent.MVar (newEmptyMVar, takeMVar, tryPutMVar, tryTakeMVar)
+import Data.Coerce (coerce)
+import Data.Functor (void)
 import Data.Text
 import OddJobs.Job (startJobRunner, Config(..), LogLevel(..), LogEvent(..))
 import OddJobs.Types (UIConfig(..), Seconds(..), delaySeconds)
-import qualified System.Posix.Daemon as Daemon
-import System.FilePath (FilePath)
+import qualified System.Posix.Daemonize as Daemonize
+import System.FilePath (FilePath, takeBaseName, takeDirectory)
 import System.Posix.Process (getProcessID)
+import System.Posix.Signals (Handler(CatchOnce), installHandler, sigTERM)
 import qualified System.Directory as Dir
 import qualified System.Exit as Exit
 import System.Environment (getProgName)
@@ -100,6 +105,33 @@ runCli cliType = do
     Status ->
       Prelude.error "not implemented yet"
 
+-- | Ensure that @SIGTERM@ is handled gracefully, because it's how containers are stopped.
+--
+-- @action@ will receive an 'AsyncCancelled' exception if @SIGTERM@ is received by the process.
+--
+-- Typical use:
+--
+-- > main :: IO ()
+-- > main = withGracefulTermination_ $ do
+--
+-- Note that although the Haskell runtime handles @SIGINT@ it doesn't do anything with @SIGTERM@.
+-- Therefore, the program will be killed immediately and no cleanup will be performed. In particular,
+-- exception handlers in `bracket`, `finally`, `onException`, etc. won't be run. However, if the
+-- program is running as PID 1 in a container, @SIGTERM@ will be ignored and the program will keep
+-- running. This will likely result in a @SIGKILL@ being sent a short while later and cleanup still
+-- won't be performed.
+withGracefulTermination :: IO a -> IO (Maybe a)
+withGracefulTermination ioAction = do
+  var <- newEmptyMVar
+  let terminate = void $ tryPutMVar var ()
+      waitForTermination = takeMVar var
+  void $ installHandler sigTERM (CatchOnce terminate) Nothing
+  either (const Nothing) Just <$> race waitForTermination ioAction
+
+-- | Like 'withGracefulTermination' but ignoring the return value
+withGracefulTermination_ :: IO a -> IO ()
+withGracefulTermination_ = void . withGracefulTermination
+
 {-| Used by 'defaultMain' if the 'Start' command is issued via the CLI. If
 @--daemonize@ switch is also passed, it checks for 'startPidFile':
 
@@ -115,7 +147,12 @@ defaultStartCommand :: CommonStartArgs
                     -> IO ()
 defaultStartCommand CommonStartArgs{..} mUIArgs cliType = do
   if startDaemonize then do
-    Daemon.runDetached (Just startPidFile) (Daemon.ToFile "/tmp/oddjobs.out") coreStartupFn
+    Daemonize.serviced
+      $ Daemonize.simpleDaemon
+      { Daemonize.program = \() -> withGracefulTermination_ coreStartupFn
+      , Daemonize.name = Just $ takeBaseName startPidFile
+      , Daemonize.pidfileDirectory = Just $ takeDirectory startPidFile
+      }
   else
     coreStartupFn
   where
@@ -154,7 +191,7 @@ defaultWebUI UIStartArgs{..} uicfg@UIConfig{..} = do
       Warp.run uistartPort $ Servant.serveWithContext api ctx app
 
 {-| Used by 'defaultMain' if 'Stop' command is issued via the CLI. Sends a
-@SIGINT@ signal to the process indicated by 'shutPidFile'. Waits for a maximum
+@SIGTERM@ signal to the process indicated by 'shutPidFile'. Waits for a maximum
 of 'shutTimeout' seconds (controller by @--timeout@) for the daemon to shutdown
 gracefully, after which a @SIGKILL@ is issued
 -}
@@ -162,26 +199,15 @@ defaultStopCommand :: StopArgs
                    -> IO ()
 defaultStopCommand StopArgs{..} = do
   progName <- getProgName
-  if shutTimeout == Seconds 0
-    then Daemon.brutalKill shutPidFile
-    else do putStrLn $ "Sending sigINT to " <> show progName <>
+  putStrLn $ "Sending SIGTERM to " <> show progName <>
               " and waiting " <> show (unSeconds shutTimeout) <> " seconds for graceful stop"
-            readFile shutPidFile >>= Sig.signalProcess Sig.sigINT . read
-            Async.race (delaySeconds shutTimeout) checkProcessStatus >>= \case
-              Right _ -> do
-                putStrLn $ progName <> " seems to have exited gracefully."
-                Exit.exitSuccess
-              Left _ -> do
-                putStrLn $ progName <> " has still not exited. Sending sigKILL for forced exit."
-                Daemon.brutalKill shutPidFile
-  where
-    checkProcessStatus = do
-      Daemon.isRunning shutPidFile >>= \case
-        True -> do
-          delaySeconds (Seconds 1)
-          checkProcessStatus
-        False -> do
-          pure ()
+  flip Daemonize.serviced' Daemonize.Stop
+    $ Daemonize.simpleDaemon
+    { Daemonize.name = Just $ takeBaseName shutPidFile
+    , Daemonize.pidfileDirectory = Just $ takeDirectory shutPidFile
+    , Daemonize.killWait = Just $ coerce shutTimeout
+    }
+    
 
 -- * Default CLI parsers
 --
@@ -296,7 +322,7 @@ webUiAuthParser = basicAuthParser <|> noAuthParser
 -- 'shutTimeout' seconds. If the daemon doesn't shut down cleanly within that
 -- time, it sends a @SIGKILL@ to kill immediately.
 data StopArgs = StopArgs
-  { -- | After sending a @SIGINT@, how many seconds to wait before sending a
+  { -- | After sending a @SIGTERM@, how many seconds to wait before sending a
     -- @SIGKILL@
     shutTimeout :: !Seconds
     -- | PID file of the deamon. Ref: 'pidFileParser'

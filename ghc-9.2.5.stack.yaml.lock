@@ -5,13 +5,6 @@
 
 packages:
 - completed:
-    hackage: daemons-0.3.0@sha256:356edaf06a8cf5e9f19685f9ce793ad6d2b6bce2e55379f6b2aff1b0c07a633f,3178
-    pantry-tree:
-      sha256: 26b1a5279be340c896edbc72baa6d95b071384b9bf7e19cd146025cf13d21769
-      size: 918
-  original:
-    hackage: daemons-0.3.0@sha256:356edaf06a8cf5e9f19685f9ce793ad6d2b6bce2e55379f6b2aff1b0c07a633f,3178
-- completed:
     hackage: timing-convenience-0.1@sha256:7ff807a9a9e5596f2b18d45c5a01aefb91d4a98f6a1008d183b5c550f68f7cb7,2092
     pantry-tree:
       sha256: fbcb00f5b8a4f7b8fd94b034b7f507ffdd7579848de782ce60ad2b661dcb2b42

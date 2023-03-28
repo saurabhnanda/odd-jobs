@@ -1,10 +1,10 @@
 cabal-version: 1.12
 
--- This file has been generated from package.yaml by hpack version 0.33.0.
+-- This file has been generated from package.yaml by hpack version 0.35.2.
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 81dabf5fa65d737ec98a4f07762968283cccc36292941ff7fff10a9a398e84b0
+-- hash: dff1ced317b40e54688799203ec3743b119bf71f2fc98109a5e79f12c6e10fba
 
 name:           odd-jobs
 version:        0.2.2
@@ -61,19 +61,27 @@ library
       Paths_odd_jobs
   hs-source-dirs:
       src
-  default-extensions: NamedFieldPuns LambdaCase TemplateHaskell ScopedTypeVariables GeneralizedNewtypeDeriving QuasiQuotes OverloadedStrings
+  default-extensions:
+      NamedFieldPuns
+      LambdaCase
+      TemplateHaskell
+      ScopedTypeVariables
+      GeneralizedNewtypeDeriving
+      QuasiQuotes
+      OverloadedStrings
   ghc-options: -Wall -fno-warn-orphans -fno-warn-unused-imports -fno-warn-dodgy-exports -Werror=missing-fields -Werror=incomplete-patterns
   build-depends:
       aeson
+    , async ==2.2.4
     , base >=4.7 && <5
     , bytestring
-    , daemons
     , directory
     , either
     , fast-logger
     , filepath
     , friendly-time
     , generic-deriving
+    , hdaemonize
     , hostname
     , lucid
     , monad-control
@@ -81,7 +89,7 @@ library
     , mtl
     , optparse-applicative
     , postgresql-simple
-    , resource-pool >= 0.2.0.0 && < 0.4.0.0
+    , resource-pool
     , safe
     , servant
     , servant-lucid
@@ -115,13 +123,20 @@ executable devel
   hs-source-dirs:
       dev
       src
-  default-extensions: NamedFieldPuns LambdaCase TemplateHaskell ScopedTypeVariables GeneralizedNewtypeDeriving QuasiQuotes OverloadedStrings
+  default-extensions:
+      NamedFieldPuns
+      LambdaCase
+      TemplateHaskell
+      ScopedTypeVariables
+      GeneralizedNewtypeDeriving
+      QuasiQuotes
+      OverloadedStrings
   ghc-options: -Wall -fno-warn-orphans -fno-warn-unused-imports -fno-warn-dodgy-exports -Werror=missing-fields -Werror=incomplete-patterns -threaded -with-rtsopts=-N -main-is DevelMain
   build-depends:
       aeson
+    , async ==2.2.4
     , base >=4.7 && <5
     , bytestring
-    , daemons
     , directory
     , either
     , fast-logger
@@ -129,6 +144,7 @@ executable devel
     , foreign-store
     , friendly-time
     , generic-deriving
+    , hdaemonize
     , hostname
     , lucid
     , monad-control
@@ -162,19 +178,27 @@ executable odd-jobs-cli-example
       Paths_odd_jobs
   hs-source-dirs:
       examples
-  default-extensions: NamedFieldPuns LambdaCase TemplateHaskell ScopedTypeVariables GeneralizedNewtypeDeriving QuasiQuotes OverloadedStrings
+  default-extensions:
+      NamedFieldPuns
+      LambdaCase
+      TemplateHaskell
+      ScopedTypeVariables
+      GeneralizedNewtypeDeriving
+      QuasiQuotes
+      OverloadedStrings
   ghc-options: -Wall -fno-warn-orphans -fno-warn-unused-imports -fno-warn-dodgy-exports -Werror=missing-fields -Werror=incomplete-patterns -threaded -with-rtsopts=-N -main-is OddJobsCliExample
   build-depends:
       aeson
+    , async ==2.2.4
     , base >=4.7 && <5
     , bytestring
-    , daemons
     , directory
     , either
     , fast-logger
     , filepath
     , friendly-time
     , generic-deriving
+    , hdaemonize
     , hostname
     , lucid
     , monad-control
@@ -219,20 +243,28 @@ test-suite jobrunner
   hs-source-dirs:
       test
       src
-  default-extensions: NamedFieldPuns LambdaCase TemplateHaskell ScopedTypeVariables GeneralizedNewtypeDeriving QuasiQuotes OverloadedStrings
+  default-extensions:
+      NamedFieldPuns
+      LambdaCase
+      TemplateHaskell
+      ScopedTypeVariables
+      GeneralizedNewtypeDeriving
+      QuasiQuotes
+      OverloadedStrings
   ghc-options: -Wall -fno-warn-orphans -fno-warn-unused-imports -fno-warn-dodgy-exports -Werror=missing-fields -Werror=incomplete-patterns -threaded -with-rtsopts=-N -main-is Test
   build-depends:
       aeson
+    , async ==2.2.4
     , base >=4.7 && <5
     , bytestring
     , containers
-    , daemons
     , directory
     , either
     , fast-logger
     , filepath
     , friendly-time
     , generic-deriving
+    , hdaemonize
     , hedgehog
     , hostname
     , lifted-async

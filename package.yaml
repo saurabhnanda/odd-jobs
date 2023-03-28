@@ -58,6 +58,8 @@ default-extensions:
 
 dependencies:
   - base >= 4.7 && < 5
+  - async ==2.2.4
+  - hdaemonize
   - text
   - postgresql-simple
   - bytestring
@@ -85,7 +87,6 @@ dependencies:
   - warp
   - unordered-containers
   - optparse-applicative
-  - daemons
   - filepath
   - directory
   - generic-deriving
