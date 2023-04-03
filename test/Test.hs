@@ -336,7 +336,7 @@ testEnsureShutdown appPool jobPool = testCase "ensure shutdown" $ do
 
 testGracefulShutdown appPool jobPool = testCase "ensure graceful shutdown" $ do
   withRandomTable jobPool $ \tname -> do
-    setupPreconditions 3 tname >>= \case
+    setupPreconditions 4 tname >>= \case
       Nothing -> fail "Unable to setup preconditions for this test, even after trying thrice"
       Just (j1, j2, logRef) -> do
         Pool.withResource appPool $ \conn -> do
