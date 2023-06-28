@@ -1,3 +1,6 @@
 resolver: nightly-2023-06-27
 packages:
   - .
+
+extra-deps:
+  - hdaemonize
