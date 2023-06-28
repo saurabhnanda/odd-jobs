@@ -5,6 +5,7 @@
 {-# OPTIONS_GHC -Wno-missing-signatures -Wno-partial-type-signatures #-}
 module Test where
 
+import Control.Monad.Trans.Control
 import Test.Tasty as Tasty
 import qualified OddJobs.Migrations as Migrations
 import qualified OddJobs.Job as Job
@@ -262,7 +263,8 @@ withRandomTable jobPool action = do
     (Pool.withResource jobPool (\conn -> liftIO $ Migrations.createJobTable conn tname) >> action tname)
     (Pool.withResource jobPool $ \conn -> liftIO $ void $ PGS.execute conn "drop table if exists ?" (Only tname))
 
-withRandomResourceTables :: _ => Int -> Pool Connection -> Job.TableName -> (Job.ResourceCfg -> m a) -> m a
+withRandomResourceTables :: (MonadBaseControl
+                          IO m, MonadUnliftIO m) => Int -> Pool Connection -> Job.TableName -> (Job.ResourceCfg -> m a) -> m a
 withRandomResourceTables defaultLimit jobPool tname action = do
   resCfgResourceTable <- liftIO $ fromString . ("resources_" <>) <$> replicateM 10 (R.randomRIO ('a', 'z'))
   resCfgUsageTable <- liftIO $ fromString . ("usage_" <>) <$> replicateM 10 (R.randomRIO ('a', 'z'))
@@ -275,7 +277,7 @@ withRandomResourceTables defaultLimit jobPool tname action = do
   finally
     (do
       Pool.withResource jobPool $ \conn -> liftIO $ Migrations.createResourceTables conn tname resCfg
-      action resCfg)
+      (action resCfg))
     (Pool.withResource jobPool $ \conn -> liftIO $ void $ PGS.execute conn
         "drop function if exists ?; drop table if exists ?; drop table if exists ?"
         (resCfgCheckResourceFunction, resCfgUsageTable, resCfgResourceTable))
