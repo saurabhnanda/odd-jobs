@@ -1,5 +1,6 @@
-resolver: lts-20.3
+resolver: lts-20.26
 packages:
   - .
 extra-deps:
   - timing-convenience-0.1@sha256:7ff807a9a9e5596f2b18d45c5a01aefb91d4a98f6a1008d183b5c550f68f7cb7,2092
+  - resource-pool-0.4.0.0@sha256:9c1e448a159875e21a7e68697feee2b61a4e584720974fa465a2fa1bc0776c73,1342

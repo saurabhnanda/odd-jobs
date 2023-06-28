@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.2.3
++ Upgrade resource pool
+
 ## 0.2.2
 
 - Bugfix in the `deleteJobQuery` function
