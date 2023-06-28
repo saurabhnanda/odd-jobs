@@ -3,4 +3,4 @@ packages:
   - .
 
 extra-deps:
-  - hdaemonize
+  - hdaemonize-0.5.7
