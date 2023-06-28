@@ -7,3 +7,5 @@ extra-deps:
   - timing-convenience-0.1@sha256:7ff807a9a9e5596f2b18d45c5a01aefb91d4a98f6a1008d183b5c550f68f7cb7,2092
   - servant-lucid-0.9.0.6
   - servant-0.20
+
+allow-newer: true
