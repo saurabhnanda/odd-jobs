@@ -14,8 +14,8 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest]
-        stack: ["2.9.1"]
-        ghc: ["8.8.4", "8.10.7"]
+        stack: ["2.11.1"]
+        ghc: ["8.8.4", "8.10.7", "9.2.8", "9.4.5", "9.6.2"]
 
     services:
       postgres:
