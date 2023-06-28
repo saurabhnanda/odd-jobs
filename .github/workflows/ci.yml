@@ -5,59 +5,40 @@ on:
     branches:
         - '*'
 
+
 jobs:
-  stack:
-    name: ${{ matrix.os }} / stack / ghc ${{ matrix.ghc }}
+  build:
+    name: CI
     runs-on: ${{ matrix.os }}
     env:
-      ACTIONS_ALLOW_UNSECURE_COMMANDS: true
+      STACK_ROOT: ${{ github.workspace }}/.stack
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest]
-        stack: ["2.11.1"]
-        ghc: ["8.8.4", "8.10.7", "9.2.8", "9.4.5", "nightly"]
-
-    services:
-      postgres:
-        image: postgres
-        env:
-          POSTGRES_PASSWORD: jobs_test
-          POSTGRES_USER: jobs_test
-          POSTGRES_DB: jobs_test
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 5432:5432
+        os: [ubuntu-latest, macos-latest,
+          # windows-latest # TODO add windows support
+        ]
+        resolver: [nightly, lts-19, lts-20]
 
     steps:
-    - name: confirm that postgres is working
-      run: |
-        PGPASSWORD=jobs_test psql -U jobs_test -h localhost -c 'select 1'
+      - name: Clone project
+        uses: actions/checkout@v2
+        with:
+          submodules: 'true'
 
-    - uses: actions/checkout@v2
+      - name: Cache dependencies
+        uses: actions/cache@v2
+        with:
+          path: |
+            ~/.stack
+            ${{ github.workspace }}/.stack
+          key: ${{ runner.os }}-${{ matrix.resolver }}-haskell-${{ hashFiles('stack.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.resolver }}-haskell-
 
-    - uses: actions/setup-haskell@v1.1
-      name: Setup Haskell Stack
-      with:
-        enable-stack: true
-        stack-no-global: true
-        stack-setup-ghc: true
-        stack-version: ${{ matrix.stack }}
-        ghc-version: ${{ matrix.ghc }}
-
-    - uses: actions/cache@v2
-      name: Cache ~/.stack
-      with:
-        path: ~/.stack
-        key: ${{ matrix.os }}-${{ matrix.ghc }}-stack
-
-    - name: Build
-      run: |
-        stack build --stack-yaml=ghc-${{ matrix.ghc }}.stack.yaml
-
-    - name: Test
-      run: |
-        stack test --stack-yaml=ghc-${{ matrix.ghc }}.stack.yaml
+      - name: Build and run tests
+        shell: bash
+        run: |
+            set -ex
+            curl -sSL https://get.haskellstack.org/ | sh -s - -f
+            stack test --fast --no-terminal --resolver=${{ matrix.resolver }}
