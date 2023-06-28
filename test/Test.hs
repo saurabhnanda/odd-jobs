@@ -334,43 +334,16 @@ testEnsureShutdown appPool jobPool = testCase "ensure shutdown" $ do
         assertJobIdStatus conn tname logRef "Job is scheduled in future, should still be queueud" Job.Queued jobId
         pure (jobId, logRef)
 
-testGracefulShutdown appPool jobPool = testCase "ensure graceful shutdown" $ do
-  withRandomTable jobPool $ \tname -> do
-    setupPreconditions 4 tname >>= \case
-      Nothing -> fail "Unable to setup preconditions for this test, even after trying thrice"
-      Just (j1, j2, logRef) -> do
-        Pool.withResource appPool $ \conn -> do
-          assertJobIdStatus conn tname logRef "Expecting the first job to be completed successfully if graceful shutdown is implemented correctly" Job.Success (jobId j1)
-          assertJobIdStatus conn tname logRef "Expecting the second job to be queued because no new job should be picked up during graceful shutdown" Job.Queued (jobId j2)
-  where
-    -- When this block completes execution, the graceful shutdown should have happened.
-    setupPreconditions i tname =
-      if i == (0 :: Integer)
-      then pure Nothing
-      else do
-        withNamedJobMonitor tname jobPool Prelude.id $ \logRef -> do
-          Pool.withResource appPool $ \conn -> do
-            t <- getCurrentTime
-            j1 <- Job.createJob conn tname (PayloadSucceed $ 4 * Job.defaultPollingInterval)
-            j2 <- Job.scheduleJob conn tname (PayloadSucceed 0) (addUTCTime (fromIntegral $ unSeconds $ Job.defaultPollingInterval * 2) t)
-            let waitForPrecondition = do
-                  k1 <- Job.findJobByIdIO conn tname (jobId j1)
-                  k2 <- Job.findJobByIdIO conn tname (jobId j2)
-                  case (jobStatus <$> k1, jobStatus <$> k2) of
-                    (Nothing, _) -> do
-                      traceM "Not expecting first job to be completed so quickly. Trying again."
-                      setupPreconditions (i-1) tname
-                    (_, Nothing) -> do
-                      traceM "Not expecting second job to be completed so quickly. Trying again."
-                      setupPreconditions (i-1) tname
-                    (Just Job.Locked, Just Job.Queued) -> pure $ Just (j1, j2, logRef) -- precondition met
-                    (Just Job.Success, _) -> setupPreconditions (i-1) tname
-                    (_, Just Job.Success) -> setupPreconditions (i-1) tname
-                    (Just Job.Queued, Just Job.Queued) -> do
-                      delaySeconds 1
-                      waitForPrecondition
-                    x -> fail $ "Unexpeted job statuses while setting up the test: " <> show x
-            waitForPrecondition
+testGracefulShutdown appPool jobPool =
+  testCase "ensure graceful shutdown" $ setup jobPool $ \tname resCfg logRef conn cfg -> do
+
+    j1 <- Job.createJob conn tname (PayloadSucceed $ 4 * Job.defaultPollingInterval)
+    time <- getCurrentTime
+    j2 <- Job.scheduleJob conn tname (PayloadSucceed 0) (addUTCTime (fromIntegral $ unSeconds $ Job.defaultPollingInterval * 2) time)
+    await <- runSingleJobFromQueue cfg
+    void $ traverse cancel await
+    assertJobIdStatus conn tname logRef "Expecting the first job to be completed successfully if graceful shutdown is implemented correctly" Job.Success (jobId j1)
+    assertJobIdStatus conn tname logRef "Expecting the second job to be queued because no new job should be picked up during graceful shutdown" Job.Queued (jobId j2)
 
 testJobScheduling appPool jobPool = testCase "job scheduling" $ do
   withNewJobMonitor jobPool $ \tname logRef -> do
@@ -482,7 +455,7 @@ testRetryBackoff appPool jobPool = testCase "retry backoff" $ do
       = cfg { Job.cfgDefaultRetryBackoff = pure . backoff }
 
 testResourceLimitedScheduling _appPool jobPool = testGroup "concurrency control by resources"
-  [ testCase "resources control how jobs run" $ setup $ \tname resCfg logRef conn cfg -> do
+  [ testCase "resources control how jobs run" $ setup jobPool $ \tname resCfg logRef conn cfg -> do
       let firstResource = [(Job.ResourceId "first", 1)]
           secondResource = [(Job.ResourceId "second", 1)]
 
@@ -498,7 +471,7 @@ testResourceLimitedScheduling _appPool jobPool = testGroup "concurrency control 
       assertJobIdStatus conn tname logRef "Job uses same resources as first - it shouldn't be running" Job.Queued secondJob
       assertJobIdStatus conn tname logRef "Job uses different resources - it should be running" Job.Locked thirdJob
 
-  , testCase "resource-less jobs run normally" $ setup $ \tname resCfg logRef conn cfg -> do
+  , testCase "resource-less jobs run normally" $ setup jobPool $ \tname resCfg logRef conn cfg -> do
       Job{jobId = firstJob} <- Job.createJobWithResources conn tname resCfg (PayloadSucceed 10) []
       Job{jobId = secondJob} <- Job.createJobWithResources conn tname resCfg (PayloadSucceed 10) []
 
@@ -508,7 +481,7 @@ testResourceLimitedScheduling _appPool jobPool = testGroup "concurrency control 
       assertJobIdStatus conn tname logRef "First job uses no resources - it should be running" Job.Locked firstJob
       assertJobIdStatus conn tname logRef "Second job uses no resources - it should be running" Job.Locked secondJob
 
-  , testCase "jobs can hold multiple resources" $ setup $ \tname resCfg logRef conn cfg -> do
+  , testCase "jobs can hold multiple resources" $ setup jobPool $ \tname resCfg logRef conn cfg -> do
       let firstResource = [(Job.ResourceId "first", 1)]
           secondResource = [(Job.ResourceId "second", 1)]
 
@@ -527,7 +500,7 @@ testResourceLimitedScheduling _appPool jobPool = testGroup "concurrency control 
       assertJobIdStatus conn tname logRef "Job uses same resources as first - it shouldn't be running" Job.Queued secondJob
       assertJobIdStatus conn tname logRef "Job uses same resources as first - it shouldn't be running" Job.Queued thirdJob
 
-  , testCase "resources are freed when jobs succeed" $ setup $ \tname resCfg logRef conn cfg -> do
+  , testCase "resources are freed when jobs succeed" $ setup jobPool $ \tname resCfg logRef conn cfg -> do
       let firstResource = [(Job.ResourceId "first", 1)]
 
       Job{jobId = firstJob} <- Job.createJobWithResources conn tname resCfg (PayloadSucceed 10) firstResource
@@ -546,7 +519,7 @@ testResourceLimitedScheduling _appPool jobPool = testGroup "concurrency control 
       assertJobIdStatus conn tname logRef "First job should have succeeded by now" Job.Success firstJob
       assertJobIdStatus conn tname logRef "Second job should be running after first job suceeded" Job.Locked secondJob
 
-  , testCase "resources are freed when jobs fail" $ setup $ \tname resCfg logRef conn cfg -> do
+  , testCase "resources are freed when jobs fail" $ setup jobPool $ \tname resCfg logRef conn cfg -> do
       let firstResource = [(Job.ResourceId "first", 1)]
 
       Job{jobId = firstJob} <- Job.createJobWithResources conn tname resCfg (PayloadAlwaysFail 10) firstResource
@@ -566,7 +539,7 @@ testResourceLimitedScheduling _appPool jobPool = testGroup "concurrency control 
       assertJobIdStatus conn tname logRef "First job should have failed by now" Job.Failed firstJob
       assertJobIdStatus conn tname logRef "Second job should be running after first job failed" Job.Locked secondJob
 
-  , testCase "resources allow for multiple usage" $ setup $ \tname resCfg logRef conn cfg -> do
+  , testCase "resources allow for multiple usage" $ setup jobPool $ \tname resCfg logRef conn cfg -> do
       let firstResource = [(Job.ResourceId "first", 1)]
           resCfg' = resCfg { Job.resCfgDefaultLimit = 2 }
 
@@ -579,7 +552,7 @@ testResourceLimitedScheduling _appPool jobPool = testGroup "concurrency control 
       assertJobIdStatus conn tname logRef "First job uses some resources - it should be running" Job.Locked firstJob
       assertJobIdStatus conn tname logRef "Second job uses some resources - it should be running" Job.Locked secondJob
 
-  , testCase "resource usage can differ by job" $ setup $ \tname resCfg logRef conn cfg -> do
+  , testCase "resource usage can differ by job" $ setup jobPool $ \tname resCfg logRef conn cfg -> do
       let firstResource n = [(Job.ResourceId "first", n)]
           resCfg' = resCfg { Job.resCfgDefaultLimit = 5 }
 
@@ -605,7 +578,7 @@ testResourceLimitedScheduling _appPool jobPool = testGroup "concurrency control 
       assertJobIdStatus conn tname logRef "Second job should be running after first job suceeded" Job.Locked secondJob
       assertJobIdStatus conn tname logRef "Third job fits alongside second job - it should be running after first job suceeded" Job.Locked thirdJob
 
-  , testCase "resource limits permanently block too-big jobs" $ setup $ \tname resCfg logRef conn cfg -> do
+  , testCase "resource limits permanently block too-big jobs" $ setup jobPool $ \tname resCfg logRef conn cfg -> do
       let firstResource = [(Job.ResourceId "first", 2)]
 
       Job{jobId = firstJob} <- Job.createJobWithResources conn tname resCfg (PayloadSucceed 10) firstResource
@@ -614,7 +587,7 @@ testResourceLimitedScheduling _appPool jobPool = testGroup "concurrency control 
 
       assertJobIdStatus conn tname logRef "Job requires too many resources - shouldn't be running" Job.Queued firstJob
 
-  , testCase "resources with 0 limit block jobs" $ setup' 0 $ \tname resCfg logRef conn cfg -> do
+  , testCase "resources with 0 limit block jobs" $ setup' jobPool 0 $ \tname resCfg logRef conn cfg -> do
       let firstResource = [(Job.ResourceId "first", 1)]
 
       Job{jobId = firstJob} <- Job.createJobWithResources conn tname resCfg (PayloadSucceed 10) firstResource
@@ -623,7 +596,7 @@ testResourceLimitedScheduling _appPool jobPool = testGroup "concurrency control 
 
       assertJobIdStatus conn tname logRef "Job can't access 0-limited resources - shouldn't be running" Job.Queued firstJob
 
-  , testCase "resources with negative limit block jobs" $ setup' (-5) $ \tname resCfg logRef conn cfg -> do
+  , testCase "resources with negative limit block jobs" $ setup' jobPool (-5) $ \tname resCfg logRef conn cfg -> do
       let firstResource = [(Job.ResourceId "first", 1)]
 
       Job{jobId = firstJob} <- Job.createJobWithResources conn tname resCfg (PayloadSucceed 10) firstResource
@@ -632,15 +605,16 @@ testResourceLimitedScheduling _appPool jobPool = testGroup "concurrency control 
 
       assertJobIdStatus conn tname logRef "Job can't access negative-limited resources - shouldn't be running" Job.Queued firstJob
   ]
+
+setup jobPool = setup' jobPool  1
+
+setup' jobPool defaultLimit action =
+  withRandomTable jobPool $ \tname ->
+    withRandomResourceTables defaultLimit jobPool tname $ \resCfg ->
+      withConfig tname jobPool (cfgFn resCfg) $ \logRef cfg -> do
+        Pool.withResource jobPool $ \conn -> action tname resCfg logRef conn cfg
+
   where
-    setup = setup' 1
-
-    setup' defaultLimit action =
-      withRandomTable jobPool $ \tname ->
-        withRandomResourceTables defaultLimit jobPool tname $ \resCfg ->
-          withConfig tname jobPool (cfgFn resCfg) $ \logRef cfg -> do
-            Pool.withResource jobPool $ \conn -> action tname resCfg logRef conn cfg
-
     cfgFn resCfg cfg = cfg
         { Job.cfgDefaultMaxAttempts = 1 -- Simplifies some tests where we have a failing job
         , Job.cfgConcurrencyControl = Job.ResourceLimits resCfg
