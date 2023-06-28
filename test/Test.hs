@@ -65,6 +65,19 @@ main = do
                  }
 
 #if MIN_VERSION_resource_pool(0,3,0)
+#if MIN_VERSION_resource_pool(0,4,0)
+    createAppPool = Pool.newPool $ Pool.defaultPoolConfig
+      (PGS.connect connInfo)  -- create a new resource
+      PGS.close               -- destroy resource
+      (fromRational 10)       -- number of seconds unused resources are kept around
+      45
+    createJobPool = Pool.newPool $ Pool.defaultPoolConfig
+      (PGS.connect connInfo)  -- create a new resource
+      PGS.close               -- destroy resource
+      (fromRational 10)       -- number of seconds unused resources are kept around
+      45
+#else
+
     createAppPool = Pool.newPool $ Pool.PoolConfig
       (PGS.connect connInfo)  -- create a new resource
       PGS.close               -- destroy resource
@@ -75,6 +88,7 @@ main = do
       PGS.close               -- destroy resource
       (fromRational 10)       -- number of seconds unused resources are kept around
       45
+#endif
 #else
     createAppPool = Pool.createPool
       (PGS.connect connInfo)  -- create a new resource

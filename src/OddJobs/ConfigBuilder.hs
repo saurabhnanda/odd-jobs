@@ -287,10 +287,17 @@ withConnectionPool connConfig action = withRunInIO $ \runInIO -> do
     poolCreator = liftIO $
       case connConfig of
 #if MIN_VERSION_resource_pool(0,3,0)
+#if MIN_VERSION_resource_pool(0,4,0)
         Left connString ->
           newPool $ defaultPoolConfig (PGS.connectPostgreSQL connString) PGS.close (fromIntegral $ 2 * unSeconds defaultPollingInterval) 8
         Right connInfo ->
           newPool $ defaultPoolConfig (PGS.connect connInfo) PGS.close (fromIntegral $ 2 * unSeconds defaultPollingInterval) 8
+#else
+        Left connString ->
+          newPool $ PoolConfig (PGS.connectPostgreSQL connString) PGS.close (fromIntegral $ 2 * unSeconds defaultPollingInterval) 8
+        Right connInfo ->
+          newPool $ PoolConfig (PGS.connect connInfo) PGS.close (fromIntegral $ 2 * unSeconds defaultPollingInterval) 8
+#endif
 #else
         Left connString ->
           createPool (PGS.connectPostgreSQL connString) PGS.close 1 (fromIntegral $ 2 * unSeconds defaultPollingInterval) 8

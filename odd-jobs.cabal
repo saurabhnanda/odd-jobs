@@ -89,7 +89,7 @@ library
     , mtl
     , optparse-applicative
     , postgresql-simple
-    , resource-pool
+    , resource-pool < 0.5.0.0
     , safe
     , servant
     , servant-lucid
@@ -153,7 +153,7 @@ executable devel
     , odd-jobs
     , optparse-applicative
     , postgresql-simple
-    , resource-pool >= 0.4.0.0 && < 0.5.0.0
+    , resource-pool 
     , safe
     , servant
     , servant-lucid
