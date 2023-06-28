@@ -37,7 +37,6 @@ import Test.Tasty.Hedgehog
 import qualified System.Random as R
 import Data.String (fromString)
 import qualified Data.IntMap.Strict as Map
-import Control.Monad.Trans.Control (liftWith, restoreT)
 import Control.Monad.Morph (hoist)
 import Data.List as DL
 import OddJobs.Web as Web
@@ -277,7 +276,7 @@ withRandomResourceTables defaultLimit jobPool tname action = do
   finally
     (do
       Pool.withResource jobPool $ \conn -> liftIO $ Migrations.createResourceTables conn tname resCfg
-      (action resCfg))
+      $ action resCfg)
     (Pool.withResource jobPool $ \conn -> liftIO $ void $ PGS.execute conn
         "drop function if exists ?; drop table if exists ?; drop table if exists ?"
         (resCfgCheckResourceFunction, resCfgUsageTable, resCfgResourceTable))
