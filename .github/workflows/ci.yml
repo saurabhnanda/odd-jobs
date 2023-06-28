@@ -15,7 +15,7 @@ jobs:
       matrix:
         os: [ubuntu-latest]
         stack: ["2.11.1"]
-        ghc: ["8.8.4", "8.10.7", "9.2.8", "9.4.5", "9.6.2"]
+        ghc: ["8.8.4", "8.10.7", "9.2.8", "9.4.5", "nightly"]
 
     services:
       postgres:
@@ -56,8 +56,8 @@ jobs:
 
     - name: Build
       run: |
-        stack build
+        stack build --stack-yaml=ghc-${{ matrix.ghc }}.stack.yaml
 
     - name: Test
       run: |
-        stack test
+        stack test --stack-yaml=ghc-${{ matrix.ghc }}.stack.yaml
