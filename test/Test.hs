@@ -5,6 +5,7 @@
 {-# OPTIONS_GHC -Wno-missing-signatures -Wno-partial-type-signatures #-}
 module Test where
 
+import Control.Monad.Trans.Control
 import Test.Tasty as Tasty
 import qualified OddJobs.Migrations as Migrations
 import qualified OddJobs.Job as Job
@@ -36,7 +37,6 @@ import Test.Tasty.Hedgehog
 import qualified System.Random as R
 import Data.String (fromString)
 import qualified Data.IntMap.Strict as Map
-import Control.Monad.Trans.Control (liftWith, restoreT)
 import Control.Monad.Morph (hoist)
 import Data.List as DL
 import OddJobs.Web as Web
@@ -64,31 +64,16 @@ main = do
                  , connectDatabase = "jobs_test"
                  }
 
-#if MIN_VERSION_resource_pool(0,3,0)
-    createAppPool = Pool.newPool $ Pool.PoolConfig
+    createAppPool = Pool.newPool $ Pool.defaultPoolConfig
       (PGS.connect connInfo)  -- create a new resource
       PGS.close               -- destroy resource
       (fromRational 10)       -- number of seconds unused resources are kept around
       45
-    createJobPool = Pool.newPool $ Pool.PoolConfig
+    createJobPool = Pool.newPool $ Pool.defaultPoolConfig
       (PGS.connect connInfo)  -- create a new resource
       PGS.close               -- destroy resource
       (fromRational 10)       -- number of seconds unused resources are kept around
       45
-#else
-    createAppPool = Pool.createPool
-      (PGS.connect connInfo)  -- create a new resource
-      PGS.close               -- destroy resource
-      1                       -- stripes
-      (fromRational 10)       -- number of seconds unused resources are kept around
-      45
-    createJobPool = Pool.createPool
-      (PGS.connect connInfo)  -- create a new resource
-      PGS.close               -- destroy resource
-      1                       -- stripes
-      (fromRational 10)       -- number of seconds unused resources are kept around
-      45
-#endif
 
 tests appPool jobPool = testGroup "All tests"
   [
@@ -241,14 +226,17 @@ ensureJobId conn tname jid = Job.findJobByIdIO conn tname jid >>= \case
   Nothing -> error $ "Not expecting job to be deleted. JobId=" <> show jid
   Just j -> pure j
 
-withRandomTable :: _ => Pool Connection -> (Job.TableName -> m a) -> m a
+withRandomTable :: (MonadBaseControl
+                          IO m, MonadUnliftIO m) => Pool Connection -> (Job.TableName -> m a) -> m a
 withRandomTable jobPool action = do
+  runInIO <- askRunInIO
   (tname :: Job.TableName) <- liftIO (fromString . ("jobs_" <>) <$> replicateM 10 (R.randomRIO ('a', 'z')))
   finally
-    (Pool.withResource jobPool (\conn -> liftIO $ Migrations.createJobTable conn tname) >> action tname)
-    (Pool.withResource jobPool $ \conn -> liftIO $ void $ PGS.execute conn "drop table if exists ?" (Only tname))
+    (liftIO $ Pool.withResource jobPool (\conn -> liftIO $ Migrations.createJobTable conn tname) >> runInIO (action tname))
+    (liftIO $ Pool.withResource jobPool $ \conn -> liftIO $ void $ PGS.execute conn "drop table if exists ?" (Only tname))
 
-withRandomResourceTables :: _ => Int -> Pool Connection -> Job.TableName -> (Job.ResourceCfg -> m a) -> m a
+withRandomResourceTables :: (MonadBaseControl
+                          IO m, MonadUnliftIO m) => Int -> Pool Connection -> Job.TableName -> (Job.ResourceCfg -> m a) -> m a
 withRandomResourceTables defaultLimit jobPool tname action = do
   resCfgResourceTable <- liftIO $ fromString . ("resources_" <>) <$> replicateM 10 (R.randomRIO ('a', 'z'))
   resCfgUsageTable <- liftIO $ fromString . ("usage_" <>) <$> replicateM 10 (R.randomRIO ('a', 'z'))
@@ -260,9 +248,9 @@ withRandomResourceTables defaultLimit jobPool tname action = do
 
   finally
     (do
-      Pool.withResource jobPool $ \conn -> liftIO $ Migrations.createResourceTables conn tname resCfg
+      liftIO $ Pool.withResource jobPool $ \conn -> liftIO $ Migrations.createResourceTables conn tname resCfg
       action resCfg)
-    (Pool.withResource jobPool $ \conn -> liftIO $ void $ PGS.execute conn
+    (liftIO $ Pool.withResource jobPool $ \conn -> liftIO $ void $ PGS.execute conn
         "drop function if exists ?; drop table if exists ?; drop table if exists ?"
         (resCfgCheckResourceFunction, resCfgUsageTable, resCfgResourceTable))
 
