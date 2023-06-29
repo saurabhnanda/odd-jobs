@@ -45,6 +45,7 @@ import UnliftIO.IORef
 import Debug.Trace
 import qualified OddJobs.ConfigBuilder as Builder
 import Servant.Static.TH (createApiAndServerDecs)
+import Control.Monad (void)
 
 -- startApp :: IO ()
 -- startApp = undefined
