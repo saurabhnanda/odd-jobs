@@ -2,6 +2,7 @@
 
 ## 0.2.3
 + Upgrade resource pool
++ Add ability to kill jobs
 
 ## 0.2.2
 
