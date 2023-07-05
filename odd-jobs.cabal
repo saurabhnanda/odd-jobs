@@ -76,7 +76,6 @@ library
     , base >=4.7 && <5
     , bytestring
     , containers
-    , daemons
     , directory
     , either
     , fast-logger
@@ -140,7 +139,6 @@ executable devel
     , base >=4.7 && <5
     , bytestring
     , containers
-    , daemons
     , directory
     , either
     , fast-logger
