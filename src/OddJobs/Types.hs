@@ -35,7 +35,7 @@ import Control.Monad.Logger (LogLevel)
 -- myJobsTable :: TableName
 -- myJobsTable = "my_jobs"
 -- @
--- 
+--
 -- This should also work for table names qualified by the schema name. For example:
 --
 -- @
@@ -72,6 +72,11 @@ data LogEvent
   | LogJobFailed !Job !SomeException !FailureMode !NominalDiffTime
   -- | Emitted when a job times out and is picked-up again for execution
   | LogJobTimeout !Job
+  -- | Emitted when user kills a job and the job thread sucessfully cancelled thereafter.
+  | LogKillJobSuccess !Job
+  -- | Emitted when user kills a job and the job thread is not found in the threadRef
+  -- | (most likely the job has either got completed or timed out).
+  | LogKillJobFailed !Job
   -- | Emitted whenever 'OddJobs.Job.jobPoller' polls the DB table
   | LogPoll
   -- | TODO
@@ -182,8 +187,11 @@ data Status
   -- | Jobs in 'Queued' status /may/ be picked up by the job-runner on the basis
   -- of the 'jobRunAt' field.
   | Queued
-  -- | Jobs in 'Failed' status will will not be retried by the job-runner.
+  -- | Jobs in 'Failed' status will not be retried by the job-runner.
   | Failed
+  -- | Jobs with 'Cancelled' status are cancelled by the user and will not be
+  -- retried by the job-runner
+  | Cancelled
   -- | Jobs in 'Retry' status will be retried by the job-runner on the basis of
   -- the 'jobRunAt' field.
   | Retry
@@ -227,6 +235,7 @@ instance ToText Status where
     Queued -> "queued"
     Retry -> "retry"
     Failed -> "failed"
+    Cancelled -> "cancelled"
     Locked -> "locked"
 
 instance (StringConv Text a) => FromText (Either a Status) where
@@ -234,6 +243,7 @@ instance (StringConv Text a) => FromText (Either a Status) where
     "success" -> Right Success
     "queued" -> Right Queued
     "failed" -> Right Failed
+    "cancelled" -> Right Cancelled
     "retry" -> Right Retry
     "locked" -> Right Locked
     x -> Left $ toS $ "Unknown job status: " <> x

@@ -85,6 +85,7 @@ dependencies:
   - servant-server
   - servant-lucid
   - warp
+  - containers
   - unordered-containers
   - optparse-applicative
   - filepath
@@ -149,4 +150,3 @@ tests:
       - mmorph
       - lifted-base
       - lifted-async
-      - containers

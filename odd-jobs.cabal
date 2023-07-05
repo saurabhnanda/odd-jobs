@@ -75,6 +75,7 @@ library
     , async ==2.2.4
     , base >=4.7 && <5
     , bytestring
+    , containers
     , directory
     , either
     , fast-logger
@@ -137,6 +138,7 @@ executable devel
     , async ==2.2.4
     , base >=4.7 && <5
     , bytestring
+    , containers
     , directory
     , either
     , fast-logger

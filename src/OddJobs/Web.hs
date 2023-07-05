@@ -116,6 +116,7 @@ instance ToHttpApiData Filter where
 --   , rEnqueue :: route :- "enqueue" :> Capture "jobId" JobId :> Post '[HTML] NoContent
 --   , rRunNow :: route :- "run" :> Capture "jobId" JobId :> Post '[HTML] NoContent
 --   , rCancel :: route :- "cancel" :> Capture "jobId" JobId :> Post '[HTML] NoContent
+--   , rKill :: route :- "kill" :> Capture "jobId" JobId :> Post '[HTML] NoContent
 --   , rRefreshJobTypes :: route :- "refresh-job-types" :> Post '[HTML] NoContent
 --   , rRefreshJobRunners :: route :- "refresh-job-runners" :> Post '[HTML] NoContent
 --   } deriving (Generic)
@@ -126,6 +127,7 @@ data Routes = Routes
   , rEnqueue :: JobId -> Text
   , rRunNow :: JobId -> Text
   , rCancel :: JobId -> Text
+  , rKill :: JobId -> Text
   , rRefreshJobTypes :: Text
   , rRefreshJobRunners :: Text
   , rStaticAsset :: Text -> Text
@@ -382,6 +384,7 @@ jobRow routes t (job@Job{..}, jobHtml) = do
       let statusFn = case jobStatus of
             Job.Success -> statusSuccess
             Job.Failed -> statusFailed
+            Job.Cancelled -> statusCancelled
             Job.Queued -> if jobRunAt > t
                           then statusFuture
                           else statusWaiting
@@ -394,11 +397,12 @@ jobRow routes t (job@Job{..}, jobHtml) = do
       let actionsFn = case jobStatus of
             Job.Success -> const mempty
             Job.Failed -> actionsFailed
+            Job.Cancelled -> actionsCancelled
             Job.Queued -> if jobRunAt > t
                           then actionsFuture
                           else actionsWaiting
             Job.Retry -> actionsRetry
-            Job.Locked -> const mempty
+            Job.Locked -> actionsLocked
       actionsFn routes job
 
 
@@ -406,6 +410,15 @@ actionsFailed :: Routes -> Job -> Html ()
 actionsFailed Routes{..} Job{..} = do
   form_ [ action_ (rEnqueue jobId), method_ "post" ] $ do
     button_ [ class_ "btn btn-secondary", type_ "submit" ] "Enqueue again"
+
+actionsCancelled :: Routes -> Job -> Html ()
+actionsCancelled Routes{..} Job{..} = case (jobLockedAt, jobLockedBy) of
+  (Just _, Just _) -> do
+    span_ [ class_ "badge badge-light" ] "Killing job"
+
+  _ -> do
+    form_ [ action_ (rEnqueue jobId), method_ "post" ] $ do
+      button_ [ class_ "btn btn-secondary", type_ "submit" ] "Enqueue again"
 
 actionsRetry :: Routes -> Job -> Html ()
 actionsRetry Routes{..} Job{..} = do
@@ -422,6 +435,11 @@ actionsWaiting Routes{..} Job{..} = do
   form_ [ action_ (rCancel jobId), method_ "post" ] $ do
     button_ [ class_ "btn btn-danger", type_ "submit" ] "Cancel"
 
+actionsLocked :: Routes -> Job -> Html ()
+actionsLocked Routes{..} Job{..} = do
+  form_ [ action_ (rKill jobId), method_ "post" ] $ do
+    button_ [ class_ "btn btn-warning", type_ "submit" ] "Kill"
+
 statusSuccess :: UTCTime -> Job -> Html ()
 statusSuccess t Job{..} = do
   span_ [ class_ "badge badge-success" ] "Success"
@@ -435,6 +453,12 @@ statusFailed t Job{..} = do
   span_ [ class_ "badge badge-danger" ] "Failed"
   span_ [ class_ "job-run-time" ] $ do
     abbr_ [ title_ (showText jobUpdatedAt) ] $ toHtml $ "Failed " <> humanReadableTime' t jobUpdatedAt <> " after " <> show jobAttempts <> " attempts"
+
+statusCancelled :: UTCTime -> Job -> Html ()
+statusCancelled t Job{..} = do
+  span_ [ class_ "badge badge-danger" ] "Cancelled"
+  span_ [ class_ "job-run-time" ] $ do
+    abbr_ [ title_ (showText jobUpdatedAt) ] $ toHtml $ "Cancelled " <> humanReadableTime' t jobUpdatedAt
 
 statusFuture :: UTCTime -> Job -> Html ()
 statusFuture t Job{..} = do
