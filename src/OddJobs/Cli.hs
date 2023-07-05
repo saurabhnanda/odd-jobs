@@ -15,12 +15,9 @@ import Data.Text
 import OddJobs.Job (startJobRunner, Config(..), LogLevel(..), LogEvent(..))
 import OddJobs.Types (UIConfig(..), Seconds(..), delaySeconds)
 import System.FilePath (FilePath, takeBaseName, takeDirectory)
-import System.Posix.Process (getProcessID)
-import System.Posix.Signals (Handler(CatchOnce), installHandler, sigTERM)
 import qualified System.Directory as Dir
 import qualified System.Exit as Exit
 import System.Environment (getProgName)
-import qualified System.Posix.Signals as Sig
 import qualified UnliftIO.Async as Async
 import UnliftIO (bracket_)
 import Safe (fromJustNote)
@@ -34,6 +31,7 @@ import Debug.Trace
 import Data.String.Conv (toS)
 #ifndef mingw32_HOST_OS
 import qualified System.Posix.Daemonize as Daemonize
+import System.Posix.Signals (Handler(CatchOnce), installHandler, sigTERM)
 #endif
 
 -- * Introduction
@@ -129,7 +127,9 @@ withGracefulTermination ioAction = do
   var <- newEmptyMVar
   let terminate = void $ tryPutMVar var ()
       waitForTermination = takeMVar var
+#ifndef mingw32_HOST_OS
   void $ installHandler sigTERM (CatchOnce terminate) Nothing
+#endif
   either (const Nothing) Just <$> race waitForTermination ioAction
 
 -- | Like 'withGracefulTermination' but ignoring the return value

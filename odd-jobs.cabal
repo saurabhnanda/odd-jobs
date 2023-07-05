@@ -99,7 +99,6 @@ library
     , text-conversions
     , time
     , timing-convenience
-    , unix
     , unliftio
     , unliftio-core
     , unordered-containers
@@ -108,6 +107,7 @@ library
   if !os(windows)
     build-depends:
         hdaemonize
+      , unix
   default-language: Haskell2010
 
 executable devel
@@ -165,7 +165,6 @@ executable devel
     , text-conversions
     , time
     , timing-convenience
-    , unix
     , unliftio
     , unliftio-core
     , unordered-containers
@@ -174,6 +173,7 @@ executable devel
   if !os(windows)
     build-depends:
         hdaemonize
+      , unix
   default-language: Haskell2010
 
 executable odd-jobs-cli-example
@@ -221,7 +221,6 @@ executable odd-jobs-cli-example
     , text-conversions
     , time
     , timing-convenience
-    , unix
     , unliftio
     , unliftio-core
     , unordered-containers
@@ -230,6 +229,7 @@ executable odd-jobs-cli-example
   if !os(windows)
     build-depends:
         hdaemonize
+      , unix
   default-language: Haskell2010
 
 test-suite jobrunner
@@ -297,7 +297,6 @@ test-suite jobrunner
     , text-conversions
     , time
     , timing-convenience
-    , unix
     , unliftio
     , unliftio-core
     , unordered-containers
@@ -306,4 +305,5 @@ test-suite jobrunner
   if !os(windows)
     build-depends:
         hdaemonize
+      , unix
   default-language: Haskell2010
