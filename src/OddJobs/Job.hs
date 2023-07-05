@@ -1,5 +1,6 @@
 {-# LANGUAGE RankNTypes, FlexibleInstances, FlexibleContexts, PartialTypeSignatures, UndecidableInstances #-}
 {-# LANGUAGE ExistentialQuantification, RecordWildCards, ScopedTypeVariables #-}
+{-# LANGUAGE CPP #-}
 
 module OddJobs.Job
   (
@@ -91,7 +92,6 @@ import Database.PostgreSQL.Simple.Notification
 import UnliftIO.Async hiding (poll)
 import UnliftIO.Concurrent (threadDelay, myThreadId)
 import Data.String
-import System.Posix.Process (getProcessID)
 import Network.HostName (getHostName)
 import UnliftIO.MVar
 import Debug.Trace
@@ -130,6 +130,9 @@ import Prelude hiding (log)
 import GHC.Exts (toList)
 import Database.PostgreSQL.Simple.Types as PGS (Identifier(..))
 import Database.PostgreSQL.Simple.ToField as PGS (toField)
+#ifndef mingw32_HOST_OS
+import System.Posix.Process (getProcessID)
+#endif
 
 -- | The documentation of odd-jobs currently promotes 'startJobRunner', which
 -- expects a fairly detailed 'Config' record, as a top-level function for
@@ -231,7 +234,16 @@ startJobRunner jm = do
 
 jobWorkerName :: IO String
 jobWorkerName = do
+#ifndef mingw32_HOST_OS
   pid <- getProcessID
+#else
+  -- assign it to a random number for windows.
+  -- not sure if it impacts anything if this function is called twice,
+  -- we don't have a global id like on unix for a process
+  -- so all will be 42 for now (unless this causes issues, then change it)
+  let pid = 42
+#endif
+
   hname <- getHostName
   pure $ hname ++ ":" ++ show pid
 
