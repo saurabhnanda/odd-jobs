@@ -13,7 +13,7 @@ jobs:
       ACTIONS_ALLOW_UNSECURE_COMMANDS: true
     strategy:
       matrix:
-        os: [ubuntu-latest windows]
+        os: [ubuntu-latest, windows]
         stack: ["2.11.1"]
         ghc: ["8.8.4", "8.10.7", "9.2.8", "9.4.5"]
 
