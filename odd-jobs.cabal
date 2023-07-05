@@ -107,7 +107,7 @@ library
     , warp
   if !os(windows)
     build-depends:
-      , hdaemonize
+        hdaemonize
   default-language: Haskell2010
 
 executable devel
@@ -173,7 +173,7 @@ executable devel
     , warp
   if !os(windows)
     build-depends:
-      , hdaemonize
+        hdaemonize
   default-language: Haskell2010
 
 executable odd-jobs-cli-example
@@ -229,7 +229,7 @@ executable odd-jobs-cli-example
     , warp
   if !os(windows)
     build-depends:
-      , hdaemonize
+        hdaemonize
   default-language: Haskell2010
 
 test-suite jobrunner
@@ -305,5 +305,5 @@ test-suite jobrunner
     , warp
   if !os(windows)
     build-depends:
-      , hdaemonize
+        hdaemonize
   default-language: Haskell2010
