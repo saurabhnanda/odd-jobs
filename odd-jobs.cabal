@@ -297,7 +297,7 @@ test-suite jobrunner
     , text-conversions
     , time
     , timing-convenience
-    , unix-compat
+    , unix
     , unliftio
     , unliftio-core
     , unordered-containers
