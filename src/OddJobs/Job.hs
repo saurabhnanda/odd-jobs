@@ -38,6 +38,7 @@ module OddJobs.Job
   , AllJobTypes(..)
   , ResourceId(..)
   , FunctionName
+  , RunnerEnv(..)
 
   -- ** Structured logging
   --
@@ -52,6 +53,7 @@ module OddJobs.Job
   , jobEventListener
   , jobPoller
   , jobPollingSql
+  , pollRunJob
   , JobRunner
   , HasJobRunner (..)
 
@@ -374,6 +376,9 @@ updateJobHelper tname conn (newStatus, existingStates, mRunAt, jid) =
 data TimeoutException = TimeoutException deriving (Eq, Show)
 instance Exception TimeoutException
 
+-- | this spawns the job on a a seperate thread, and
+--   also spawns a monitoring thread, whichever finishes
+--   first kills the other.
 runJobWithTimeout :: (HasJobRunner m)
                   => Seconds
                   -> Job
@@ -397,6 +402,7 @@ runJobWithTimeout timeoutSec job = do
     (atomicModifyIORef' threadsRef $ \threads -> (DL.delete a threads, ()))
 
 
+-- | runs a job, blocks for as long as it's in progress
 runJob :: (HasJobRunner m) => JobId -> m ()
 runJob jid = do
   findJobById jid >>= \case
@@ -559,60 +565,67 @@ jobPollingIO pollerDbConn processName tname lockTimeout = do
 jobPoller :: (HasJobRunner m) => m ()
 jobPoller = do
   processName <- liftIO jobWorkerName
-  pool <- getDbPool
-  tname <- getTableName
-  lockTimeout <- getDefaultJobTimeout
-  traceM "jobPoller just before log statement"
   log LevelInfo $ LogText $ toS $ "Starting the job monitor via DB polling with processName=" <> processName
-
-  let poll conn mResCfg = join $ mask_ $ do
-        log LevelDebug $ LogText $ toS $ "[" <> processName <> "] Polling the job queue.."
-        t <- liftIO getCurrentTime
-        r <- case mResCfg of
-          Nothing -> liftIO $
-             PGS.query conn jobPollingSql
-             ( tname
-             , Locked
-             , t
-             , processName
-             , tname
-             , t
-             , In [Queued, Retry]
-             , Locked
-             , addUTCTime (fromIntegral $ negate $ unSeconds lockTimeout) t)
-          Just ResourceCfg{..} -> liftIO $
-             PGS.query conn jobPollingWithResourceSql
-             ( tname
-             , Locked
-             , t
-             , processName
-             , tname
-             , t
-             , In [Queued, Retry]
-             , Locked
-             , addUTCTime (fromIntegral $ negate $ unSeconds lockTimeout) t
-             , resCfgCheckResourceFunction
-             )
-        case r of
-          -- When we don't have any jobs to run, we can relax a bit...
-          [] -> pure delayAction
-
-          -- When we find a job to run, fork and try to find the next job without any delay...
-          [Only (jid :: JobId)] -> do
-            void $ async $ runJob jid
-            pure noDelayAction
-
-          x -> error $ "WTF just happened? I was supposed to get only a single row, but got: " ++ show x
-
   concurrencyControlFn <- getConcurrencyControlFn
-  withResource pool $ \pollerDbConn -> forever $ concurrencyControlFn pollerDbConn >>= \case
-    DontPoll -> do
-      log LevelWarn $ LogText "NOT polling the job queue due to concurrency control"
-      -- If we can't run any jobs ATM, relax and wait for resources to free up
-      delayAction
-    PollAny -> poll pollerDbConn Nothing
-    PollWithResources resCfg -> poll pollerDbConn (Just resCfg)
+  pool <- getDbPool
+  forever $ do
+    concurencyPolicy <- withResource pool concurrencyControlFn
+    case concurencyPolicy of
+      DontPoll -> log LevelWarn $ LogText "NOT polling the job queue due to concurrency control"
+      PollAny -> void $ pollRunJob processName Nothing
+      PollWithResources resCfg -> void $ pollRunJob processName (Just resCfg)
 
+-- | Polls a job and runs it, or executes a delay action if no job was found
+--
+--   returns an async to the task that was started, allowing you
+--   to block until it's finished
+pollRunJob :: (HasJobRunner m) => String -> Maybe ResourceCfg -> m (Maybe (Async ()))
+pollRunJob processName mResCfg = do
+    tname <- getTableName
+    -- note it's better to use fine grained pool connection,
+    -- since data.pool already has it's internal resource cache.
+    -- this way the user can configure how long a connection
+    -- needs to remain open.
+    pool <- getDbPool
+    lockTimeout <- getDefaultJobTimeout
+    join $ withResource pool $ \pollerDbConn -> mask_ $ do
+      log LevelDebug $ LogText $ toS $ "[" <> processName <> "] Polling the job queue.."
+      t <- liftIO getCurrentTime
+      r <- case mResCfg of
+        Nothing -> liftIO $
+           PGS.query pollerDbConn jobPollingSql
+           ( tname
+           , Locked
+           , t
+           , processName
+           , tname
+           , t
+           , In [Queued, Retry]
+           , Locked
+           , addUTCTime (fromIntegral $ negate $ unSeconds lockTimeout) t)
+        Just ResourceCfg{..} -> liftIO $
+           PGS.query pollerDbConn jobPollingWithResourceSql
+           ( tname
+           , Locked
+           , t
+           , processName
+           , tname
+           , t
+           , In [Queued, Retry]
+           , Locked
+           , addUTCTime (fromIntegral $ negate $ unSeconds lockTimeout) t
+           , resCfgCheckResourceFunction
+           )
+      case r of
+        -- When we don't have any jobs to run, we can relax a bit...
+        [] -> pure (Nothing <$ delayAction)
+
+        -- When we find a job to run, fork and try to find the next job without any delay...
+        [Only (jid :: JobId)] -> do
+          x <- async $ runJob jid
+          pure $ Just x <$ noDelayAction
+
+        x -> error $ "WTF just happened? I was supposed to get only a single row, but got: " ++ show x
   where
     delayAction = delaySeconds =<< getPollingInterval
     noDelayAction = pure ()
@@ -740,7 +753,7 @@ scheduleJob conn tname payload runAt = do
   case rs of
     [] -> Prelude.error . (<> "Not expecting a blank result set when creating a job. Query=") <$> queryFormatter
     [r] -> pure r
-    _ -> Prelude.error . (<> "Not expecting multiple rows when creating a single job. Query=") <$> queryFormatter 
+    _ -> Prelude.error . (<> "Not expecting multiple rows when creating a single job. Query=") <$> queryFormatter
 
 type ResourceList = [(ResourceId, Int)]
 
@@ -785,7 +798,6 @@ scheduleJobWithResources conn tname ResourceCfg{..} payload resources runAt = do
   PGS.commit conn
 
   pure job
-
 
 -- getRunnerEnv :: (HasJobRunner m) => m RunnerEnv
 -- getRunnerEnv = ask
@@ -840,4 +852,3 @@ fetchAllJobRunners :: (MonadIO m)
                    -> m [JobRunnerName]
 fetchAllJobRunners UIConfig{uicfgTableName, uicfgDbPool} = liftIO $ withResource uicfgDbPool $ \conn -> do
   mapMaybe fromOnly <$> PGS.query conn "select distinct locked_by from ?" (Only uicfgTableName)
-
