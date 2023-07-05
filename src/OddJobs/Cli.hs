@@ -2,6 +2,8 @@
 {-# LANGUAGE PartialTypeSignatures #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE CPP #-}
+
 module OddJobs.Cli where
 
 import Options.Applicative as Opts
@@ -12,7 +14,6 @@ import Data.Functor (void)
 import Data.Text
 import OddJobs.Job (startJobRunner, Config(..), LogLevel(..), LogEvent(..))
 import OddJobs.Types (UIConfig(..), Seconds(..), delaySeconds)
-import qualified System.Posix.Daemonize as Daemonize
 import System.FilePath (FilePath, takeBaseName, takeDirectory)
 import System.Posix.Process (getProcessID)
 import System.Posix.Signals (Handler(CatchOnce), installHandler, sigTERM)
@@ -31,6 +32,9 @@ import Data.Text.Encoding (decodeUtf8)
 import Network.Wai.Handler.Warp as Warp
 import Debug.Trace
 import Data.String.Conv (toS)
+#ifndef mingw32_HOST_OS
+import qualified System.Posix.Daemonize as Daemonize
+#endif
 
 -- * Introduction
 --
@@ -147,12 +151,16 @@ defaultStartCommand :: CommonStartArgs
                     -> IO ()
 defaultStartCommand CommonStartArgs{..} mUIArgs cliType = do
   if startDaemonize then do
+#ifdef mingw32_HOST_OS
+    error "daemons not supported on windows"
+#else
     Daemonize.serviced
       $ Daemonize.simpleDaemon
       { Daemonize.program = \() -> withGracefulTermination_ coreStartupFn
       , Daemonize.name = Just $ takeBaseName startPidFile
       , Daemonize.pidfileDirectory = Just $ takeDirectory startPidFile
       }
+#endif
   else
     coreStartupFn
   where
