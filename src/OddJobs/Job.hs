@@ -125,11 +125,11 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BSL
 import System.FilePath (FilePath)
 import qualified System.Directory as Dir
-import Data.Aeson.Internal (iparse, IResult(..), formatError)
 import Prelude hiding (log)
 import GHC.Exts (toList)
 import Database.PostgreSQL.Simple.Types as PGS (Identifier(..))
 import Database.PostgreSQL.Simple.ToField as PGS (toField)
+import Data.Aeson.Types
 
 -- | The documentation of odd-jobs currently promotes 'startJobRunner', which
 -- expects a fairly detailed 'Config' record, as a top-level function for
@@ -427,7 +427,7 @@ runJob jid = do
         runJobWithTimeout lockTimeout job
         endTime <- liftIO getCurrentTime
         shouldDeleteJob <- deleteSuccessfulJobs
-        let newJob = job{jobStatus=Success, jobLockedBy=Nothing, jobLockedAt=Nothing, jobUpdatedAt = endTime}
+        let newJob = job{jobStatus=OddJobs.Types.Success, jobLockedBy=Nothing, jobLockedAt=Nothing, jobUpdatedAt = endTime}
         if shouldDeleteJob
           then deleteJob jid
           else void $ saveJob newJob
