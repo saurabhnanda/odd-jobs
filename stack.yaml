@@ -1,11 +1,5 @@
 resolver: lts-21.2
 
-nix:
-  enable: true
-  packages:
-    - postgresql
-    - zlib
-
 packages:
   - .
 extra-deps:
