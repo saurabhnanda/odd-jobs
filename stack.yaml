@@ -1,4 +1,4 @@
-resolver: lts-21.2
+resolver: lts-21.13
 
 packages:
   - .
@@ -10,10 +10,10 @@ extra-deps:
   - text-iso8601-0.1@sha256:fc10d8de72fc094d0d299644f17421b9430d1c1092a1355c7f0c02d8b6edf6a7,2371
   - th-abstraction-0.5.0.0@sha256:4351cadf6bf0ca80c90225bae0b12f4cfdd550f30c333b050186af5a8bc19457,2236
   - git: https://github.com/haskell-servant/servant.git
-    commit: c194e5ccefb49c92b0be1bf9248d647aba1b5d95
+    commit: a14cd7e520816c38c267efcef43e3c10d66d0186
     subdir: servant
   - git: https://github.com/haskell-servant/servant.git
-    commit: c194e5ccefb49c92b0be1bf9248d647aba1b5d95
+    commit: a14cd7e520816c38c267efcef43e3c10d66d0186
     subdir: servant-server
   - postgresql-simple-0.6.5.1
 
