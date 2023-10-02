@@ -129,7 +129,11 @@ import Prelude hiding (log)
 import GHC.Exts (toList)
 import Database.PostgreSQL.Simple.Types as PGS (Identifier(..))
 import Database.PostgreSQL.Simple.ToField as PGS (toField)
+#if MIN_VERSION_aeson(2,2,0)
 import Data.Aeson.Types
+#else
+import Data.Aeson.Internal (iparse, IResult(..), formatError)
+#endif
 
 -- | The documentation of odd-jobs currently promotes 'startJobRunner', which
 -- expects a fairly detailed 'Config' record, as a top-level function for
