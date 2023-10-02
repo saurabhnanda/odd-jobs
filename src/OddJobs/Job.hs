@@ -1,5 +1,5 @@
 {-# LANGUAGE RankNTypes, FlexibleInstances, FlexibleContexts, PartialTypeSignatures, UndecidableInstances #-}
-{-# LANGUAGE ExistentialQuantification, RecordWildCards, ScopedTypeVariables #-}
+{-# LANGUAGE ExistentialQuantification, RecordWildCards, ScopedTypeVariables, CPP #-}
 
 module OddJobs.Job
   (
@@ -527,7 +527,7 @@ jobMonitor = do
 -- | Ref: 'jobPoller'
 jobPollingSql :: Query
 jobPollingSql =
-  "update ? set status = ?, locked_at = ?, locked_by = ?, attempts=attempts+1\
+  "update ? set status = ?, locked_at = ?, locked_by = ?, attempts=attempts+1 \
   \ WHERE id in (select id from ? where (run_at<=? AND ((status in ?) OR (status = ? and locked_at<?))) \
   \ ORDER BY attempts ASC, run_at ASC LIMIT 1 FOR UPDATE) RETURNING id"
 
