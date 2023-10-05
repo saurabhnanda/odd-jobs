@@ -140,11 +140,11 @@ type TestM = ReaderT Env IO
 testPayload :: Value
 testPayload = toJSON (10 :: Int)
 
-jobRunner :: Job.Job -> IO ()
-jobRunner Job{jobPayload, jobAttempts} = case fromJSON jobPayload of
+jobRunner :: Job.Job -> IO (Maybe Aeson.Value)
+jobRunner Job{jobPayload, jobAttempts} = (Nothing <$) $ case fromJSON jobPayload of
   Aeson.Error e -> error e
   Success (j :: JobPayload) ->
-    let recur pload idx = case pload of
+    let recur pload idx =  case pload of
           PayloadAlwaysFail delay -> delaySeconds delay >> error ("Forced error after " <> show delay <> " seconds")
           PayloadSucceed delay -> delaySeconds delay
           PayloadFail delay innerpload -> if idx<jobAttempts
@@ -265,12 +265,12 @@ runSingleJobFromQueue :: Job.Config -> IO (Maybe (Async ()))
 runSingleJobFromQueue config' = do
   r <- liftIO $ newIORef mempty
   waitTillJobStart <- newEmptyMVar
-  let config = config' {
-        Job.cfgPollingInterval = 0
-        , Job.cfgJobRunner = \job -> do
-            putMVar waitTillJobStart ()
-            jobRunner job
-                       }
+  let config =  config' 
+                { Job.cfgPollingInterval = 0
+                , Job.cfgJobRunner = \job -> do
+                    putMVar waitTillJobStart ()
+                    jobRunner job
+                }
   let monitorEnv = Job.RunnerEnv
                    { Job.envConfig = config
                    , Job.envJobThreadsRef = r

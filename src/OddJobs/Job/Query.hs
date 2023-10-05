@@ -86,4 +86,5 @@ jobDbColumns =
   , "attempts"
   , "locked_at"
   , "locked_by"
+  , "result"
   ]

@@ -51,7 +51,7 @@ mkConfig :: (LogLevel -> LogEvent -> IO ())
          -- ^ DB connection-pool to be used by job-runner. Ref: 'cfgDbPool'
          -> ConcurrencyControl
          -- ^ Concurrency configuration. Ref: 'cfgConcurrencyControl'
-         -> (Job -> IO ())
+         -> (Job -> IO (Maybe Aeson.Value))
          -- ^ The actual "job runner" which contains your application code. Ref: 'cfgJobRunner'
          -> (Config -> Config)
          -- ^ A function that allows you to modify the \"interim config\". The

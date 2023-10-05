@@ -230,6 +230,7 @@ data Job = Job
   , jobAttempts :: Int
   , jobLockedAt :: Maybe UTCTime
   , jobLockedBy :: Maybe JobRunnerName
+  , jobResult :: Maybe Aeson.Value
   } deriving (Eq, Show, Generic)
 
 instance ToText Status where
@@ -272,6 +273,7 @@ instance FromRow Job where
     <*> field -- attempts
     <*> field -- lockedAt
     <*> field -- lockedBy
+    <*> field -- job result
 
 -- TODO: Add a sum-type for return status which can signal the monitor about
 -- whether the job needs to be retried, marked successfull, or whether it has
@@ -296,6 +298,17 @@ data AllJobTypes
   -- | A custom 'IO' action for fetching the list of job-types.
   | AJTCustom (IO [Text])
 
+
+-- | TODO: documentation
+-- data JobResult = forall out . ToJSON out => JobResult (Maybe out)
+
+-- instance ToField JobResult where
+--   toField (JobResult Nothing) = ToField.Plain "null"
+--   toField (JobResult (Just x)) = toField (toJSON x)
+
+-- voidJob :: Functor f => f a -> f JobResult
+-- voidJob x = JobResult (Nothing :: Maybe Int) <$ x
+
 -- | While odd-jobs is highly configurable and the 'Config' data-type might seem
 -- daunting at first, it is not necessary to tweak every single configuration
 -- parameter by hand.
@@ -312,7 +325,7 @@ data Config = Config
     -- throws a runtime exception, the job will be retried
     -- 'cfgDefaultMaxAttempts' times. Please look at the examples/tutorials if
     -- your applicaton's code is not in the @IO@ monad.
-  , cfgJobRunner :: Job -> IO ()
+  , cfgJobRunner :: Job -> IO (Maybe Aeson.Value)
 
     -- | The number of times a failing job is retried before it is considered is
     -- "permanently failed" and ignored by the job-runner. This config parameter
