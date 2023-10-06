@@ -788,14 +788,14 @@ scheduleJob conn tname payload runAt = do
 
 type ResourceList = [(ResourceId, Int)]
 
-createJobWithResources
-  :: ToJSON p
-  => Connection
-  -> TableName
-  -> ResourceCfg
-  -> p
-  -> ResourceList
-  -> IO Job
+createJobWithResources :: 
+  ToJSON p =>
+  Connection ->
+  TableName ->
+  ResourceCfg ->
+  p ->
+  ResourceList ->
+  IO Job
 createJobWithResources conn tname resCfg payload resources = do
   t <- getCurrentTime
   scheduleJobWithResources conn tname resCfg payload resources t
@@ -809,10 +809,9 @@ scheduleJobWithResources
   -> ResourceList
   -> UTCTime
   -> IO Job
-scheduleJobWithResources conn tname ResourceCfg{..} payload resources runAt = do
+scheduleJobWithResources conn tname ResourceCfg{..} payload resources runAt = PGS.withTransaction conn $ do
   -- We insert everything in a single transaction to delay @NOTIFY@ calls,
   -- so a job isn't picked up before its resources are inserted.
-  PGS.begin conn
   let args = ( tname, runAt, Queued, toJSON payload, Nothing :: Maybe Value, 0 :: Int, Nothing :: Maybe Text, Nothing :: Maybe Text )
       queryFormatter = toS <$> PGS.formatQuery conn createJobQuery args
   rs <- PGS.query conn createJobQuery args
@@ -825,8 +824,6 @@ scheduleJobWithResources conn tname ResourceCfg{..} payload resources runAt = do
   forM_ resources $ \(resourceId, usage) -> do
     void $ PGS.execute conn ensureResource (resCfgResourceTable, rawResourceId resourceId, resCfgDefaultLimit)
     void $ PGS.execute conn registerResourceUsage (resCfgUsageTable, jobId job, rawResourceId resourceId, usage)
-
-  PGS.commit conn
 
   pure job
 
