@@ -1,5 +1,5 @@
 {-# LANGUAGE RankNTypes, FlexibleInstances, FlexibleContexts, PartialTypeSignatures, UndecidableInstances #-}
-{-# LANGUAGE ExistentialQuantification, RecordWildCards, ScopedTypeVariables #-}
+{-# LANGUAGE ExistentialQuantification, RecordWildCards, ScopedTypeVariables, CPP #-}
 
 module OddJobs.Job
   (
@@ -125,11 +125,16 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BSL
 import System.FilePath (FilePath)
 import qualified System.Directory as Dir
-import Data.Aeson.Internal (iparse, IResult(..), formatError)
 import Prelude hiding (log)
 import GHC.Exts (toList)
 import Database.PostgreSQL.Simple.Types as PGS (Identifier(..))
 import Database.PostgreSQL.Simple.ToField as PGS (toField)
+import OddJobs.Job.Query
+#if MIN_VERSION_aeson(2,2,0)
+import Data.Aeson.Types
+#else
+import Data.Aeson.Internal (iparse, IResult(..), formatError)
+#endif
 
 -- | The documentation of odd-jobs currently promotes 'startJobRunner', which
 -- expects a fairly detailed 'Config' record, as a top-level function for
@@ -234,39 +239,6 @@ jobWorkerName = do
   pid <- getProcessID
   hname <- getHostName
   pure $ hname ++ ":" ++ show pid
-
--- | If you are writing SQL queries where you want to return ALL columns from
--- the jobs table it is __recommended__ that you do not issue a @SELECT *@ or
--- @RETURNIG *@. List out specific DB columns using 'jobDbColumns' and
--- 'concatJobDbColumns' instead. This will insulate you from runtime errors
--- caused by addition of new columns to 'cfgTableName' in future versions of
--- OddJobs.
-jobDbColumns :: (IsString s, Semigroup s) => [s]
-jobDbColumns =
-  [ "id"
-  , "created_at"
-  , "updated_at"
-  , "run_at"
-  , "status"
-  , "payload"
-  , "last_error"
-  , "attempts"
-  , "locked_at"
-  , "locked_by"
-  ]
-
--- | All 'jobDbColumns' joined together with commas. Useful for constructing SQL
--- queries, eg:
---
--- @'query_' conn $ "SELECT " <> concatJobDbColumns <> "FROM jobs"@
-
-concatJobDbColumns :: (IsString s, Semigroup s) => s
-concatJobDbColumns = concatJobDbColumns_ jobDbColumns ""
-  where
-    concatJobDbColumns_ [] x = x
-    concatJobDbColumns_ [col] x = x <> col
-    concatJobDbColumns_ (col:cols) x = concatJobDbColumns_ cols (x <> col <> ", ")
-
 
 findJobByIdQuery :: PGS.Query
 findJobByIdQuery = "SELECT " <> concatJobDbColumns <> " FROM ? WHERE id = ?"
@@ -427,7 +399,7 @@ runJob jid = do
         runJobWithTimeout lockTimeout job
         endTime <- liftIO getCurrentTime
         shouldDeleteJob <- deleteSuccessfulJobs
-        let newJob = job{jobStatus=Success, jobLockedBy=Nothing, jobLockedAt=Nothing, jobUpdatedAt = endTime}
+        let newJob = job{jobStatus=OddJobs.Types.Success, jobLockedBy=Nothing, jobLockedAt=Nothing, jobUpdatedAt = endTime}
         if shouldDeleteJob
           then deleteJob jid
           else void $ saveJob newJob
@@ -519,29 +491,6 @@ jobMonitor = do
     cancel a1
     log LevelInfo (LogText "Waiting for jobs to complete.")
     waitForJobs
-
--- | Ref: 'jobPoller'
-jobPollingSql :: Query
-jobPollingSql =
-  "update ? set status = ?, locked_at = ?, locked_by = ?, attempts=attempts+1\
-  \ WHERE id in (select id from ? where (run_at<=? AND ((status in ?) OR (status = ? and locked_at<?))) \
-  \ ORDER BY attempts ASC, run_at ASC LIMIT 1 FOR UPDATE) RETURNING id"
-
-jobPollingWithResourceSql :: Query
-jobPollingWithResourceSql =
-  " UPDATE ? SET status = ?, locked_at = ?, locked_by = ?, attempts = attempts + 1 \
-  \ WHERE id in (select id from ? where (run_at<=? AND ((status in ?) OR (status = ? and locked_at<?))) \
-  \ AND ?(id) \
-  \ ORDER BY attempts ASC, run_at ASC LIMIT 1) \
-  \ RETURNING id"
-
--- | Ref: 'killJobPoller'
-killJobPollingSql :: Query
-killJobPollingSql =
-  "UPDATE ? SET locked_at = NULL, locked_by = NULL \
-  \ WHERE id IN (SELECT id FROM ? WHERE status = ? AND locked_by = ? AND locked_at <= ? \
-  \ ORDER BY locked_at ASC LIMIT 1 FOR UPDATE \
-  \ ) RETURNING id"
 
 waitForJobs :: (HasJobRunner m)
             => m ()
@@ -720,9 +669,6 @@ jobEventListener = do
 
   let tryLockingJob jid mResCfg = withDbConnection $ \conn -> do
         let q = "UPDATE ? SET status=?, locked_at=now(), locked_by=?, attempts=attempts+1 WHERE id=? AND status in ? RETURNING id"
-            qWithResources =
-              "UPDATE ? SET status=?, locked_at=now(), locked_by=?, attempts=attempts+1 \
-              \ WHERE id=? AND status in ? AND ?(id) RETURNING id"
         result <- case mResCfg of
           Nothing -> liftIO $ PGS.query conn q (tname, Locked, jwName, jid, In [Queued, Retry])
           Just ResourceCfg{..} -> liftIO $ PGS.query conn qWithResources
@@ -775,17 +721,6 @@ jobEventListener = do
       mLockedAt_ <- o .:? "locked_at"
       jid <- o .: "id"
       pure (jid, runAt_, mLockedAt_)
-
-
-
-createJobQuery :: PGS.Query
-createJobQuery = "INSERT INTO ? (run_at, status, payload, last_error, attempts, locked_at, locked_by) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING " <> concatJobDbColumns
-
-ensureResource :: PGS.Query
-ensureResource = "INSERT INTO ? (id, usage_limit) VALUES (?, ?) ON CONFLICT DO NOTHING"
-
-registerResourceUsage :: PGS.Query
-registerResourceUsage = "INSERT INTO ? (job_id, resource_id, usage) VALUES (?, ?, ?)"
 
 -- $createJobs
 --
