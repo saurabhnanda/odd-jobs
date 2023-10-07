@@ -58,6 +58,7 @@ library
       OddJobs.ConfigBuilder
   other-modules:
       UI
+      OddJobs.Job.Query
       Paths_odd_jobs
   hs-source-dirs:
       src
