@@ -82,7 +82,6 @@ module OddJobs.Job
   )
 where
 
-import OddJobs.Job.Query
 import OddJobs.Types
 import qualified Data.Pool as Pool
 import Data.Pool(Pool)

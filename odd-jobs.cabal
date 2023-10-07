@@ -118,6 +118,7 @@ executable devel
       OddJobs.Endpoints
       OddJobs.Job
       OddJobs.Migrations
+      OddJobs.Job.Query
       OddJobs.Types
       OddJobs.Web
       UI
