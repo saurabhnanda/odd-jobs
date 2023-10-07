@@ -10,7 +10,7 @@ extra-deps:
   - text-iso8601-0.1@sha256:fc10d8de72fc094d0d299644f17421b9430d1c1092a1355c7f0c02d8b6edf6a7,2371
   - th-abstraction-0.5.0.0@sha256:4351cadf6bf0ca80c90225bae0b12f4cfdd550f30c333b050186af5a8bc19457,2236
   - servant-0.20.1
-  - servant-0.20
+  - servant-server-0.20
   - postgresql-simple-0.6.5.1
 
 allow-newer: true
