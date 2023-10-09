@@ -360,7 +360,7 @@ defaultDelayedJobDeletionSql tname d conn =
   where
     -- this function has been deliberately written like this to ensure that whenever a new Status is added/removed
     -- one is forced to update this list and decide what is to be done about the new Status
-    statusList = (flip DL.filter) ([minBound..maxBound] :: [OddJobs.Types.Status]) $ \st -> case st of
+    statusList = flip DL.filter ([minBound..maxBound] :: [OddJobs.Types.Status]) $ \case
       Success -> True
       Queued -> False
       Failed -> True

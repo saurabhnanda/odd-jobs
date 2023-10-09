@@ -490,7 +490,7 @@ jobMonitor = do
   a4 <- delayedJobDeletion >>= \case
     Nothing -> pure Nothing
     Just _ -> fmap Just $ async $ restartUponCrash "job deletion poller" jobDeletionPoller
-  let asyncThreads = [a1, a2, a3] <> (maybeToList a4)
+  let asyncThreads = [a1, a2, a3] <> maybeToList a4
   finally (void $ waitAnyCatch asyncThreads) $ do
     log LevelInfo (LogText "Stopping jobPoller and jobEventListener threads.")
     cancel a3
@@ -732,7 +732,7 @@ jobEventListener = do
 
 
 jobDeletionPoller :: (HasJobRunner m) => m ()
-jobDeletionPoller = forever $ (delaySeconds =<< getPollingInterval)
+jobDeletionPoller = forever $ delaySeconds =<< getPollingInterval
 
 
 -- $createJobs
