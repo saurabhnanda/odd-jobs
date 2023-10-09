@@ -388,7 +388,7 @@ data Config = Config
   , cfgLogger :: LogLevel -> LogEvent -> IO ()
 
   -- | How to extract the "job type" from a 'Job'. If you are overriding this,
-  -- please consider overriding 'cfgJobTypeSql' as well. Related:
+  -- please consider overriding 'uicfgJobTypeSql' as well. Related:
   -- 'OddJobs.ConfigBuilder.defaultJobType'
   , cfgJobType :: Job -> Text
 
