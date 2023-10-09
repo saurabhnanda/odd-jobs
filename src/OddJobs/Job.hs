@@ -858,6 +858,22 @@ throwParsePayloadWith parser job =
   either throwString pure (eitherParsePayloadWith parser job)
 
 
+-- | If you aren't interesting in storing 'jobResults' then use this in every 
+-- branch of the @case@ statement in your 'jobRunner', like this:
+--
+-- @
+-- myJobRunner :: Job -> IO (Maybe Aeson.Value)
+-- myJobRunner job = do
+-- 
+-- throwParsePayload job >>= \case
+--   SendConfirmationEmail uid -> noJobResult $ sendConfirmationEmail uid
+--   SetupCustomerAccount cid -> noJobResult $ setupCustomerAccount cid
+-- @
+--
+noJobResult :: (Functor f) => f a -> f (Maybe Aeson.Value)
+noJobResult = (Nothing <$)
+
+
 -- | Used by the web\/admin UI to fetch a \"master list\" of all known
 -- job-types. Ref: 'cfgAllJobTypes'
 fetchAllJobTypes :: (MonadIO m)

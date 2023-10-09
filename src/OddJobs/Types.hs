@@ -278,7 +278,7 @@ instance FromRow Job where
 -- TODO: Add a sum-type for return status which can signal the monitor about
 -- whether the job needs to be retried, marked successfull, or whether it has
 -- completed failed.
-type JobRunner = Job -> IO ()
+type JobRunner = Job -> IO (Maybe Aeson.Value)
 
 -- | The web\/admin UI needs to know a \"master list\" of all job-types to be
 -- able to power the \"filter by job-type\" feature. This data-type helps in
@@ -299,16 +299,6 @@ data AllJobTypes
   | AJTCustom (IO [Text])
 
 
--- | TODO: documentation
--- data JobResult = forall out . ToJSON out => JobResult (Maybe out)
-
--- instance ToField JobResult where
---   toField (JobResult Nothing) = ToField.Plain "null"
---   toField (JobResult (Just x)) = toField (toJSON x)
-
--- voidJob :: Functor f => f a -> f JobResult
--- voidJob x = JobResult (Nothing :: Maybe Int) <$ x
-
 -- | While odd-jobs is highly configurable and the 'Config' data-type might seem
 -- daunting at first, it is not necessary to tweak every single configuration
 -- parameter by hand.
@@ -324,7 +314,11 @@ data Config = Config
     -- | The actualy "job-runner" that __you__ need to provide. If this function
     -- throws a runtime exception, the job will be retried
     -- 'cfgDefaultMaxAttempts' times. Please look at the examples/tutorials if
-    -- your applicaton's code is not in the @IO@ monad.
+    -- your applicaton's code is not in the @IO@ monad. Your job-runner can return
+    -- a @Maybe Aeson.Value@, which will be stored as a 'jobResult'. Setting a non-@Nothing@
+    -- return value makes sense only if you don't delete successful jobs 
+    -- immediately (see: 'cfgDeleteSuccessfulJobs'), else you can use the 'OddJobs.Job.noJobResult' 
+    -- utility function to always return a @Nothing@ value from this function.
   , cfgJobRunner :: Job -> IO (Maybe Aeson.Value)
 
     -- | The number of times a failing job is retried before it is considered is
