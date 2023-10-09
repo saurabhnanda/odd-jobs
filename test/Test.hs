@@ -331,8 +331,7 @@ payloadGen :: MonadGen m => m JobPayload
 payloadGen = Gen.recursive  Gen.choice nonRecursive recursive
   where
     nonRecursive = [ PayloadAlwaysFail <$> Gen.element [1, 2, 3]
-                   , PayloadSucceed <$> Gen.element [1, 2, 3] <*> (Gen.maybe $ Gen.string (Range.singleton 10) Gen.alphaNum)
-                
+                   , PayloadSucceed <$> Gen.element [1, 2, 3] <*> Gen.maybe (Gen.string (Range.singleton 10) Gen.alphaNum)
                    ]
     recursive = [ PayloadFail <$> Gen.element [1, 2, 3] <*> payloadGen ]
 
