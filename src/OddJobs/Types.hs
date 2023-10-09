@@ -23,6 +23,7 @@ import Data.String.Conv
 import Lucid (Html)
 import Data.Pool (Pool)
 import Control.Monad.Logger (LogLevel)
+import GHC.Int (Int64)
 
 -- | An alias for 'QualifiedIdentifier' type. It is used for the job table name.
 -- Since this type has an instance of 'IsString',
@@ -380,8 +381,23 @@ data Config = Config
     -- picked up for execution again
   , cfgDefaultJobTimeout :: Seconds
 
-    -- | Should successful jobs be deleted from the queue to save on table space?
-  , cfgDeleteSuccessfulJobs :: Bool
+    -- | After a job attempt, should it be immediately deleted to save table space? The default
+    -- behaviour, as defined by 'OddJobs.ConfigBuilder.defaultImmediateJobDeletion' is to delete
+    -- successful jobs immediately (and retain everything else). If you are providing your 
+    -- own implementation here, __be careful__ to check for the job's status before deciding
+    -- whether to delete it, or not.
+    --
+    -- A /possible/ use-case for non-successful jobs could be check the 'jobResult' for a failed job 
+    -- and depending up on the 'jobResult' decide if there is no use retrying it, and if it should be
+    -- immediately deleted.
+  , cfgImmediateJobDeletion :: Job -> IO Bool
+
+    -- | A funciton which will be run every 'cfgPollingInterval' seconds to delete
+    -- old jobs that may be hanging around in the @jobs@ table (eg. failed jobs, cancelled jobs, or even
+    -- successful jobs whose deletion has been delayed via a custom 'cfgImmediateJobDeletion' function).
+    --
+    -- Ref: 'OddJobs.ConfigBuilder.defaultDelayedJobDeletionSql'
+  , cfgDelayedJobDeletion :: Maybe (PGS.Connection -> IO Int64)
 
     -- | How far into the future should jobs which can be retried be queued for?
     --

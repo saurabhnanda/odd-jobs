@@ -23,6 +23,8 @@ import GHC.Exts (toList)
 import qualified Data.ByteString as BS
 import UnliftIO (MonadUnliftIO, withRunInIO, bracket, liftIO)
 import qualified System.Log.FastLogger as FLogger
+import GHC.Int (Int64)
+import Database.PostgreSQL.Simple.Types as PGS (Identifier(..))
 
 # if MIN_VERSION_aeson(2, 0, 0)
 import qualified Data.Aeson.KeyMap as HM
@@ -78,7 +80,8 @@ mkConfig logger tname dbpool ccControl jrunner configOverridesFn =
             , cfgConcurrencyControl = ccControl
             , cfgJobType = defaultJobType
             , cfgDefaultJobTimeout = Seconds 600
-            , cfgDeleteSuccessfulJobs = True
+            , cfgImmediateJobDeletion = defaultImmediateJobDeletion
+            , cfgDelayedJobDeletion = Nothing
             , cfgDefaultRetryBackoff = \attempts -> pure $ Seconds $ 2 ^ attempts
             }
   in cfg
@@ -344,3 +347,24 @@ defaultJsonJob = genericToJSON Aeson.defaultOptions
 
 defaultJsonFailureMode :: FailureMode -> Aeson.Value
 defaultJsonFailureMode = genericToJSON Aeson.defaultOptions
+
+defaultImmediateJobDeletion :: Job -> IO Bool
+defaultImmediateJobDeletion Job{jobStatus} = 
+  if jobStatus == OddJobs.Types.Success
+    then pure True
+    else pure False
+
+defaultDelayedJobDeletionSql :: TableName -> Int -> PGS.Connection -> IO Int64
+defaultDelayedJobDeletionSql tname d conn = 
+  PGS.execute conn qry (tname, PGS.In statusList, show d <> " days")
+  where
+    -- this function has been deliberately written like this to ensure that whenever a new Status is added/removed
+    -- one is forced to update this list and decide what is to be done about the new Status
+    statusList = (flip DL.filter) ([minBound..maxBound] :: [OddJobs.Types.Status]) $ \st -> case st of
+      Success -> True
+      Queued -> False
+      Failed -> True
+      Cancelled -> True
+      Retry -> False
+      Locked -> False
+    qry = "DELETE FROM ? WHERE status in ? AND run_at < current_timestamp - ? :: interval"
