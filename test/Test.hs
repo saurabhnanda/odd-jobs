@@ -641,7 +641,7 @@ setup' jobPool defaultLimit action =
     cfgFn resCfg cfg = cfg
         { Job.cfgDefaultMaxAttempts = 1 -- Simplifies some tests where we have a failing job
         , Job.cfgConcurrencyControl = Job.ResourceLimits resCfg
-        , Job.cfgImmediateJobDeletion = (const $ pure False)
+        , Job.cfgImmediateJobDeletion = const $ pure False
         }
 
 testKillJob appPool jobPool = testCase "killing a ongoing job" $ do
