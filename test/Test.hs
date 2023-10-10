@@ -48,6 +48,7 @@ import qualified OddJobs.ConfigBuilder as Job
 import UnliftIO
 import Control.Exception (ArithException)
 import Data.Bifunctor(first)
+import System.Environment (lookupEnv)
 
 $(Aeson.deriveJSON Aeson.defaultOptions ''Seconds)
 
@@ -57,24 +58,29 @@ main = do
     bracket createJobPool destroyAllResources $ \jobPool -> do
       defaultMain $ tests appPool jobPool
   where
-    connInfo = ConnectInfo
-                 { connectHost = "localhost"
-                 , connectPort = fromIntegral (5432 :: Int)
-                 , connectUser = "jobs_test"
-                 , connectPassword = "jobs_test"
-                 , connectDatabase = "jobs_test"
-                 }
+    getConnInfo = do
+      connectHost <- fromMaybe "localhost" <$> lookupEnv "PGHOST"
+      connectUser <- fromMaybe "jobs_test" <$> lookupEnv "PGUSER"
+      connectPassword <- fromMaybe "jobs_test" <$> lookupEnv "PGPASSWORD"
+      connectDatabase <- fromMaybe "jobs_test" <$> lookupEnv "PGDATABASE"
+      connectPort <- maybe (fromIntegral (5432 :: Int)) read <$> lookupEnv "PGPORT"
+      pure ConnectInfo{..}
 
-    createAppPool = Pool.newPool $ Pool.defaultPoolConfig
-      (PGS.connect connInfo)  -- create a new resource
-      PGS.close               -- destroy resource
-      (fromRational 10)       -- number of seconds unused resources are kept around
-      45
-    createJobPool = Pool.newPool $ Pool.defaultPoolConfig
-      (PGS.connect connInfo)  -- create a new resource
-      PGS.close               -- destroy resource
-      (fromRational 10)       -- number of seconds unused resources are kept around
-      45
+    createAppPool = do
+      connInfo <- getConnInfo
+      Pool.newPool $ Pool.defaultPoolConfig
+        (PGS.connect connInfo)  -- create a new resource
+        PGS.close               -- destroy resource
+        (fromRational 10)       -- number of seconds unused resources are kept around
+        45
+
+    createJobPool = do
+      connInfo <- getConnInfo
+      Pool.newPool $ Pool.defaultPoolConfig
+        (PGS.connect connInfo)  -- create a new resource
+        PGS.close               -- destroy resource
+        (fromRational 10)       -- number of seconds unused resources are kept around
+        45
 
 tests appPool jobPool = testGroup "All tests"
   [
