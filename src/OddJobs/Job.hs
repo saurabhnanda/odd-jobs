@@ -79,7 +79,6 @@ module OddJobs.Job
   , throwParsePayload
   , eitherParsePayloadWith
   , throwParsePayloadWith
-  , noJobResult
   )
 where
 
@@ -402,8 +401,8 @@ runJob jid = do
         onJobStart job
         runJobWithTimeout lockTimeout job
         endTime <- liftIO getCurrentTime
-        shouldDeleteJob <- immediateJobDeletion >>= (\fn -> liftIO $ fn newJob)
         let newJob = job{jobStatus=OddJobs.Types.Success, jobLockedBy=Nothing, jobLockedAt=Nothing, jobUpdatedAt = endTime}
+        shouldDeleteJob <- immediateJobDeletion >>= (\fn -> liftIO $ fn newJob)
         if shouldDeleteJob
           then deleteJob jid
           else void $ saveJob newJob
