@@ -79,7 +79,6 @@ module OddJobs.Job
   , throwParsePayload
   , eitherParsePayloadWith
   , throwParsePayloadWith
-  , noJobResult
   )
 where
 
