@@ -228,13 +228,11 @@ instance HasJobRunner RunnerM where
 -- standalone daemon.
 startJobRunner :: Config -> IO ()
 startJobRunner jm = do
-  traceM "startJobRunner top"
   r <- newIORef DM.empty
   let monitorEnv = RunnerEnv
                    { envConfig = jm
                    , envJobThreadsRef = r
                    }
-  traceM "before runReaderT"
   runReaderT jobMonitor monitorEnv
 
 jobWorkerName :: IO String
@@ -463,7 +461,6 @@ killJob jid = do
 -- TODO: This might have a resource leak.
 restartUponCrash :: (HasJobRunner m, Show a) => Text -> m a -> m ()
 restartUponCrash name_ action = do
-  traceM "restartUponCrash top"
   a <- async action
   finally (waitCatch a >>= fn) $ do
     log LevelInfo $ LogText $ "Received shutdown: " <> toS name_
@@ -482,13 +479,12 @@ restartUponCrash name_ action = do
 -- executed to finish execution before exiting the main thread.
 jobMonitor :: forall m . (HasJobRunner m) => m ()
 jobMonitor = do
-  traceM "jobMonitor top"
   a1 <- async $ restartUponCrash "Job poller" jobPoller
   a2 <- async $ restartUponCrash "Job event listener" jobEventListener
   a3 <- async $ restartUponCrash "Job Kill poller" killJobPoller
   a4 <- delayedJobDeletion >>= \case
     Nothing -> pure Nothing
-    Just _ -> fmap Just $ async $ restartUponCrash "job deletion poller" jobDeletionPoller
+    Just deletionFn -> fmap Just $ async $ restartUponCrash "job deletion poller" (jobDeletionPoller deletionFn)
   let asyncThreads = [a1, a2, a3] <> maybeToList a4
   finally (void $ waitAnyCatch asyncThreads) $ do
     log LevelInfo (LogText "Stopping jobPoller and jobEventListener threads.")
@@ -730,9 +726,15 @@ jobEventListener = do
       pure (jid, runAt_, mLockedAt_)
 
 
-jobDeletionPoller :: (HasJobRunner m) => m ()
-jobDeletionPoller = forever $ delaySeconds =<< getPollingInterval
-
+jobDeletionPoller :: (HasJobRunner m) => (Connection -> IO Int64) -> m ()
+jobDeletionPoller deletionFn = do
+  i <- getPollingInterval
+  dbPool <- getDbPool
+  withDbConnection $ \conn -> do
+    forever $ do
+      n <- liftIO $ deletionFn conn
+      log LevelDebug $ LogDeletionPoll n
+      delaySeconds i
 
 -- $createJobs
 --

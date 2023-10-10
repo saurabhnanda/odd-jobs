@@ -80,6 +80,8 @@ data LogEvent
   | LogKillJobFailed !Job
   -- | Emitted whenever 'OddJobs.Job.jobPoller' polls the DB table
   | LogPoll
+  -- | Emitted whenever 'OddJobs.Job.jobPoller' polls the DB table
+  | LogDeletionPoll !Int64
   -- | TODO
   | LogWebUIRequest
   -- | Emitted whenever any other event occurs
