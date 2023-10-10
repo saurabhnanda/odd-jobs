@@ -370,19 +370,19 @@ defaultImmediateJobDeletion Job{jobStatus} =
 --       x { cfgDelayedJobDeletion = Just (defaultDelayedJobDeletion tname 7) }
 -- @
 defaultDelayedJobDeletion :: 
-  (Show d, Num d) =>
   TableName -> 
   -- ^ DB table which holds your jobs. Ref: 'cfgTableName'
-  d ->
-  -- ^ Number of days after which successful, failed, and cancelled jobs 
-  -- should be deleted from the table
+  String ->
+  -- ^ Time intterval after which successful, failed, and cancelled jobs 
+  -- should be deleted from the table. __NOTE:__ This needs to be expressed
+  -- as an actual PostgreSQL interval, such as @"7 days"@ or @"12 hours"@
   PGS.Connection -> 
   -- ^ the postgres connection that will be provided to this function, 
   -- to be able to execute the @DELETE@ statement.
   IO Int64
   -- ^ number of rows\/jobs deleted
 defaultDelayedJobDeletion tname d conn = 
-  PGS.execute conn qry (tname, PGS.In statusList, show d <> " days")
+  PGS.execute conn qry (tname, PGS.In statusList, d)
   where
     -- this function has been deliberately written like this to ensure that whenever a new Status is added/removed
     -- one is forced to update this list and decide what is to be done about the new Status

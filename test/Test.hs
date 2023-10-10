@@ -382,9 +382,9 @@ testJobScheduling appPool jobPool = testCase "job scheduling" $ do
       delaySeconds (Job.defaultPollingInterval + Seconds 2)
       assertJobIdStatus conn tname logRef "Job had a runAt date in the past. It should have been successful by now" Job.Success jobId
 
-testJobDeletion appPool jobPool = testCase "job failure" $ do
+testJobDeletion appPool jobPool = testCase "job immediae deletion" $ do
   withRandomTable jobPool $ \tname -> do
-    withNamedJobMonitor tname jobPool (\cfg -> cfg { Job.cfgDelayedJobDeletion = Just $ Job.defaultDelayedJobDeletion tname pinterval, Job.cfgDefaultMaxAttempts = 3 }) $ \_logRef -> do
+    withNamedJobMonitor tname jobPool (\cfg -> cfg { Job.cfgDelayedJobDeletion = Just $ Job.defaultDelayedJobDeletion tname pinterval, Job.cfgDefaultMaxAttempts = 2 }) $ \_logRef -> do
       Pool.withResource appPool $ \conn -> do
 
         let  assertDeletedJob msg jid = 
@@ -394,17 +394,17 @@ testJobDeletion appPool jobPool = testCase "job failure" $ do
 
         successJob <- Job.createJob conn tname (PayloadSucceed 0)
         failJob <- Job.createJob conn tname (PayloadAlwaysFail 0)
-        delaySeconds Job.defaultPollingInterval
+        delaySeconds (Job.defaultPollingInterval * 3)
       
         assertDeletedJob "Expecting successful job to be immediately deleted" (jobId successJob)
 
         j <- ensureJobId conn tname (jobId failJob)
         assertEqual "Exepcting job to be in Failed status" Job.Failed (jobStatus j)
       
-        delaySeconds (Job.defaultPollingInterval * 3)
+        delaySeconds (Job.defaultPollingInterval * 4)
         assertDeletedJob "Expecting failed job to be deleted after adequate delay" (jobId failJob)
   where
-    pinterval = 3 * fromIntegral (Job.unSeconds Job.defaultPollingInterval) / (24*60*60 :: Float)
+    pinterval = show (Job.unSeconds Job.defaultPollingInterval) <> " seconds"
 
 testJobFailure appPool jobPool = testCase "job failure" $ do
   withNewJobMonitor jobPool $ \tname _logRef -> do
