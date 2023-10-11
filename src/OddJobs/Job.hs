@@ -113,7 +113,7 @@ import qualified Data.Aeson.Types as Aeson (Parser, parseMaybe)
 import Data.String.Conv (StringConv(..), toS)
 import Data.Functor ((<&>), void)
 import Control.Monad (forever, forM_, join)
-import Data.Maybe (isNothing, maybe, fromMaybe, listToMaybe, mapMaybe)
+import Data.Maybe (isNothing, maybe, fromMaybe, listToMaybe, mapMaybe, maybeToList)
 import Data.Either (either)
 import Control.Monad.Reader
 import GHC.Generics
@@ -130,6 +130,7 @@ import GHC.Exts (toList)
 import Database.PostgreSQL.Simple.Types as PGS (Identifier(..))
 import Database.PostgreSQL.Simple.ToField as PGS (toField)
 import OddJobs.Job.Query
+import Data.Int (Int64)
 #if MIN_VERSION_aeson(2,2,0)
 import Data.Aeson.Types
 #else
@@ -148,7 +149,8 @@ import Data.Aeson.Internal (iparse, IResult(..), formatError)
 class (MonadUnliftIO m, MonadBaseControl IO m) => HasJobRunner m where
   getPollingInterval :: m Seconds
   onJobSuccess :: Job -> m ()
-  deleteSuccessfulJobs :: m Bool
+  immediateJobDeletion :: m (Job -> IO Bool)
+  delayedJobDeletion :: m (Maybe (PGS.Connection -> IO Int64))
   onJobFailed :: m [JobErrHandler]
   getJobRunner :: m (Job -> IO ())
   getDbPool :: m (Pool Connection)
@@ -191,7 +193,8 @@ instance HasJobRunner RunnerM where
   onJobSuccess job = do
     fn <- asks (cfgOnJobSuccess . envConfig)
     logCallbackErrors (jobId job) "onJobSuccess" $ liftIO $ fn job
-  deleteSuccessfulJobs = asks (cfgDeleteSuccessfulJobs . envConfig)
+  immediateJobDeletion = asks (cfgImmediateJobDeletion . envConfig)
+  delayedJobDeletion = asks (cfgDelayedJobDeletion . envConfig)
 
   getJobRunner = asks (cfgJobRunner . envConfig)
   getDbPool = asks (cfgDbPool . envConfig)
@@ -225,13 +228,11 @@ instance HasJobRunner RunnerM where
 -- standalone daemon.
 startJobRunner :: Config -> IO ()
 startJobRunner jm = do
-  traceM "startJobRunner top"
   r <- newIORef DM.empty
   let monitorEnv = RunnerEnv
                    { envConfig = jm
                    , envJobThreadsRef = r
                    }
-  traceM "before runReaderT"
   runReaderT jobMonitor monitorEnv
 
 jobWorkerName :: IO String
@@ -398,8 +399,8 @@ runJob jid = do
         onJobStart job
         runJobWithTimeout lockTimeout job
         endTime <- liftIO getCurrentTime
-        shouldDeleteJob <- deleteSuccessfulJobs
         let newJob = job{jobStatus=OddJobs.Types.Success, jobLockedBy=Nothing, jobLockedAt=Nothing, jobUpdatedAt = endTime}
+        shouldDeleteJob <- immediateJobDeletion >>= (\fn -> liftIO $ fn newJob)
         if shouldDeleteJob
           then deleteJob jid
           else void $ saveJob newJob
@@ -460,7 +461,6 @@ killJob jid = do
 -- TODO: This might have a resource leak.
 restartUponCrash :: (HasJobRunner m, Show a) => Text -> m a -> m ()
 restartUponCrash name_ action = do
-  traceM "restartUponCrash top"
   a <- async action
   finally (waitCatch a >>= fn) $ do
     log LevelInfo $ LogText $ "Received shutdown: " <> toS name_
@@ -479,16 +479,19 @@ restartUponCrash name_ action = do
 -- executed to finish execution before exiting the main thread.
 jobMonitor :: forall m . (HasJobRunner m) => m ()
 jobMonitor = do
-  traceM "jobMonitor top"
   a1 <- async $ restartUponCrash "Job poller" jobPoller
   a2 <- async $ restartUponCrash "Job event listener" jobEventListener
   a3 <- async $ restartUponCrash "Job Kill poller" killJobPoller
-  traceM "jobMonitor after async"
-  finally (void $ waitAnyCatch [a1, a2, a3]) $ do
+  a4 <- delayedJobDeletion >>= \case
+    Nothing -> pure Nothing
+    Just deletionFn -> fmap Just $ async $ restartUponCrash "job deletion poller" (jobDeletionPoller deletionFn)
+  let asyncThreads = [a1, a2, a3] <> maybeToList a4
+  finally (void $ waitAnyCatch asyncThreads) $ do
     log LevelInfo (LogText "Stopping jobPoller and jobEventListener threads.")
     cancel a3
     cancel a2
     cancel a1
+    maybe (pure ()) cancel a4
     log LevelInfo (LogText "Waiting for jobs to complete.")
     waitForJobs
 
@@ -721,6 +724,17 @@ jobEventListener = do
       mLockedAt_ <- o .:? "locked_at"
       jid <- o .: "id"
       pure (jid, runAt_, mLockedAt_)
+
+
+jobDeletionPoller :: (HasJobRunner m) => (Connection -> IO Int64) -> m ()
+jobDeletionPoller deletionFn = do
+  i <- getPollingInterval
+  dbPool <- getDbPool
+  withDbConnection $ \conn -> do
+    forever $ do
+      n <- liftIO $ deletionFn conn
+      log LevelDebug $ LogDeletionPoll n
+      delaySeconds i
 
 -- $createJobs
 --

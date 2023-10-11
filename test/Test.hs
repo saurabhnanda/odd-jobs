@@ -91,6 +91,7 @@ tests appPool jobPool = testGroup "All tests"
                              , testGracefulShutdown appPool jobPool
                              , testPushFailedJobEndQueue jobPool
                              , testRetryBackoff appPool jobPool
+                             , testJobDeletion appPool jobPool
                              , testGroup "callback tests"
                                [ testOnJobFailed appPool jobPool
                                , testOnJobStart appPool jobPool
@@ -176,6 +177,7 @@ logEventToJob le = case le of
   Job.LogKillJobSuccess j -> Just j
   Job.LogKillJobFailed j -> Just j
   Job.LogPoll -> Nothing
+  Job.LogDeletionPoll _ -> Nothing
   Job.LogWebUIRequest -> Nothing
   Job.LogText _ -> Nothing
 
@@ -209,6 +211,7 @@ assertJobIdStatus conn tname logRef msg st jid = do
         Job.LogWebUIRequest -> False
         Job.LogText _ -> False
         Job.LogPoll -> False
+        Job.LogDeletionPoll _ -> False
 
     Job.Failed ->
       assertBool (msg <> ": Failed event not found in job-logs for JobId=" <> show jid) $
@@ -378,6 +381,30 @@ testJobScheduling appPool jobPool = testCase "job scheduling" $ do
       _ <- Job.saveJobIO conn tname job{jobRunAt = addUTCTime (fromIntegral (-1 :: Integer)) t}
       delaySeconds (Job.defaultPollingInterval + Seconds 2)
       assertJobIdStatus conn tname logRef "Job had a runAt date in the past. It should have been successful by now" Job.Success jobId
+
+testJobDeletion appPool jobPool = testCase "job immediae deletion" $ do
+  withRandomTable jobPool $ \tname -> do
+    withNamedJobMonitor tname jobPool (\cfg -> cfg { Job.cfgDelayedJobDeletion = Just $ Job.defaultDelayedJobDeletion tname pinterval, Job.cfgDefaultMaxAttempts = 2 }) $ \_logRef -> do
+      Pool.withResource appPool $ \conn -> do
+
+        let  assertDeletedJob msg jid = 
+              Job.findJobByIdIO conn tname jid >>= \case
+                Nothing -> pure ()
+                Just _ -> assertFailure msg
+
+        successJob <- Job.createJob conn tname (PayloadSucceed 0)
+        failJob <- Job.createJob conn tname (PayloadAlwaysFail 0)
+        delaySeconds (Job.defaultPollingInterval * 3)
+      
+        assertDeletedJob "Expecting successful job to be immediately deleted" (jobId successJob)
+
+        j <- ensureJobId conn tname (jobId failJob)
+        assertEqual "Exepcting job to be in Failed status" Job.Failed (jobStatus j)
+      
+        delaySeconds (Job.defaultPollingInterval * 4)
+        assertDeletedJob "Expecting failed job to be deleted after adequate delay" (jobId failJob)
+  where
+    pinterval = show (Job.unSeconds Job.defaultPollingInterval) <> " seconds"
 
 testJobFailure appPool jobPool = testCase "job failure" $ do
   withNewJobMonitor jobPool $ \tname _logRef -> do
@@ -641,7 +668,7 @@ setup' jobPool defaultLimit action =
     cfgFn resCfg cfg = cfg
         { Job.cfgDefaultMaxAttempts = 1 -- Simplifies some tests where we have a failing job
         , Job.cfgConcurrencyControl = Job.ResourceLimits resCfg
-        , Job.cfgDeleteSuccessfulJobs = False
+        , Job.cfgImmediateJobDeletion = const $ pure False
         }
 
 testKillJob appPool jobPool = testCase "killing a ongoing job" $ do

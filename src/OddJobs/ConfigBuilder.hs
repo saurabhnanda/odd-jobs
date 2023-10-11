@@ -23,6 +23,8 @@ import GHC.Exts (toList)
 import qualified Data.ByteString as BS
 import UnliftIO (MonadUnliftIO, withRunInIO, bracket, liftIO)
 import qualified System.Log.FastLogger as FLogger
+import Data.Int (Int64)
+import Database.PostgreSQL.Simple.Types as PGS (Identifier(..))
 
 # if MIN_VERSION_aeson(2, 0, 0)
 import qualified Data.Aeson.KeyMap as HM
@@ -78,7 +80,8 @@ mkConfig logger tname dbpool ccControl jrunner configOverridesFn =
             , cfgConcurrencyControl = ccControl
             , cfgJobType = defaultJobType
             , cfgDefaultJobTimeout = Seconds 600
-            , cfgDeleteSuccessfulJobs = True
+            , cfgImmediateJobDeletion = defaultImmediateJobDeletion
+            , cfgDelayedJobDeletion = Nothing
             , cfgDefaultRetryBackoff = \attempts -> pure $ Seconds $ 2 ^ attempts
             }
   in cfg
@@ -150,6 +153,8 @@ defaultLogStr jobTypeFn logLevel logEvent =
         "Kill Job Failed | " <> jobToLogStr j <> "(the job might have completed or timed out)"
       LogPoll ->
         "Polling jobs table"
+      LogDeletionPoll n ->
+        "Job deletion polled and deleted " <> toLogStr n <> " jobs"
       LogWebUIRequest ->
         "WebUIRequest (TODO: Log the actual request)"
       LogText t ->
@@ -333,6 +338,8 @@ defaultJsonLogEvent logEvent =
                    , "contents" Aeson..= defaultJsonJob job ]
     LogPoll ->
       Aeson.object [ "tag" Aeson..= ("LogJobPoll" :: Text)]
+    LogDeletionPoll n ->
+      Aeson.object [ "tag" Aeson..= ("LogDeletionPoll" :: Text), "contents" Aeson..= n ]
     LogWebUIRequest ->
       Aeson.object [ "tag" Aeson..= ("LogWebUIRequest" :: Text)]
     LogText t ->
@@ -344,3 +351,47 @@ defaultJsonJob = genericToJSON Aeson.defaultOptions
 
 defaultJsonFailureMode :: FailureMode -> Aeson.Value
 defaultJsonFailureMode = genericToJSON Aeson.defaultOptions
+
+defaultImmediateJobDeletion :: Job -> IO Bool
+defaultImmediateJobDeletion Job{jobStatus} = 
+  if jobStatus == OddJobs.Types.Success
+    then pure True
+    else pure False
+
+-- | Use this function to get a sensible default implementation for the 'cfgDelayedJobDeletion'. 
+-- You would typically use it as such:
+--
+-- @
+-- let tname = TableName "jobs"
+--     loggingFn _ _ = _todo
+--     dbPool = _todo
+--     myJobRunner = _todo
+--     cfg = mkConfig loggingFn tname (MaxConcurrentJobs 10) dbPool jobRunner $ \x ->
+--       x { cfgDelayedJobDeletion = Just (defaultDelayedJobDeletion tname "7 days") }
+-- @
+defaultDelayedJobDeletion :: 
+  TableName -> 
+  -- ^ DB table which holds your jobs. Ref: 'cfgTableName'
+  String ->
+  -- ^ Time interval after which successful, failed, and cancelled jobs 
+  -- should be deleted from the table. __NOTE:__ This needs to be expressed
+  -- as an actual PostgreSQL interval, such as @"7 days"@ or @"12 hours"@
+  PGS.Connection -> 
+  -- ^ the postgres connection that will be provided to this function, 
+  -- to be able to execute the @DELETE@ statement.
+  IO Int64
+  -- ^ number of rows\/jobs deleted
+defaultDelayedJobDeletion tname d conn = 
+  PGS.execute conn qry (tname, PGS.In statusList, d)
+  where
+    -- this function has been deliberately written like this to ensure that 
+    -- whenever a new Status is added/removed one is forced to update this 
+    -- list and decide what is to be done about the new Status
+    statusList = flip DL.filter ([minBound..maxBound] :: [OddJobs.Types.Status]) $ \case
+      Success -> True
+      Queued -> False
+      Failed -> True
+      Cancelled -> True
+      Retry -> False
+      Locked -> False
+    qry = "DELETE FROM ? WHERE status in ? AND run_at < current_timestamp - ? :: interval"
