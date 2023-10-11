@@ -394,7 +394,7 @@ testJobDeletion appPool jobPool = testCase "job immediae deletion" $ do
                 Nothing -> pure ()
                 Just _ -> assertFailure msg
 
-        successJob <- Job.createJob conn tname (PayloadSucceed 0)
+        successJob <- Job.createJob conn tname (PayloadSucceed 0 Nothing)
         failJob <- Job.createJob conn tname (PayloadAlwaysFail 0)
         delaySeconds (Job.defaultPollingInterval * 3)
       
@@ -410,7 +410,7 @@ testJobDeletion appPool jobPool = testCase "job immediae deletion" $ do
 
 testJobResults appPool jobPool = testCase "job results" $ do
   withRandomTable jobPool $ \tname -> do
-    withNamedJobMonitor tname jobPool (\cfg -> cfg{Job.cfgDeleteSuccessfulJobs=False}) $ \logRef -> do
+    withNamedJobMonitor tname jobPool (\cfg -> cfg{Job.cfgImmediateJobDeletion=(const $ pure False)}) $ \logRef -> do
       Pool.withResource appPool $ \conn -> do
         Job{jobId} <- Job.createJob conn tname (PayloadSucceed 0 (Just "abcdef"))
         delaySeconds Job.defaultPollingInterval

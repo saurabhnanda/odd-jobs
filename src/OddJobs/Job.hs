@@ -79,6 +79,7 @@ module OddJobs.Job
   , throwParsePayload
   , eitherParsePayloadWith
   , throwParsePayloadWith
+  , noJobResult
   )
 where
 
@@ -406,10 +407,6 @@ runJob jid = do
         if shouldDeleteJob
           then deleteJob jid
           else void $ saveJob newJob
-        -- case jobParentJobId job of
-        --   Nothing -> do
-        --   Just _ -> do
-
         log LevelInfo $ LogJobSuccess newJob (diffUTCTime endTime startTime)
         onJobSuccess newJob
         pure ()

@@ -3,6 +3,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE CPP #-}
 
 module OddJobs.Types where
 
@@ -231,6 +232,7 @@ data Job = Job
   , jobLockedAt :: Maybe UTCTime
   , jobLockedBy :: Maybe JobRunnerName
   , jobResult :: Maybe Aeson.Value
+  , jobParentId :: Maybe JobId
   } deriving (Eq, Show, Generic)
 
 instance ToText Status where
@@ -274,6 +276,7 @@ instance FromRow Job where
     <*> field -- lockedAt
     <*> field -- lockedBy
     <*> field -- job result
+    <*> field -- parent job id
 
 -- TODO: Add a sum-type for return status which can signal the monitor about
 -- whether the job needs to be retried, marked successfull, or whether it has
