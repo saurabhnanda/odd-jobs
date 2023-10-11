@@ -23,7 +23,7 @@ import GHC.Exts (toList)
 import qualified Data.ByteString as BS
 import UnliftIO (MonadUnliftIO, withRunInIO, bracket, liftIO)
 import qualified System.Log.FastLogger as FLogger
-import GHC.Int (Int64)
+import Data.Int (Int64)
 import Database.PostgreSQL.Simple.Types as PGS (Identifier(..))
 
 # if MIN_VERSION_aeson(2, 0, 0)
@@ -366,14 +366,14 @@ defaultImmediateJobDeletion Job{jobStatus} =
 --     loggingFn _ _ = _todo
 --     dbPool = _todo
 --     myJobRunner = _todo
---     cfg = mkConfig _loggingFnTODO tname (MaxConcurrentJobs 10) _dbPoolTODO _jobRunnerTODO $ \x ->
---       x { cfgDelayedJobDeletion = Just (defaultDelayedJobDeletion tname 7) }
+--     cfg = mkConfig loggingFn tname (MaxConcurrentJobs 10) dbPool jobRunner $ \x ->
+--       x { cfgDelayedJobDeletion = Just (defaultDelayedJobDeletion tname "7 days") }
 -- @
 defaultDelayedJobDeletion :: 
   TableName -> 
   -- ^ DB table which holds your jobs. Ref: 'cfgTableName'
   String ->
-  -- ^ Time intterval after which successful, failed, and cancelled jobs 
+  -- ^ Time interval after which successful, failed, and cancelled jobs 
   -- should be deleted from the table. __NOTE:__ This needs to be expressed
   -- as an actual PostgreSQL interval, such as @"7 days"@ or @"12 hours"@
   PGS.Connection -> 
@@ -384,8 +384,9 @@ defaultDelayedJobDeletion ::
 defaultDelayedJobDeletion tname d conn = 
   PGS.execute conn qry (tname, PGS.In statusList, d)
   where
-    -- this function has been deliberately written like this to ensure that whenever a new Status is added/removed
-    -- one is forced to update this list and decide what is to be done about the new Status
+    -- this function has been deliberately written like this to ensure that 
+    -- whenever a new Status is added/removed one is forced to update this 
+    -- list and decide what is to be done about the new Status
     statusList = flip DL.filter ([minBound..maxBound] :: [OddJobs.Types.Status]) $ \case
       Success -> True
       Queued -> False

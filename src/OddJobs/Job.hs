@@ -130,7 +130,7 @@ import GHC.Exts (toList)
 import Database.PostgreSQL.Simple.Types as PGS (Identifier(..))
 import Database.PostgreSQL.Simple.ToField as PGS (toField)
 import OddJobs.Job.Query
-import GHC.Int (Int64)
+import Data.Int (Int64)
 #if MIN_VERSION_aeson(2,2,0)
 import Data.Aeson.Types
 #else

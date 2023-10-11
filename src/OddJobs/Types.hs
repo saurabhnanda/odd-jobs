@@ -23,7 +23,7 @@ import Data.String.Conv
 import Lucid (Html)
 import Data.Pool (Pool)
 import Control.Monad.Logger (LogLevel)
-import GHC.Int (Int64)
+import Data.Int (Int64)
 
 -- | An alias for 'QualifiedIdentifier' type. It is used for the job table name.
 -- Since this type has an instance of 'IsString',
