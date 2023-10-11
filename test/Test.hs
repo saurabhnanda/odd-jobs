@@ -380,7 +380,7 @@ testJobScheduling appPool jobPool = testCase "job scheduling" $ do
       job@Job{jobId} <- Job.scheduleJob conn tname (PayloadSucceed 0 Nothing) (addUTCTime (fromIntegral (3600 :: Integer)) t)
       delaySeconds $ Seconds 2
       assertJobIdStatus conn tname logRef "Job is scheduled in the future. It should NOT have been successful by now" Job.Queued jobId
-      _ <- Job.saveJobIO conn tname job{jobRunAt = addUTCTime (fromIntegral (-1 :: Integer)) t}
+      _ <- Job.saveJobIO False conn tname job{jobRunAt = addUTCTime (fromIntegral (-1 :: Integer)) t}
       delaySeconds (Job.defaultPollingInterval + Seconds 2)
       assertJobIdStatus conn tname logRef "Job had a runAt date in the past. It should have been successful by now" Job.Success jobId
 
@@ -434,7 +434,7 @@ testPushFailedJobEndQueue jobPool = testCase "testPushFailedJobEndQueue" $ do
     Pool.withResource jobPool $ \conn -> do
       job1 <- Job.createJob conn tname (PayloadAlwaysFail 0)
       job2 <- Job.createJob conn tname (PayloadAlwaysFail 0)
-      _ <- Job.saveJobIO conn tname (job1 {jobAttempts = 1})
+      _ <- Job.saveJobIO False conn tname (job1 {jobAttempts = 1})
       [Only resId] <- Job.jobPollingIO conn "testPushFailedJobEndQueue" tname 5
       assertEqual
         "Expecting the current job to be 2 since job 1 has been modified"
@@ -506,7 +506,7 @@ testRetryBackoff appPool jobPool = testCase "retry backoff" $ do
 
         -- Run it for another attempt and check the backoff scales
         job <- ensureJobId conn tname jobId
-        _ <- Job.saveJobIO conn tname (job {jobRunAt = jobQueueTime})
+        _ <- Job.saveJobIO False conn tname (job {jobRunAt = jobQueueTime})
         delaySeconds (2 * Job.defaultPollingInterval)
 
         assertBackedOff

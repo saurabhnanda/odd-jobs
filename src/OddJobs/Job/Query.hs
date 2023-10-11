@@ -12,6 +12,7 @@ module OddJobs.Job.Query
   , registerResourceUsage
   , concatJobDbColumns
   , jobDbColumns
+  , saveJobQuery
   )
 where
 
@@ -43,8 +44,8 @@ killJobPollingSql =
 
 qWithResources :: Query
 qWithResources =
-              "UPDATE ? SET status=?, locked_at=now(), locked_by=?, attempts=attempts+1 \
-              \ WHERE id=? AND status in ? AND ?(id) RETURNING id"
+  "UPDATE ? SET status=?, locked_at=now(), locked_by=?, attempts=attempts+1 \
+  \ WHERE id=? AND status in ? AND ?(id) RETURNING id"
 
 
 createJobQuery :: Query
@@ -60,13 +61,9 @@ registerResourceUsage = "INSERT INTO ? (job_id, resource_id, usage) VALUES (?, ?
 -- queries, eg:
 --
 -- @'query_' conn $ "SELECT " <> concatJobDbColumns <> "FROM jobs"@
-
+{-# INLINE concatJobDbColumns #-}
 concatJobDbColumns :: (IsString s, Semigroup s) => s
-concatJobDbColumns = concatJobDbColumns_ jobDbColumns ""
-  where
-    concatJobDbColumns_ [] x = x
-    concatJobDbColumns_ [col] x = x <> col
-    concatJobDbColumns_ (col:cols) x = concatJobDbColumns_ cols (x <> col <> ", ")
+concatJobDbColumns = concatJobDbColumnsInternal jobDbColumns
 
 -- | If you are writing SQL queries where you want to return ALL columns from
 -- the jobs table it is __recommended__ that you do not issue a @SELECT *@ or
@@ -86,5 +83,41 @@ jobDbColumns =
   , "attempts"
   , "locked_at"
   , "locked_by"
-  , "result"
   ]
+
+{-# INLINE concatJobDbColumnsInternal #-}
+concatJobDbColumnsInternal :: (IsString s, Semigroup s) => [s] -> s
+concatJobDbColumnsInternal ys = go ys ""
+  where
+    go [] x = x
+    go [col] x = x <> col
+    go (col:cols) x = go cols (x <> col <> ", ")
+
+-- | TODO
+{-# INLINE concatJobDbColumnsWorkflow #-}
+concatJobDbColumnsWorkflow :: (IsString s, Semigroup s) => s
+concatJobDbColumnsWorkflow = concatJobDbColumnsInternal jobDbColumnsWorkflow
+  where
+
+-- | TODO
+jobDbColumnsWorkflow :: (IsString s, Semigroup s) => [s]
+jobDbColumnsWorkflow =
+  [ "id"
+  , "created_at"
+  , "updated_at"
+  , "run_at"
+  , "status"
+  , "payload"
+  , "last_error"
+  , "attempts"
+  , "locked_at"
+  , "locked_by"
+  , "result"
+  , "parent_job_id"
+  ]
+
+saveJobQuery :: Bool -> Query
+saveJobQuery workflowEnabled = 
+  "UPDATE ? set run_at = ?, status = ?, payload = ?, last_error = ?, attempts = ?, locked_at = ?, locked_by = ?" <>
+  if workflowEnabled then ", result = ?" else "" <>
+  " WHERE id = ? RETURNING " <> concatJobDbColumns

@@ -275,8 +275,8 @@ instance FromRow Job where
     <*> field -- attempts
     <*> field -- lockedAt
     <*> field -- lockedBy
-    <*> field -- job result
-    <*> field -- parent job id
+    <*> pure Nothing -- job result
+    <*> pure Nothing -- job result
 
 -- TODO: Add a sum-type for return status which can signal the monitor about
 -- whether the job needs to be retried, marked successfull, or whether it has
