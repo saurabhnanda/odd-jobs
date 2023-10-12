@@ -191,7 +191,7 @@ logCallbackErrors :: (HasJobRunner m) => JobId -> Text -> m () -> m ()
 logCallbackErrors jid msg action = catchAny action $ \e -> log LevelError $ LogText $ msg <> " Job ID=" <> toS (show jid) <> ": " <> toS (show e)
 
 instance HasJobRunner RunnerM where
-  isWorkflowEnabled = pure False
+  isWorkflowEnabled = asks (cfgEnableWorkflows . envConfig)
   getPollingInterval = asks (cfgPollingInterval . envConfig)
   onJobFailed = asks (cfgOnJobFailed . envConfig)
   onJobSuccess job = do
@@ -308,7 +308,7 @@ saveJobIO workflowEnabled conn tname Job{jobRunAt, jobStatus, jobPayload, jobLas
             , jobLockedAt
             , jobLockedBy
             )
-  rs <- PGS.query conn (saveJobQuery workflowEnabled) finalFields
+  rs <- PGS.queryWith (if workflowEnabled then jobRowParserWithWorkflow else jobRowParserSimple) conn (saveJobQuery workflowEnabled) finalFields
   case rs of
     [] -> Prelude.error $ "Could not find job while updating it id=" <> show jobId
     [j] -> pure j

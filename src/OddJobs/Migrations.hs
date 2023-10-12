@@ -17,6 +17,9 @@ createJobTableQuery = createJobTableQueryInternal False
 createJobTable :: Connection -> TableName -> IO ()
 createJobTable = createJobTableInternal False
 
+createJobTableWithWorkflow :: Connection -> TableName -> IO ()
+createJobTableWithWorkflow = createJobTableInternal True
+
 createJobTableQueryInternal :: 
   Bool ->
   -- ^ whether to enable job-results and job-workflow features

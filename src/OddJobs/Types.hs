@@ -263,20 +263,34 @@ instance FromField Status where
 instance ToField Status where
   toField s = toField $ toText s
 
+jobRowParserSimple :: RowParser Job
+jobRowParserSimple = jobRowParserInternal (pure Nothing) (pure Nothing)
+
+jobRowParserWithWorkflow :: RowParser Job
+jobRowParserWithWorkflow = jobRowParserInternal field field
+
+{-# INLINE jobRowParserInternal #-}
+jobRowParserInternal :: 
+  RowParser (Maybe Aeson.Value) -> 
+  RowParser (Maybe JobId) ->
+  RowParser Job
+jobRowParserInternal resultParser parentJobIdParser = Job
+  <$> field -- jobId
+  <*> field -- createdAt
+  <*> field -- updatedAt
+  <*> field -- runAt
+  <*> field -- status
+  <*> field -- payload
+  <*> field -- lastError
+  <*> field -- attempts
+  <*> field -- lockedAt
+  <*> field -- lockedBy
+  <*> resultParser -- job result
+  <*> parentJobIdParser -- parentJobId
+
 instance FromRow Job where
-  fromRow = Job
-    <$> field -- jobId
-    <*> field -- createdAt
-    <*> field -- updatedAt
-    <*> field -- runAt
-    <*> field -- status
-    <*> field -- payload
-    <*> field -- lastError
-    <*> field -- attempts
-    <*> field -- lockedAt
-    <*> field -- lockedBy
-    <*> pure Nothing -- job result
-    <*> pure Nothing -- job result
+  -- "Please do not depend on the FromRow instance of the Job type. It does not handle optional features, such as job-results and job-workflows. Depending upon your scenario, use 'jobRowParserSimple' or 'jobRowParserWithWorkflow' directly." #-}
+  fromRow = jobRowParserSimple
 
 -- TODO: Add a sum-type for return status which can signal the monitor about
 -- whether the job needs to be retried, marked successfull, or whether it has
@@ -399,9 +413,8 @@ data Config = Config
     -- own implementation here, __be careful__ to check for the job's status before deciding
     -- whether to delete it, or not.
     --
-    -- A /possible/ use-case for non-successful jobs could be check the 'jobResult' for a failed job 
-    -- and depending up on the 'jobResult' decide if there is no use retrying it, and if it should be
-    -- immediately deleted.
+    -- A /possible/ use-case for non-successful jobs could be to immediately delete a failed
+    -- job depending upon the 'jobResult' or 'jobLastError' if there is no use retrying the job.
   , cfgImmediateJobDeletion :: Job -> IO Bool
 
     -- | A funciton which will be run every 'cfgPollingInterval' seconds to delete
@@ -418,6 +431,16 @@ data Config = Config
     -- in order to fail and be retried. The default implementation is an exponential
     -- backoff of @'Seconds' $ 2 ^ 'jobAttempts'@.
   , cfgDefaultRetryBackoff :: Int -> IO Seconds
+
+  -- | Controls whether to enable the job-results and job-workflow features. If this is
+  --  @True@ then functions like 'OddJobs.Job.saveJobIO', etc. will start using the 
+  -- 'jobResult' and 'jobParentJobId' fields as well.
+  --
+  -- __WARNING:__ Before enabling this, please ensure that you have created your jobs table
+  -- via the `OddJobs.Migrations.createJobTableWithWorkflow' function, else your jobs table
+  -- will not have the @results@ and @parent_job_id@ fields, and ALL your jobs will start
+  -- failing at runtime.
+  , cfgEnableWorkflows :: Bool
   }
 
 
