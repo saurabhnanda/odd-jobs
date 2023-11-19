@@ -34,7 +34,7 @@ createJobTableQuery = "CREATE TABLE IF NOT EXISTS ?" <>
   ", locked_at timestamp with time zone null" <>
   ", locked_by text null" <>
   ", result jsonb" <>
-  ", parent_job_id int references ?(id)" <>
+  ", parent_id int references ?(id)" <>
   ", constraint incorrect_locking_info CHECK (" <>
     "(locked_at is null and locked_by is null and status <> 'locked') or " <>
     "(locked_at is not null and locked_by is not null and (status = 'locked' or status = 'cancelled')))" <>
@@ -45,7 +45,7 @@ createJobTableQuery = "CREATE TABLE IF NOT EXISTS ?" <>
   "create index if not exists ? on ?(locked_by);" <>
   "create index if not exists ? on ?(status);" <>
   "create index if not exists ? on ?(run_at);" <>
-  "create index if not exists ? on ?(parent_job_id);"
+  "create index if not exists ? on ?(parent_id);"
 
 createNotificationTrigger :: Query
 createNotificationTrigger = "create or replace function ?() returns trigger as $$" <>
@@ -78,7 +78,7 @@ createJobTable conn tname = void $ do
               , tname
               , PGS.Identifier $ "idx_" <> tnameTxt <> "_run_at"
               , tname
-              , PGS.Identifier $ "idx_" <> tnameTxt <> "_parent_job_id"
+              , PGS.Identifier $ "idx_" <> tnameTxt <> "_parent_id"
               , tname
               )
   _ <- PGS.execute conn createJobTableQuery args
