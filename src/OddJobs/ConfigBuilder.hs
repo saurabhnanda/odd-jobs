@@ -83,7 +83,7 @@ mkConfig logger tname dbpool ccControl jrunner configOverridesFn =
             , cfgImmediateJobDeletion = defaultImmediateJobDeletion
             , cfgDelayedJobDeletion = Nothing
             , cfgDefaultRetryBackoff = \attempts -> pure $ Seconds $ 2 ^ attempts
-            , cfgEnableWorkflows = False
+            -- , cfgEnableWorkflows = False
             }
   in cfg
 

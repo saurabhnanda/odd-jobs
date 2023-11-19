@@ -221,18 +221,18 @@ instance FromJSON Status where
 newtype JobRunnerName = JobRunnerName { unJobRunnerName :: Text } deriving (Eq, Show, FromField, ToField, Generic, ToJSON, FromJSON)
 
 data Job = Job
-  { jobId :: JobId
-  , jobCreatedAt :: UTCTime
-  , jobUpdatedAt :: UTCTime
-  , jobRunAt :: UTCTime
-  , jobStatus :: Status
-  , jobPayload :: Aeson.Value
-  , jobLastError :: Maybe Value
-  , jobAttempts :: Int
-  , jobLockedAt :: Maybe UTCTime
-  , jobLockedBy :: Maybe JobRunnerName
-  , jobResult :: Maybe Aeson.Value
-  , jobParentId :: Maybe JobId
+  { jobId :: !JobId
+  , jobCreatedAt :: !UTCTime
+  , jobUpdatedAt :: !UTCTime
+  , jobRunAt :: !UTCTime
+  , jobStatus :: !Status
+  , jobPayload :: !Aeson.Value
+  , jobLastError :: !(Maybe Value)
+  , jobAttempts :: !Int
+  , jobLockedAt :: !(Maybe UTCTime)
+  , jobLockedBy :: !(Maybe JobRunnerName)
+  , jobResult :: !(Maybe Aeson.Value)
+  , jobParentId :: !(Maybe JobId)
   } deriving (Eq, Show, Generic)
 
 instance ToText Status where
@@ -263,34 +263,21 @@ instance FromField Status where
 instance ToField Status where
   toField s = toField $ toText s
 
-jobRowParserSimple :: RowParser Job
-jobRowParserSimple = jobRowParserInternal (pure Nothing) (pure Nothing)
-
-jobRowParserWithWorkflow :: RowParser Job
-jobRowParserWithWorkflow = jobRowParserInternal field field
-
-{-# INLINE jobRowParserInternal #-}
-jobRowParserInternal :: 
-  RowParser (Maybe Aeson.Value) -> 
-  RowParser (Maybe JobId) ->
-  RowParser Job
-jobRowParserInternal resultParser parentJobIdParser = Job
-  <$> field -- jobId
-  <*> field -- createdAt
-  <*> field -- updatedAt
-  <*> field -- runAt
-  <*> field -- status
-  <*> field -- payload
-  <*> field -- lastError
-  <*> field -- attempts
-  <*> field -- lockedAt
-  <*> field -- lockedBy
-  <*> resultParser -- job result
-  <*> parentJobIdParser -- parentJobId
-
 instance FromRow Job where
   -- "Please do not depend on the FromRow instance of the Job type. It does not handle optional features, such as job-results and job-workflows. Depending upon your scenario, use 'jobRowParserSimple' or 'jobRowParserWithWorkflow' directly." #-}
-  fromRow = jobRowParserSimple
+  fromRow = Job
+    <$> field -- jobId
+    <*> field -- createdAt
+    <*> field -- updatedAt
+    <*> field -- runAt
+    <*> field -- status
+    <*> field -- payload
+    <*> field -- lastError
+    <*> field -- attempts
+    <*> field -- lockedAt
+    <*> field -- lockedBy
+    <*> field -- job result
+    <*> field -- parentJobId
 
 -- TODO: Add a sum-type for return status which can signal the monitor about
 -- whether the job needs to be retried, marked successfull, or whether it has
@@ -440,7 +427,7 @@ data Config = Config
   -- via the `OddJobs.Migrations.createJobTableWithWorkflow' function, else your jobs table
   -- will not have the @results@ and @parent_job_id@ fields, and ALL your jobs will start
   -- failing at runtime.
-  , cfgEnableWorkflows :: Bool
+  -- , cfgEnableWorkflows :: Bool
   }
 
 

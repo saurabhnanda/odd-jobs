@@ -149,7 +149,7 @@ import Data.Aeson.Internal (iparse, IResult(..), formatError)
 -- type-class based interface as well (similar to what
 -- 'Yesod.JobQueue.YesodJobQueue' provides).
 class (MonadUnliftIO m, MonadBaseControl IO m) => HasJobRunner m where
-  isWorkflowEnabled :: m Bool
+  -- isWorkflowEnabled :: m Bool
   getPollingInterval :: m Seconds
   onJobSuccess :: Job -> m ()
   immediateJobDeletion :: m (Job -> IO Bool)
@@ -191,7 +191,7 @@ logCallbackErrors :: (HasJobRunner m) => JobId -> Text -> m () -> m ()
 logCallbackErrors jid msg action = catchAny action $ \e -> log LevelError $ LogText $ msg <> " Job ID=" <> toS (show jid) <> ": " <> toS (show e)
 
 instance HasJobRunner RunnerM where
-  isWorkflowEnabled = asks (cfgEnableWorkflows . envConfig)
+  -- isWorkflowEnabled = asks (cfgEnableWorkflows . envConfig)
   getPollingInterval = asks (cfgPollingInterval . envConfig)
   onJobFailed = asks (cfgOnJobFailed . envConfig)
   onJobSuccess job = do
@@ -291,15 +291,12 @@ deleteJobQuery = "DELETE FROM ? WHERE id = ?"
 saveJob :: (HasJobRunner m) => Job -> m Job
 saveJob j = do
   tname <- getTableName
-  workflowEnabled <- isWorkflowEnabled
-  withDbConnection $ \conn -> liftIO $ saveJobIO workflowEnabled conn tname j
+  -- workflowEnabled <- isWorkflowEnabled
+  withDbConnection $ \conn -> liftIO $ saveJobIO conn tname j
 
-saveJobIO :: Bool -> Connection -> TableName -> Job -> IO Job
-saveJobIO workflowEnabled conn tname Job{jobRunAt, jobStatus, jobPayload, jobLastError, jobAttempts, jobLockedBy, jobLockedAt, jobResult, jobId} = do
-  let finalFields = if workflowEnabled
-                    then PGS.toRow $ a1 PGS.:. (jobResult, jobId)
-                    else PGS.toRow $ a1 PGS.:. (Only jobId)
-      a1 =  ( tname
+saveJobIO :: Connection -> TableName -> Job -> IO Job
+saveJobIO conn tname Job{jobRunAt, jobStatus, jobPayload, jobLastError, jobAttempts, jobLockedBy, jobLockedAt, jobResult, jobId, jobParentId} = do
+  let args = ( tname
             , jobRunAt
             , jobStatus
             , jobPayload
@@ -307,8 +304,10 @@ saveJobIO workflowEnabled conn tname Job{jobRunAt, jobStatus, jobPayload, jobLas
             , jobAttempts
             , jobLockedAt
             , jobLockedBy
+            , jobResult
+            , jobParentId
             )
-  rs <- PGS.queryWith (if workflowEnabled then jobRowParserWithWorkflow else jobRowParserSimple) conn (saveJobQuery workflowEnabled) finalFields
+  rs <- PGS.query conn saveJobQuery args
   case rs of
     [] -> Prelude.error $ "Could not find job while updating it id=" <> show jobId
     [j] -> pure j
@@ -733,7 +732,6 @@ jobEventListener = do
 jobDeletionPoller :: (HasJobRunner m) => (Connection -> IO Int64) -> m ()
 jobDeletionPoller deletionFn = do
   i <- getPollingInterval
-  dbPool <- getDbPool
   withDbConnection $ \conn -> do
     forever $ do
       n <- liftIO $ deletionFn conn

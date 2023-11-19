@@ -83,6 +83,8 @@ jobDbColumns =
   , "attempts"
   , "locked_at"
   , "locked_by"
+  , "result"
+  , "parent_id"
   ]
 
 {-# INLINE concatJobDbColumnsInternal #-}
@@ -116,8 +118,6 @@ jobDbColumnsWorkflow =
   , "parent_job_id"
   ]
 
-saveJobQuery :: Bool -> Query
-saveJobQuery workflowEnabled = 
-  "UPDATE ? set run_at = ?, status = ?, payload = ?, last_error = ?, attempts = ?, locked_at = ?, locked_by = ?" <>
-  if workflowEnabled then ", result = ?" else "" <>
-  " WHERE id = ? RETURNING " <> concatJobDbColumns
+saveJobQuery :: Query
+saveJobQuery = 
+  "UPDATE ? set run_at = ?, status = ?, payload = ?, last_error = ?, attempts = ?, locked_at = ?, locked_by = ?, result = ? WHERE id = ? return " <> concatJobDbColumns
