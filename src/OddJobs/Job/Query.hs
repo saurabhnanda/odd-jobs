@@ -95,28 +95,27 @@ concatJobDbColumnsInternal ys = go ys ""
     go [col] x = x <> col
     go (col:cols) x = go cols (x <> col <> ", ")
 
--- | TODO
-{-# INLINE concatJobDbColumnsWorkflow #-}
-concatJobDbColumnsWorkflow :: (IsString s, Semigroup s) => s
-concatJobDbColumnsWorkflow = concatJobDbColumnsInternal jobDbColumnsWorkflow
-  where
+-- -- | TODO
+-- {-# INLINE concatJobDbColumnsWorkflow #-}
+-- concatJobDbColumnsWorkflow :: (IsString s, Semigroup s) => s
+-- concatJobDbColumnsWorkflow = concatJobDbColumnsInternal jobDbColumnsWorkflow
 
--- | TODO
-jobDbColumnsWorkflow :: (IsString s, Semigroup s) => [s]
-jobDbColumnsWorkflow =
-  [ "id"
-  , "created_at"
-  , "updated_at"
-  , "run_at"
-  , "status"
-  , "payload"
-  , "last_error"
-  , "attempts"
-  , "locked_at"
-  , "locked_by"
-  , "result"
-  , "parent_job_id"
-  ]
+-- -- | TODO
+-- jobDbColumnsWorkflow :: (IsString s, Semigroup s) => [s]
+-- jobDbColumnsWorkflow =
+--   [ "id"
+--   , "created_at"
+--   , "updated_at"
+--   , "run_at"
+--   , "status"
+--   , "payload"
+--   , "last_error"
+--   , "attempts"
+--   , "locked_at"
+--   , "locked_by"
+--   , "result"
+--   , "parent_job_id"
+--   ]
 
 saveJobQuery :: Query
 saveJobQuery = 
