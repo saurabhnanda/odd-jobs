@@ -15,7 +15,7 @@ import Data.Pool as Pool
 import Test.Tasty.HUnit
 import Debug.Trace
 -- import Control.Exception.Lifted (finally, catch, bracket)
-import Control.Monad (void)
+import Control.Monad (void, forM, forM_, replicateM, when)
 import Control.Monad.Logger
 import Control.Monad.Reader
 import Data.Aeson as Aeson
@@ -387,7 +387,7 @@ testJobDeletion appPool jobPool = testCase "job immediae deletion" $ do
     withNamedJobMonitor tname jobPool (\cfg -> cfg { Job.cfgDelayedJobDeletion = Just $ Job.defaultDelayedJobDeletion tname pinterval, Job.cfgDefaultMaxAttempts = 2 }) $ \_logRef -> do
       Pool.withResource appPool $ \conn -> do
 
-        let  assertDeletedJob msg jid = 
+        let  assertDeletedJob msg jid =
               Job.findJobByIdIO conn tname jid >>= \case
                 Nothing -> pure ()
                 Just _ -> assertFailure msg
@@ -395,12 +395,12 @@ testJobDeletion appPool jobPool = testCase "job immediae deletion" $ do
         successJob <- Job.createJob conn tname (PayloadSucceed 0)
         failJob <- Job.createJob conn tname (PayloadAlwaysFail 0)
         delaySeconds (Job.defaultPollingInterval * 3)
-      
+
         assertDeletedJob "Expecting successful job to be immediately deleted" (jobId successJob)
 
         j <- ensureJobId conn tname (jobId failJob)
         assertEqual "Exepcting job to be in Failed status" Job.Failed (jobStatus j)
-      
+
         delaySeconds (Job.defaultPollingInterval * 4)
         assertDeletedJob "Expecting failed job to be deleted after adequate delay" (jobId failJob)
   where
