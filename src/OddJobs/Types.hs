@@ -3,6 +3,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE CPP #-}
 
 module OddJobs.Types where
 
@@ -220,16 +221,18 @@ instance FromJSON Status where
 newtype JobRunnerName = JobRunnerName { unJobRunnerName :: Text } deriving (Eq, Show, FromField, ToField, Generic, ToJSON, FromJSON)
 
 data Job = Job
-  { jobId :: JobId
-  , jobCreatedAt :: UTCTime
-  , jobUpdatedAt :: UTCTime
-  , jobRunAt :: UTCTime
-  , jobStatus :: Status
-  , jobPayload :: Aeson.Value
-  , jobLastError :: Maybe Value
-  , jobAttempts :: Int
-  , jobLockedAt :: Maybe UTCTime
-  , jobLockedBy :: Maybe JobRunnerName
+  { jobId :: !JobId
+  , jobCreatedAt :: !UTCTime
+  , jobUpdatedAt :: !UTCTime
+  , jobRunAt :: !UTCTime
+  , jobStatus :: !Status
+  , jobPayload :: !Aeson.Value
+  , jobLastError :: !(Maybe Value)
+  , jobAttempts :: !Int
+  , jobLockedAt :: !(Maybe UTCTime)
+  , jobLockedBy :: !(Maybe JobRunnerName)
+  , jobResult :: !(Maybe Aeson.Value)
+  , jobParentId :: !(Maybe JobId)
   } deriving (Eq, Show, Generic)
 
 instance ToText Status where
@@ -261,6 +264,7 @@ instance ToField Status where
   toField s = toField $ toText s
 
 instance FromRow Job where
+  -- "Please do not depend on the FromRow instance of the Job type. It does not handle optional features, such as job-results and job-workflows. Depending upon your scenario, use 'jobRowParserSimple' or 'jobRowParserWithWorkflow' directly." #-}
   fromRow = Job
     <$> field -- jobId
     <*> field -- createdAt
@@ -272,11 +276,13 @@ instance FromRow Job where
     <*> field -- attempts
     <*> field -- lockedAt
     <*> field -- lockedBy
+    <*> field -- job result
+    <*> field -- parentJobId
 
 -- TODO: Add a sum-type for return status which can signal the monitor about
 -- whether the job needs to be retried, marked successfull, or whether it has
 -- completed failed.
-type JobRunner = Job -> IO ()
+type JobRunner = Job -> IO (Maybe Aeson.Value)
 
 -- | The web\/admin UI needs to know a \"master list\" of all job-types to be
 -- able to power the \"filter by job-type\" feature. This data-type helps in
@@ -296,6 +302,7 @@ data AllJobTypes
   -- | A custom 'IO' action for fetching the list of job-types.
   | AJTCustom (IO [Text])
 
+
 -- | While odd-jobs is highly configurable and the 'Config' data-type might seem
 -- daunting at first, it is not necessary to tweak every single configuration
 -- parameter by hand.
@@ -311,8 +318,12 @@ data Config = Config
     -- | The actualy "job-runner" that __you__ need to provide. If this function
     -- throws a runtime exception, the job will be retried
     -- 'cfgDefaultMaxAttempts' times. Please look at the examples/tutorials if
-    -- your applicaton's code is not in the @IO@ monad.
-  , cfgJobRunner :: Job -> IO ()
+    -- your applicaton's code is not in the @IO@ monad. Your job-runner can return
+    -- a @Maybe Aeson.Value@, which will be stored as a 'jobResult'. Setting a non-@Nothing@
+    -- return value makes sense only if you don't delete successful jobs 
+    -- immediately (see: 'cfgDeleteSuccessfulJobs'), else you can use the 'OddJobs.Job.noJobResult' 
+    -- utility function to always return a @Nothing@ value from this function.
+  , cfgJobRunner :: Job -> IO (Maybe Aeson.Value)
 
     -- | The number of times a failing job is retried before it is considered is
     -- "permanently failed" and ignored by the job-runner. This config parameter
@@ -375,7 +386,7 @@ data Config = Config
   , cfgLogger :: LogLevel -> LogEvent -> IO ()
 
   -- | How to extract the "job type" from a 'Job'. If you are overriding this,
-  -- please consider overriding 'cfgJobTypeSql' as well. Related:
+  -- please consider overriding 'uicfgJobTypeSql' as well. Related:
   -- 'OddJobs.ConfigBuilder.defaultJobType'
   , cfgJobType :: Job -> Text
 
@@ -389,9 +400,8 @@ data Config = Config
     -- own implementation here, __be careful__ to check for the job's status before deciding
     -- whether to delete it, or not.
     --
-    -- A /possible/ use-case for non-successful jobs could be check the 'jobResult' for a failed job 
-    -- and depending up on the 'jobResult' decide if there is no use retrying it, and if it should be
-    -- immediately deleted.
+    -- A /possible/ use-case for non-successful jobs could be to immediately delete a failed
+    -- job depending upon the 'jobResult' or 'jobLastError' if there is no use retrying the job.
   , cfgImmediateJobDeletion :: Job -> IO Bool
 
     -- | A funciton which will be run every 'cfgPollingInterval' seconds to delete
@@ -408,6 +418,16 @@ data Config = Config
     -- in order to fail and be retried. The default implementation is an exponential
     -- backoff of @'Seconds' $ 2 ^ 'jobAttempts'@.
   , cfgDefaultRetryBackoff :: Int -> IO Seconds
+
+  -- | Controls whether to enable the job-results and job-workflow features. If this is
+  --  @True@ then functions like 'OddJobs.Job.saveJobIO', etc. will start using the 
+  -- 'jobResult' and 'jobParentJobId' fields as well.
+  --
+  -- __WARNING:__ Before enabling this, please ensure that you have created your jobs table
+  -- via the `OddJobs.Migrations.createJobTableWithWorkflow' function, else your jobs table
+  -- will not have the @results@ and @parent_job_id@ fields, and ALL your jobs will start
+  -- failing at runtime.
+  -- , cfgEnableWorkflows :: Bool
   }
 
 

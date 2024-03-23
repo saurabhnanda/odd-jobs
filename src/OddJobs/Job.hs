@@ -79,6 +79,7 @@ module OddJobs.Job
   , throwParsePayload
   , eitherParsePayloadWith
   , throwParsePayloadWith
+  , noJobResult
   )
 where
 
@@ -87,6 +88,7 @@ import qualified Data.Pool as Pool
 import Data.Pool(Pool)
 import Data.Text as T
 import Database.PostgreSQL.Simple as PGS
+import Database.PostgreSQL.Simple.ToRow as PGS
 import Database.PostgreSQL.Simple.Notification
 import UnliftIO.Async hiding (poll)
 import UnliftIO.Concurrent (threadDelay, myThreadId)
@@ -147,12 +149,13 @@ import Data.Aeson.Internal (iparse, IResult(..), formatError)
 -- type-class based interface as well (similar to what
 -- 'Yesod.JobQueue.YesodJobQueue' provides).
 class (MonadUnliftIO m, MonadBaseControl IO m) => HasJobRunner m where
+  -- isWorkflowEnabled :: m Bool
   getPollingInterval :: m Seconds
   onJobSuccess :: Job -> m ()
   immediateJobDeletion :: m (Job -> IO Bool)
   delayedJobDeletion :: m (Maybe (PGS.Connection -> IO Int64))
   onJobFailed :: m [JobErrHandler]
-  getJobRunner :: m (Job -> IO ())
+  getJobRunner :: m (Job -> IO (Maybe Aeson.Value))
   getDbPool :: m (Pool Connection)
   getTableName :: m TableName
   onJobStart :: Job -> m ()
@@ -188,6 +191,7 @@ logCallbackErrors :: (HasJobRunner m) => JobId -> Text -> m () -> m ()
 logCallbackErrors jid msg action = catchAny action $ \e -> log LevelError $ LogText $ msg <> " Job ID=" <> toS (show jid) <> ": " <> toS (show e)
 
 instance HasJobRunner RunnerM where
+  -- isWorkflowEnabled = asks (cfgEnableWorkflows . envConfig)
   getPollingInterval = asks (cfgPollingInterval . envConfig)
   onJobFailed = asks (cfgOnJobFailed . envConfig)
   onJobSuccess job = do
@@ -281,30 +285,29 @@ findJobByIdIO conn tname jid = PGS.query conn findJobByIdQuery (tname, jid) >>= 
   _js -> Prelude.error $ "Not expecting to find multiple jobs by id=" <> show jid
 
 
-saveJobQuery :: PGS.Query
-saveJobQuery = "UPDATE ? set run_at = ?, status = ?, payload = ?, last_error = ?, attempts = ?, locked_at = ?, locked_by = ? WHERE id = ? RETURNING " <> concatJobDbColumns
-
 deleteJobQuery :: PGS.Query
 deleteJobQuery = "DELETE FROM ? WHERE id = ?"
 
 saveJob :: (HasJobRunner m) => Job -> m Job
 saveJob j = do
   tname <- getTableName
+  -- workflowEnabled <- isWorkflowEnabled
   withDbConnection $ \conn -> liftIO $ saveJobIO conn tname j
 
 saveJobIO :: Connection -> TableName -> Job -> IO Job
-saveJobIO conn tname Job{jobRunAt, jobStatus, jobPayload, jobLastError, jobAttempts, jobLockedBy, jobLockedAt, jobId} = do
-  rs <- PGS.query conn saveJobQuery
-        ( tname
-        , jobRunAt
-        , jobStatus
-        , jobPayload
-        , jobLastError
-        , jobAttempts
-        , jobLockedAt
-        , jobLockedBy
-        , jobId
-        )
+saveJobIO conn tname Job{jobRunAt, jobStatus, jobPayload, jobLastError, jobAttempts, jobLockedBy, jobLockedAt, jobResult, jobId, jobParentId} = do
+  let args = ( tname
+            , jobRunAt
+            , jobStatus
+            , jobPayload
+            , jobLastError
+            , jobAttempts
+            , jobLockedAt
+            , jobLockedBy
+            , jobResult
+            , jobParentId
+            )
+  rs <- PGS.query conn saveJobQuery args
   case rs of
     [] -> Prelude.error $ "Could not find job while updating it id=" <> show jobId
     [j] -> pure j
@@ -362,28 +365,29 @@ instance Exception TimeoutException
 runJobWithTimeout :: (HasJobRunner m)
                   => Seconds
                   -> Job
-                  -> m ()
+                  -> m (Maybe Aeson.Value)
 runJobWithTimeout timeoutSec job@Job{jobId} = do
   threadsRef <- envJobThreadsRef <$> getRunnerEnv
   jobRunner_ <- getJobRunner
 
   a <- async $ liftIO $ jobRunner_ job
 
-  _x <- atomicModifyIORef' threadsRef $ \threads ->
-    ( DM.insert jobId a threads
-    , DL.map asyncThreadId $ DM.elems $ DM.insert jobId a threads
-    )
+  atomicModifyIORef' threadsRef $ \threads -> ( DM.insert jobId (void a) threads, () )
+    -- ( DM.insert jobId a threads
+    -- , DL.map asyncThreadId $ DM.elems $ DM.insert jobId a threads
+    -- )
 
   -- liftIO $ putStrLn $ "Threads: " <> show x
   log LevelDebug $ LogText $ toS $ "Spawned job in " <> show (asyncThreadId a)
 
-  t <- async $ do
-    delaySeconds timeoutSec
-    throwIO TimeoutException
+  t <- async $ delaySeconds timeoutSec
 
-  void $ finally
-    (waitEitherCancel a t)
+  
+  finally
+    (waitEitherCancel t a >>= either (const $ throwIO TimeoutException) pure) 
     (atomicModifyIORef' threadsRef $ \threads -> (DM.delete jobId threads, ()))
+
+  
 
 
 -- | runs a job, blocks for as long as it's in progress
@@ -397,9 +401,9 @@ runJob jid = do
       log LevelInfo $ LogJobStart job
       flip catch (exceptionHandler job startTime) $ do
         onJobStart job
-        runJobWithTimeout lockTimeout job
+        jresult <- runJobWithTimeout lockTimeout job
         endTime <- liftIO getCurrentTime
-        let newJob = job{jobStatus=OddJobs.Types.Success, jobLockedBy=Nothing, jobLockedAt=Nothing, jobUpdatedAt = endTime}
+        let newJob = job{jobStatus=OddJobs.Types.Success, jobLockedBy=Nothing, jobLockedAt=Nothing, jobUpdatedAt = endTime, jobResult = jresult}
         shouldDeleteJob <- immediateJobDeletion >>= (\fn -> liftIO $ fn newJob)
         if shouldDeleteJob
           then deleteJob jid
@@ -470,7 +474,6 @@ restartUponCrash name_ action = do
       case x of
         Left (e :: SomeException) -> log LevelError $ LogText $ name_ <> " seems to have exited with an error. Restarting: " <> toS (show e)
         Right r -> log LevelError $ LogText $ name_ <> " seems to have exited with the folloing result: " <> toS (show r) <> ". Restaring."
-      traceM "CRASH OCCURRED"
       restartUponCrash name_ action
 
 -- | Spawns 'jobPoller' and 'jobEventListener' in separate threads and restarts
@@ -729,7 +732,6 @@ jobEventListener = do
 jobDeletionPoller :: (HasJobRunner m) => (Connection -> IO Int64) -> m ()
 jobDeletionPoller deletionFn = do
   i <- getPollingInterval
-  dbPool <- getDbPool
   withDbConnection $ \conn -> do
     forever $ do
       n <- liftIO $ deletionFn conn
@@ -783,14 +785,14 @@ scheduleJob conn tname payload runAt = do
 
 type ResourceList = [(ResourceId, Int)]
 
-createJobWithResources
-  :: ToJSON p
-  => Connection
-  -> TableName
-  -> ResourceCfg
-  -> p
-  -> ResourceList
-  -> IO Job
+createJobWithResources :: 
+  ToJSON p =>
+  Connection ->
+  TableName ->
+  ResourceCfg ->
+  p ->
+  ResourceList ->
+  IO Job
 createJobWithResources conn tname resCfg payload resources = do
   t <- getCurrentTime
   scheduleJobWithResources conn tname resCfg payload resources t
@@ -804,10 +806,9 @@ scheduleJobWithResources
   -> ResourceList
   -> UTCTime
   -> IO Job
-scheduleJobWithResources conn tname ResourceCfg{..} payload resources runAt = do
+scheduleJobWithResources conn tname ResourceCfg{..} payload resources runAt = PGS.withTransaction conn $ do
   -- We insert everything in a single transaction to delay @NOTIFY@ calls,
   -- so a job isn't picked up before its resources are inserted.
-  PGS.begin conn
   let args = ( tname, runAt, Queued, toJSON payload, Nothing :: Maybe Value, 0 :: Int, Nothing :: Maybe Text, Nothing :: Maybe Text )
       queryFormatter = toS <$> PGS.formatQuery conn createJobQuery args
   rs <- PGS.query conn createJobQuery args
@@ -820,8 +821,6 @@ scheduleJobWithResources conn tname ResourceCfg{..} payload resources runAt = do
   forM_ resources $ \(resourceId, usage) -> do
     void $ PGS.execute conn ensureResource (resCfgResourceTable, rawResourceId resourceId, resCfgDefaultLimit)
     void $ PGS.execute conn registerResourceUsage (resCfgUsageTable, jobId job, rawResourceId resourceId, usage)
-
-  PGS.commit conn
 
   pure job
 
@@ -854,6 +853,22 @@ throwParsePayloadWith :: (Aeson.Value -> Aeson.Parser a)
                       -> IO a
 throwParsePayloadWith parser job =
   either throwString pure (eitherParsePayloadWith parser job)
+
+
+-- | If you aren't interesting in storing 'jobResults' then use this in every 
+-- branch of the @case@ statement in your 'jobRunner', like this:
+--
+-- @
+-- myJobRunner :: Job -> IO (Maybe Aeson.Value)
+-- myJobRunner job = do
+-- 
+-- throwParsePayload job >>= \case
+--   SendConfirmationEmail uid -> noJobResult $ sendConfirmationEmail uid
+--   SetupCustomerAccount cid -> noJobResult $ setupCustomerAccount cid
+-- @
+--
+noJobResult :: (Functor f) => f a -> f (Maybe Aeson.Value)
+noJobResult = (Nothing <$)
 
 
 -- | Used by the web\/admin UI to fetch a \"master list\" of all known
