@@ -117,6 +117,8 @@ data FailureMode
 -- by 'JobErrHandler' and 'cfgOnJobFailed'.
 data JobErrHandler = forall a e . (Exception e) => JobErrHandler (e -> Job -> FailureMode -> IO a)
 
+data RescheduleError = RescheduleJobNotFound | RescheduleJobLocked deriving (Eq, Show)
+
 type FunctionName = PGS.Identifier
 
 data ResourceCfg = ResourceCfg

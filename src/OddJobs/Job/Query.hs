@@ -12,6 +12,8 @@ module OddJobs.Job.Query
   , registerResourceUsage
   , concatJobDbColumns
   , jobDbColumns
+  , rescheduleJobSql
+  , fetchJobByIdForUpdateSql
   )
 where
 
@@ -23,7 +25,7 @@ jobPollingSql :: Query
 jobPollingSql =
   "update ? set status = ?, locked_at = ?, locked_by = ?, attempts=attempts+1 \
   \ WHERE id in (select id from ? where (run_at<=? AND ((status in ?) OR (status = ? and locked_at<?))) \
-  \ ORDER BY attempts ASC, run_at ASC LIMIT 1 FOR UPDATE) RETURNING id"
+  \ ORDER BY attempts ASC, run_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING id"
 
 jobPollingWithResourceSql :: Query
 jobPollingWithResourceSql =
@@ -46,7 +48,6 @@ qWithResources =
               "UPDATE ? SET status=?, locked_at=now(), locked_by=?, attempts=attempts+1 \
               \ WHERE id=? AND status in ? AND ?(id) RETURNING id"
 
-
 createJobQuery :: Query
 createJobQuery = "INSERT INTO ? (run_at, status, payload, last_error, attempts, locked_at, locked_by) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING " <> concatJobDbColumns
 
@@ -67,6 +68,14 @@ concatJobDbColumns = concatJobDbColumns_ jobDbColumns ""
     concatJobDbColumns_ [] x = x
     concatJobDbColumns_ [col] x = x <> col
     concatJobDbColumns_ (col:cols) x = concatJobDbColumns_ cols (x <> col <> ", ")
+
+-- | Ref: 'rescheduleJob'
+fetchJobByIdForUpdateSql :: Query
+fetchJobByIdForUpdateSql = "select " <> concatJobDbColumns <> " from ? where id = ? for update"
+
+-- | Ref: 'rescheduleJob'
+rescheduleJobSql :: Query
+rescheduleJobSql = "update ? set status = ?, attempts = ?, run_at = ? where id = ? returning " <> concatJobDbColumns
 
 -- | If you are writing SQL queries where you want to return ALL columns from
 -- the jobs table it is __recommended__ that you do not issue a @SELECT *@ or

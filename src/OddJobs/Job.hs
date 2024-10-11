@@ -20,6 +20,7 @@ module OddJobs.Job
   -- $createJobs
   , createJob
   , scheduleJob
+  , rescheduleJob
 
   , createJobWithResources
   , scheduleJobWithResources
@@ -39,6 +40,7 @@ module OddJobs.Job
   , ResourceId(..)
   , FunctionName
   , RunnerEnv(..)
+  , RescheduleError(..)
 
   -- ** Structured logging
   --
@@ -780,6 +782,59 @@ scheduleJob conn tname payload runAt = do
     [] -> Prelude.error . (<> "Not expecting a blank result set when creating a job. Query=") <$> queryFormatter
     [r] -> pure r
     _ -> Prelude.error . (<> "Not expecting multiple rows when creating a single job. Query=") <$> queryFormatter
+
+fetchJobByIdForUpdate :: Connection -> TableName -> JobId -> IO (Maybe Job)
+fetchJobByIdForUpdate conn tname jid = do
+  let args = (tname, jid)
+      queryFormatter = toS <$> PGS.formatQuery conn fetchJobByIdForUpdateSql args
+  PGS.query conn fetchJobByIdForUpdateSql args >>= \case
+    [] -> pure Nothing
+    [j] -> pure $ Just j
+    _ -> Prelude.error . (<> "Not expecting multiple rows when querying a job by Job ID. Query=") <$> queryFormatter
+
+-- | Reschedule a job (among other things)
+--
+-- This function can be used to __safely__ change the following three values of a job:
+--
+--   * Job's status (so, you can use it to pre-maturely cancel a job)
+--   * Job's attempts (so, you can use it to reduce the number of attempts, thus effectively
+--      /increasing/ the number of times the job will be attempted)
+--   * Job's run-at (so, you can use it to /prepone/ or /postpone/ a job, especially useful
+--      if your job is a result of some user-action, and you want to implement a /debounce/ 
+--      logic)
+--
+-- In case the job is currently locked, or not found, this returns a 'RescheduleError' instead.
+rescheduleJob :: Connection 
+              -- ^DB connection to use. __Note:__ This should /ideally/ come out of your 
+              -- application's DB pool, not the 'cfgDbPool' you used in the job-runner.
+              -> TableName
+              -- ^ DB table which holds your jobs
+              -> JobId 
+              -- ^ the JobId which you want to reschedule
+              -> (Job -> IO (Status, Int, UTCTime)) 
+              -- ^ a "rescheduling function" which will be passed the Job and will need to 
+              -- return a 3-tuple of @(newStatus, newAttempts, newRunAt)@
+              -- 
+              -- __Note:__ This rescheduliung function is in @IO@ monad to allow you to 
+              -- do interesting things, but please be __careful__; while the rescheduling
+              -- function is execute, a DB transaction is being kept open with this particular
+              -- Job in a LOCKED state (via @SELECT FOR UPDATE@)
+              -> IO (Either RescheduleError Job)
+              -- ^ Either the updated job is returned or a 'RescheduleError
+rescheduleJob conn tname jid reschedulingFn = do
+  withTransaction conn $ do
+    fetchJobByIdForUpdate conn tname jid >>= \case
+      Nothing -> pure $ Left RescheduleJobNotFound
+      Just j -> case jobLockedAt j of
+        Just _ -> pure $ Left RescheduleJobLocked
+        Nothing -> do
+          (newStatus, newAttempts, newRunAt) <- reschedulingFn j
+          let args = (tname, newStatus, newAttempts, newRunAt, jid)
+              queryFormatter = toS <$> PGS.formatQuery conn rescheduleJobSql args
+          PGS.query conn rescheduleJobSql args >>= \case
+            [newjob] -> pure $ Right newjob
+            [] -> Prelude.error . (<> "Not expecting zero rows when updating a LOCKED job by Job ID. Query=") <$> queryFormatter
+            _ -> Prelude.error . (<> "Not expecting multiple rows when updating a LOCKED job by Job ID. Query=") <$> queryFormatter
 
 type ResourceList = [(ResourceId, Int)]
 
