@@ -73,7 +73,7 @@ library
   ghc-options: -Wall -fno-warn-orphans -fno-warn-unused-imports -fno-warn-dodgy-exports -Werror=missing-fields -Werror=incomplete-patterns
   build-depends:
       aeson
-    , async ==2.2.4
+    , async
     , base >=4.7 && <5
     , bytestring
     , containers
@@ -137,7 +137,7 @@ executable devel
   ghc-options: -Wall -fno-warn-orphans -fno-warn-unused-imports -fno-warn-dodgy-exports -Werror=missing-fields -Werror=incomplete-patterns -threaded -with-rtsopts=-N -main-is DevelMain
   build-depends:
       aeson
-    , async ==2.2.4
+    , async
     , base >=4.7 && <5
     , bytestring
     , containers
@@ -193,7 +193,7 @@ executable odd-jobs-cli-example
   ghc-options: -Wall -fno-warn-orphans -fno-warn-unused-imports -fno-warn-dodgy-exports -Werror=missing-fields -Werror=incomplete-patterns -threaded -with-rtsopts=-N -main-is OddJobsCliExample
   build-depends:
       aeson
-    , async ==2.2.4
+    , async
     , base >=4.7 && <5
     , bytestring
     , directory
@@ -258,7 +258,7 @@ test-suite jobrunner
   ghc-options: -Wall -fno-warn-orphans -fno-warn-unused-imports -fno-warn-dodgy-exports -Werror=missing-fields -Werror=incomplete-patterns -threaded -with-rtsopts=-N -main-is Test
   build-depends:
       aeson
-    , async ==2.2.4
+    , async
     , base >=4.7 && <5
     , bytestring
     , containers
