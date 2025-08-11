@@ -1,13 +1,11 @@
 cabal-version: 1.12
 
--- This file has been generated from package.yaml by hpack version 0.35.2.
+-- This file has been generated from package.yaml by hpack version 0.36.0.
 --
 -- see: https://github.com/sol/hpack
---
--- hash: dff1ced317b40e54688799203ec3743b119bf71f2fc98109a5e79f12c6e10fba
 
 name:           odd-jobs
-version:        0.2.3
+version:        0.2.2
 synopsis:       A full-featured PostgreSQL-backed job queue (with an admin UI)
 description:    - Background jobs library for Haskell.
                 - Extracted from production code at [Vacation Labs](https://www.vacationlabs.com).
@@ -57,8 +55,8 @@ library
       OddJobs.Types
       OddJobs.ConfigBuilder
   other-modules:
-      UI
       OddJobs.Job.Query
+      UI
       Paths_odd_jobs
   hs-source-dirs:
       src
@@ -73,7 +71,7 @@ library
   ghc-options: -Wall -fno-warn-orphans -fno-warn-unused-imports -fno-warn-dodgy-exports -Werror=missing-fields -Werror=incomplete-patterns
   build-depends:
       aeson
-    , async ==2.2.4
+    , async
     , base >=4.7 && <5
     , bytestring
     , containers
@@ -91,7 +89,7 @@ library
     , mtl
     , optparse-applicative
     , postgresql-simple
-    , resource-pool >= 0.4.0.0 && < 0.5.0.0
+    , resource-pool
     , safe
     , servant
     , servant-lucid
@@ -117,8 +115,8 @@ executable devel
       OddJobs.ConfigBuilder
       OddJobs.Endpoints
       OddJobs.Job
-      OddJobs.Migrations
       OddJobs.Job.Query
+      OddJobs.Migrations
       OddJobs.Types
       OddJobs.Web
       UI
@@ -137,7 +135,7 @@ executable devel
   ghc-options: -Wall -fno-warn-orphans -fno-warn-unused-imports -fno-warn-dodgy-exports -Werror=missing-fields -Werror=incomplete-patterns -threaded -with-rtsopts=-N -main-is DevelMain
   build-depends:
       aeson
-    , async ==2.2.4
+    , async
     , base >=4.7 && <5
     , bytestring
     , containers
@@ -193,9 +191,10 @@ executable odd-jobs-cli-example
   ghc-options: -Wall -fno-warn-orphans -fno-warn-unused-imports -fno-warn-dodgy-exports -Werror=missing-fields -Werror=incomplete-patterns -threaded -with-rtsopts=-N -main-is OddJobsCliExample
   build-depends:
       aeson
-    , async ==2.2.4
+    , async
     , base >=4.7 && <5
     , bytestring
+    , containers
     , directory
     , either
     , fast-logger
@@ -239,6 +238,7 @@ test-suite jobrunner
       OddJobs.ConfigBuilder
       OddJobs.Endpoints
       OddJobs.Job
+      OddJobs.Job.Query
       OddJobs.Migrations
       OddJobs.Types
       OddJobs.Web
@@ -258,7 +258,7 @@ test-suite jobrunner
   ghc-options: -Wall -fno-warn-orphans -fno-warn-unused-imports -fno-warn-dodgy-exports -Werror=missing-fields -Werror=incomplete-patterns -threaded -with-rtsopts=-N -main-is Test
   build-depends:
       aeson
-    , async ==2.2.4
+    , async
     , base >=4.7 && <5
     , bytestring
     , containers
