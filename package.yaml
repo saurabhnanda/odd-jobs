@@ -38,6 +38,16 @@ extra-source-files:
 - assets/js/logo-slider.js
 - assets/odd-jobs-color-logo.png
 
+flags:
+  jobresult:
+    description: Controls whether the job is extended to have a result/return value along with workflow features
+    manual: true
+    default: false
+
+when:
+  - condition: flag(jobresult)
+    cpp-options: -D JOB_RESULT
+    
 
 ghc-options: 
   - -Wall 

@@ -69,7 +69,7 @@ data MyJob
 In this example, the core job-runner function is in the `IO` monad. In all probability, you application's code will be in a custom monad, and not IO. Pleae refer to TODO, on how to work with custom monads.
 
 \begin{code}
-myJobRunner :: Job -> IO ()
+myJobRunner :: Job -> IO (Maybe Aeson.Value)
 myJobRunner job = do
   throwParsePayload job >>= \case
     SendWelcomeEmail userId -> do
@@ -77,11 +77,14 @@ myJobRunner job = do
         "\nWe are purposely waiting 60 seconds before completing this job so that graceful shutdown can be demonstrated."
       delaySeconds (Seconds 60)
       putStrLn $ "SendWelcomeEmail to user: " <> show userId <> " complete (60 second wait is now over...)"
-    SendPasswordResetEmail _tkn ->
+      pure Nothing
+    SendPasswordResetEmail _tkn -> do
       putStrLn "This should call the function that actually sends the password-reset email"
+      pure Nothing
     SetupSampleData _userId -> do
       _ <- Prelude.error "User onboarding is incomplete"
       putStrLn "This should call the function that actually sets up sample data in a newly registered user's account"
+      pure Nothing
 \end{code}
 
 === 5. Write the main function using `OddJobs.Cli`
