@@ -54,7 +54,6 @@ module OddJobs.Job
   , jobMonitor
   , jobEventListener
   , jobPoller
-  , jobPollingSql
   , pollRunJob
   , JobRunner
   , HasJobRunner (..)
@@ -69,7 +68,7 @@ module OddJobs.Job
   , cancelJobIO
   , killJobIO
   , jobDbColumns
-  , jobPollingIO
+  -- jobPollingIO deliberately not exported - internal testing helper only
   , concatJobDbColumns
   , fetchAllJobTypes
   , fetchAllJobRunners
@@ -96,6 +95,7 @@ import Data.String
 import System.Posix.Process (getProcessID)
 import Network.HostName (getHostName)
 import UnliftIO.MVar
+import UnliftIO.Timeout (timeout)
 import Debug.Trace
 import Control.Monad.Logger as MLogger (LogLevel(..), LogStr, toLogStr)
 import UnliftIO.IORef
@@ -160,6 +160,7 @@ class (MonadUnliftIO m, MonadBaseControl IO m) => HasJobRunner m where
   onJobStart :: Job -> m ()
   getDefaultMaxAttempts :: m Int
   getRunnerEnv :: m RunnerEnv
+  getPollerWakeup :: m (MVar ())
   getConcurrencyControl :: m ConcurrencyControl
   log :: LogLevel -> LogEvent -> m ()
   getDefaultJobTimeout :: m Seconds
@@ -182,6 +183,7 @@ class (MonadUnliftIO m, MonadBaseControl IO m) => HasJobRunner m where
 data RunnerEnv = RunnerEnv
   { envConfig :: !Config
   , envJobThreadsRef :: !(IORef (Map JobId (Async ())))
+  , envPollerWakeup :: !(MVar ())
   }
 
 type RunnerM = ReaderT RunnerEnv IO
@@ -209,6 +211,8 @@ instance HasJobRunner RunnerM where
 
   getRunnerEnv = ask
 
+  getPollerWakeup = asks envPollerWakeup
+
   getConcurrencyControl = asks (cfgConcurrencyControl . envConfig)
 
   log logLevel logEvent = do
@@ -231,9 +235,11 @@ instance HasJobRunner RunnerM where
 startJobRunner :: Config -> IO ()
 startJobRunner jm = do
   r <- newIORef DM.empty
+  pollerWakeup <- newEmptyMVar  -- MVar for NOTIFY to wake up poller
   let monitorEnv = RunnerEnv
                    { envConfig = jm
                    , envJobThreadsRef = r
+                   , envPollerWakeup = pollerWakeup
                    }
   runReaderT jobMonitor monitorEnv
 
@@ -528,19 +534,7 @@ getConcurrencyControlFn = getConcurrencyControl >>= \case
   where
     pollIf cond = if cond then PollAny else DontPoll
 
-jobPollingIO :: Connection -> String -> TableName -> Seconds -> IO [Only JobId]
-jobPollingIO pollerDbConn processName tname lockTimeout = do
-  t <- getCurrentTime
-  PGS.query pollerDbConn jobPollingSql
-             ( tname
-             , Locked
-             , t
-             , processName
-             , tname
-             , t
-             , In [Queued, Retry]
-             , Locked
-             , addUTCTime (fromIntegral $ negate $ unSeconds lockTimeout) t)
+-- jobPollingIO moved to OddJobs.Job.Internal (internal testing helper)
 
 -- | Executes 'jobPollingSql' every 'cfgPollingInterval' seconds to pick up jobs
 -- for execution. Uses @UPDATE@ along with @SELECT...FOR UPDATE@ to efficiently
@@ -562,7 +556,16 @@ jobPoller = do
   log LevelInfo $ LogText $ toS $ "Starting the job monitor via DB polling with processName=" <> processName
   concurrencyControlFn <- getConcurrencyControlFn
   pool <- getDbPool
+  pollingInterval <- getPollingInterval
+  pollerWakeup <- getPollerWakeup
+
   forever $ do
+    -- Wait for either: timeout (normal polling interval) OR immediate wakeup from NOTIFY
+    wakeupReason <- liftIO $ timeout (unSeconds pollingInterval * 1000000) (takeMVar pollerWakeup)
+    case wakeupReason of
+      Nothing -> log LevelDebug $ LogText "Polling (scheduled interval)"
+      Just () -> log LevelDebug $ LogText "Polling (woken by NOTIFY)"
+
     concurencyPolicy <- withResource pool concurrencyControlFn
     case concurencyPolicy of
       DontPoll -> log LevelWarn $ LogText "NOT polling the job queue due to concurrency control"
@@ -582,34 +585,39 @@ pollRunJob processName mResCfg = do
     -- needs to remain open.
     pool <- getDbPool
     lockTimeout <- getDefaultJobTimeout
+    env <- getRunnerEnv
+    let mCustomOrdering = cfgJobOrdering $ envConfig env
+        ordering = fromMaybe defaultJobOrdering mCustomOrdering
     join $ withResource pool $ \pollerDbConn -> mask_ $ do
       log LevelDebug $ LogText $ toS $ "[" <> processName <> "] Polling the job queue.."
       t <- liftIO getCurrentTime
       r <- case mResCfg of
-        Nothing -> liftIO $
-           PGS.query pollerDbConn jobPollingSql
-           ( tname
-           , Locked
-           , t
-           , processName
-           , tname
-           , t
-           , In [Queued, Retry]
-           , Locked
-           , addUTCTime (fromIntegral $ negate $ unSeconds lockTimeout) t)
-        Just ResourceCfg{..} -> liftIO $
-           PGS.query pollerDbConn jobPollingWithResourceSql
-           ( tname
-           , Locked
-           , t
-           , processName
-           , tname
-           , t
-           , In [Queued, Retry]
-           , Locked
-           , addUTCTime (fromIntegral $ negate $ unSeconds lockTimeout) t
-           , resCfgCheckResourceFunction
-           )
+        Nothing -> liftIO $ do
+           let pollSql = jobPollingSql ordering
+           PGS.query pollerDbConn pollSql
+             ( tname
+             , Locked
+             , t
+             , processName
+             , tname
+             , t
+             , In [Queued, Retry]
+             , Locked
+             , addUTCTime (fromIntegral $ negate $ unSeconds lockTimeout) t)
+        Just ResourceCfg{..} -> liftIO $ do
+           let pollSql = jobPollingWithResourceSql ordering
+           PGS.query pollerDbConn pollSql
+             ( tname
+             , Locked
+             , t
+             , processName
+             , tname
+             , t
+             , In [Queued, Retry]
+             , Locked
+             , addUTCTime (fromIntegral $ negate $ unSeconds lockTimeout) t
+             , resCfgCheckResourceFunction
+             )
       case r of
         -- When we don't have any jobs to run, we can relax a bit...
         [] -> pure (Nothing <$ delayAction)
@@ -662,70 +670,30 @@ killJobPoller = do
     noDelayAction = pure ()
 
 -- | Uses PostgreSQL's LISTEN/NOTIFY to be immediately notified of newly created
--- jobs.
+-- jobs. When a notification is received, wakes up the job poller to check for jobs.
+--
+-- This ensures fair ordering - all jobs are selected via the ORDER BY clause in
+-- jobPollingSql, preventing queue jumping where new jobs bypass older waiting jobs.
 jobEventListener :: (HasJobRunner m)
                  => m ()
 jobEventListener = do
   log LevelInfo $ LogText "Starting the job monitor via LISTEN/NOTIFY..."
   pool <- getDbPool
   tname <- getTableName
-  jwName <- liftIO jobWorkerName
-  concurrencyControlFn <- getConcurrencyControlFn
-
-  let tryLockingJob jid mResCfg = withDbConnection $ \conn -> do
-        let q = "UPDATE ? SET status=?, locked_at=now(), locked_by=?, attempts=attempts+1 WHERE id=? AND status in ? RETURNING id"
-        result <- case mResCfg of
-          Nothing -> liftIO $ PGS.query conn q (tname, Locked, jwName, jid, In [Queued, Retry])
-          Just ResourceCfg{..} -> liftIO $ PGS.query conn qWithResources
-              (tname, Locked, jwName, jid, In [Queued, Retry], resCfgCheckResourceFunction)
-
-        case result of
-          [] -> do
-            log LevelDebug $ LogText $ toS $ "Job was locked by someone else before I could start. Skipping it. JobId=" <> show jid
-            pure Nothing
-          [Only (_ :: JobId)] -> pure $ Just jid
-          x -> error $ "WTF just happned? Was expecting a single row to be returned, received " ++ show x
+  pollerWakeup <- getPollerWakeup
 
   withResource pool $ \monitorDbConn -> do
     void $ liftIO $ PGS.execute monitorDbConn "LISTEN ?" (Only $ pgEventName tname)
     forever $ do
-      log LevelDebug $ LogText "[LISTEN/NOTIFY] Event loop"
+      log LevelDebug $ LogText "[LISTEN/NOTIFY] Event loop - waiting for notification"
       notif <- liftIO $ getNotification monitorDbConn
 
-      let pload = notificationData notif
-          runNotifWithFilter :: HasJobRunner m => Maybe ResourceCfg -> m ()
-          runNotifWithFilter mResCfg = do
-            log LevelDebug $ LogText $ toS $ "NOTIFY | " <> show pload
-            case eitherDecode $ toS pload of
-              Left e -> log LevelError $ LogText $ toS $  "Unable to decode notification payload received from Postgres. Payload=" <> show pload <> " Error=" <> show e
+      log LevelDebug $ LogText $ toS $ "NOTIFY received: " <> show (notificationData notif)
+      log LevelDebug $ LogText "Waking up job poller to check for jobs"
 
-              -- Checking if job needs to be fired immediately AND it is not already
-              -- taken by some othe thread, by the time it got to us
-              Right (v :: Value) -> case Aeson.parseMaybe parser v of
-                Nothing -> log LevelError $ LogText $ toS $ "Unable to extract id/run_at/locked_at from " <> show pload
-                Just (jid, runAt_, mLockedAt_) -> do
-                  t <- liftIO getCurrentTime
-                  if (runAt_ <= t) && isNothing mLockedAt_
-                    then do log LevelDebug $ LogText $ toS $ "Job needs needs to be run immediately. Attempting to fork in background. JobId=" <> show jid
-                            void $ async $ do
-                              -- Let's try to lock the job first... it is possible that it has already
-                              -- been picked up by the poller by the time we get here.
-                              tryLockingJob jid mResCfg >>= \case
-                                Nothing -> pure ()
-                                Just lockedJid -> runJob lockedJid
-                    else log LevelDebug $ LogText $ toS $ "Job is either for future, is already locked, or would violate concurrency constraints. Skipping. JobId=" <> show jid
-
-      concurrencyControlFn monitorDbConn >>= \case
-        DontPoll -> log LevelWarn $ LogText "Received job event, but ignoring it due to concurrency control"
-        PollAny -> runNotifWithFilter Nothing
-        PollWithResources resCfg -> runNotifWithFilter (Just resCfg)
-  where
-    parser :: Value -> Aeson.Parser (JobId, UTCTime, Maybe UTCTime)
-    parser = withObject "expecting an object to parse job.run_at and job.locked_at" $ \o -> do
-      runAt_ <- o .: "run_at"
-      mLockedAt_ <- o .:? "locked_at"
-      jid <- o .: "id"
-      pure (jid, runAt_, mLockedAt_)
+      -- Signal the poller to wake up immediately
+      -- tryPutMVar is used so multiple NOTIFYs collapse into a single wakeup
+      void $ liftIO $ tryPutMVar pollerWakeup ()
 
 
 jobDeletionPoller :: (HasJobRunner m) => (Connection -> IO Int64) -> m ()

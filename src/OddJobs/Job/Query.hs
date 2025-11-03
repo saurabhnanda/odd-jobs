@@ -3,7 +3,8 @@
 --   with CPP.
 --   see https://gitlab.haskell.org/ghc/ghc/-/issues/16520
 module OddJobs.Job.Query
-  ( jobPollingSql
+  ( defaultJobOrdering
+  , jobPollingSql
   , jobPollingWithResourceSql
   , killJobPollingSql
   , qWithResources
@@ -20,19 +21,28 @@ where
 import Database.PostgreSQL.Simple(Query)
 import Data.String
 
--- | Ref: 'jobPoller'
-jobPollingSql :: Query
-jobPollingSql =
+-- | Default job ordering: jobs with fewer attempts first (prevents failed jobs from blocking),
+-- then FIFO within same attempt count.
+--
+-- This is the historical default behavior. Use 'cfgJobOrdering' in 'Config' to override.
+defaultJobOrdering :: Query
+defaultJobOrdering = "attempts ASC, run_at ASC"
+
+-- | Create job polling SQL with custom ordering.
+-- The ordering parameter should be just the ORDER BY expression without "ORDER BY" keywords.
+jobPollingSql :: Query -> Query
+jobPollingSql ordering =
   "update ? set status = ?, locked_at = ?, locked_by = ?, attempts=attempts+1 \
   \ WHERE id in (select id from ? where (run_at<=? AND ((status in ?) OR (status = ? and locked_at<?))) \
-  \ ORDER BY attempts ASC, run_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING id"
+  \ ORDER BY " <> ordering <> " LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING id"
 
-jobPollingWithResourceSql :: Query
-jobPollingWithResourceSql =
+-- | Create job polling SQL with resources and custom ordering.
+jobPollingWithResourceSql :: Query -> Query
+jobPollingWithResourceSql ordering =
   " UPDATE ? SET status = ?, locked_at = ?, locked_by = ?, attempts = attempts + 1 \
   \ WHERE id in (select id from ? where (run_at<=? AND ((status in ?) OR (status = ? and locked_at<?))) \
   \ AND ?(id) \
-  \ ORDER BY attempts ASC, run_at ASC LIMIT 1) \
+  \ ORDER BY " <> ordering <> " LIMIT 1) \
   \ RETURNING id"
 
 -- | Ref: 'killJobPoller'
@@ -61,7 +71,6 @@ registerResourceUsage = "INSERT INTO ? (job_id, resource_id, usage) VALUES (?, ?
 -- queries, eg:
 --
 -- @'query_' conn $ "SELECT " <> concatJobDbColumns <> "FROM jobs"@
-
 concatJobDbColumns :: (IsString s, Semigroup s) => s
 concatJobDbColumns = concatJobDbColumns_ jobDbColumns ""
   where

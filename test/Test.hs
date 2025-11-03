@@ -9,6 +9,7 @@ import Control.Monad.Trans.Control
 import Test.Tasty as Tasty
 import qualified OddJobs.Migrations as Migrations
 import qualified OddJobs.Job as Job
+import qualified OddJobs.Job.Internal as JobInternal
 import Database.PostgreSQL.Simple as PGS
 import Data.Functor (void)
 import Data.Pool as Pool
@@ -422,7 +423,7 @@ testPushFailedJobEndQueue jobPool = testCase "testPushFailedJobEndQueue" $ do
       job1 <- Job.createJob conn tname (PayloadAlwaysFail 0)
       job2 <- Job.createJob conn tname (PayloadAlwaysFail 0)
       _ <- Job.saveJobIO conn tname (job1 {jobAttempts = 1})
-      [Only resId] <- Job.jobPollingIO conn "testPushFailedJobEndQueue" tname 5
+      [Only resId] <- JobInternal.jobPollingIO conn "testPushFailedJobEndQueue" tname 5
       assertEqual
         "Expecting the current job to be 2 since job 1 has been modified"
         (jobId job2) resId

@@ -410,6 +410,26 @@ data Config = Config
     -- in order to fail and be retried. The default implementation is an exponential
     -- backoff of @'Seconds' $ 2 ^ 'jobAttempts'@.
   , cfgDefaultRetryBackoff :: Int -> IO Seconds
+
+    -- | Custom ORDER BY clause for job selection. If 'Nothing', uses 'OddJobs.Job.Query.defaultJobOrdering'.
+    -- If 'Just query', completely replaces the ORDER BY clause.
+    --
+    -- __Important:__ This should be just the ORDER BY expression without the "ORDER BY" keywords.
+    --
+    -- __Examples:__
+    --
+    -- @
+    -- -- Default behavior (no priority)
+    -- cfgJobOrdering = Nothing  -- Uses 'OddJobs.Job.Query.defaultJobOrdering'
+    --
+    -- -- Priority column based
+    -- cfgJobOrdering = Just "priority DESC, attempts ASC, run_at ASC"
+    --
+    -- -- Job type based (requires PostgreSQL function)
+    -- cfgJobOrdering = Just "job_priority(payload) DESC, attempts ASC, run_at ASC"
+    -- @
+    --
+  , cfgJobOrdering :: Maybe Query
   }
 
 
