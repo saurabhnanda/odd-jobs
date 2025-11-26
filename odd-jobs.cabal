@@ -55,8 +55,8 @@ library
       OddJobs.Types
       OddJobs.ConfigBuilder
   other-modules:
-      OddJobs.Job.Query
       OddJobs.Job.Internal
+      OddJobs.Job.Query
       UI
       Paths_odd_jobs
   hs-source-dirs:
@@ -116,6 +116,7 @@ executable devel
       OddJobs.ConfigBuilder
       OddJobs.Endpoints
       OddJobs.Job
+      OddJobs.Job.Internal
       OddJobs.Job.Query
       OddJobs.Migrations
       OddJobs.Types
@@ -239,8 +240,8 @@ test-suite jobrunner
       OddJobs.ConfigBuilder
       OddJobs.Endpoints
       OddJobs.Job
-      OddJobs.Job.Query
       OddJobs.Job.Internal
+      OddJobs.Job.Query
       OddJobs.Migrations
       OddJobs.Types
       OddJobs.Web
