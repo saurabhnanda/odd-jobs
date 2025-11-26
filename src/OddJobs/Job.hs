@@ -84,6 +84,7 @@ module OddJobs.Job
 where
 
 import OddJobs.Types
+import OddJobs.ConfigBuilder (jobTypeFilterToSql)
 import qualified Data.Pool as Pool
 import Data.Pool(Pool)
 import Data.Text as T
@@ -588,12 +589,14 @@ pollRunJob processName mResCfg = do
     env <- getRunnerEnv
     let mCustomOrdering = cfgJobOrdering $ envConfig env
         ordering = fromMaybe defaultJobOrdering mCustomOrdering
+        -- Extract job type filter from config (values baked into SQL, no extra params)
+        mFilterSql = jobTypeFilterToSql <$> cfgJobTypeFilter (envConfig env)
     join $ withResource pool $ \pollerDbConn -> mask_ $ do
       log LevelDebug $ LogText $ toS $ "[" <> processName <> "] Polling the job queue.."
       t <- liftIO getCurrentTime
       r <- case mResCfg of
         Nothing -> liftIO $ do
-           let pollSql = jobPollingSql ordering
+           let pollSql = jobPollingSql mFilterSql ordering
            PGS.query pollerDbConn pollSql
              ( tname
              , Locked
@@ -605,7 +608,7 @@ pollRunJob processName mResCfg = do
              , Locked
              , addUTCTime (fromIntegral $ negate $ unSeconds lockTimeout) t)
         Just ResourceCfg{..} -> liftIO $ do
-           let pollSql = jobPollingWithResourceSql ordering
+           let pollSql = jobPollingWithResourceSql mFilterSql ordering
            PGS.query pollerDbConn pollSql
              ( tname
              , Locked

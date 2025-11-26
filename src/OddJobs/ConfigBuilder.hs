@@ -24,7 +24,7 @@ import qualified Data.ByteString as BS
 import UnliftIO (MonadUnliftIO, withRunInIO, bracket, liftIO)
 import qualified System.Log.FastLogger as FLogger
 import Data.Int (Int64)
-import Database.PostgreSQL.Simple.Types as PGS (Identifier(..))
+import Database.PostgreSQL.Simple.Types as PGS (Identifier(..), Query(..))
 
 # if MIN_VERSION_aeson(2, 0, 0)
 import qualified Data.Aeson.KeyMap as HM
@@ -84,6 +84,7 @@ mkConfig logger tname dbpool ccControl jrunner configOverridesFn =
             , cfgDelayedJobDeletion = Nothing
             , cfgDefaultRetryBackoff = \attempts -> pure $ Seconds $ 2 ^ attempts
             , cfgJobOrdering = Nothing  -- Use defaultJobOrdering
+            , cfgJobTypeFilter = Nothing  -- No filtering by default
             }
   in cfg
 
@@ -229,6 +230,26 @@ defaultPayloadToHtml v = case v of
 
 defaultJobTypeSql :: PGS.Query
 defaultJobTypeSql = "payload->>'tag'"
+
+-- | Convert a 'JobTypeFilter' to a SQL WHERE clause fragment.
+-- Job type values are baked directly into the SQL string.
+-- Uses 'defaultJobTypeSql' (@payload->>'tag'@) for the Include/Exclude variants.
+jobTypeFilterToSql :: JobTypeFilter -> PGS.Query
+jobTypeFilterToSql = \case
+  IncludeJobTypes types ->
+    defaultJobTypeSql <> " IN (" <> quotedList types <> ")"
+  ExcludeJobTypes types ->
+    defaultJobTypeSql <> " NOT IN (" <> quotedList types <> ")"
+  RawJobFilter q -> q
+  where
+    -- Build comma-separated list of quoted strings: 'val1','val2','val3'
+    quotedList :: [Text] -> PGS.Query
+    quotedList xs = mconcat $ DL.intersperse "," $ DL.map quoteText xs
+
+    -- Quote a text value for SQL, escaping single quotes by doubling them
+    -- Query is a newtype over ByteString, so we encode via UTF-8
+    quoteText :: Text -> PGS.Query
+    quoteText t = PGS.Query $ "'" <> toS (T.replace "'" "''" t) <> "'"
 
 defaultConstantJobTypes :: forall a . (Generic a, ConNames (Rep a))
                          => Proxy a

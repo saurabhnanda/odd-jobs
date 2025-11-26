@@ -13,17 +13,18 @@ import Data.Time.Clock
 import OddJobs.Types
 import OddJobs.Job.Query (jobPollingSql, defaultJobOrdering)
 
--- | Low-level helper for polling a single job. Uses default ordering.
+-- | Low-level helper for polling a single job. Uses default ordering, no filtering.
 --
 -- This function was created for testing purposes to allow tests to directly
 -- invoke the polling SQL without starting the full job monitor.
 --
 -- __Not for production use.__ Use 'OddJobs.Job.Config' with 'cfgJobOrdering'
--- for custom job ordering in production.
+-- and 'cfgJobTypeFilter' for custom job ordering/filtering in production.
 jobPollingIO :: Connection -> String -> TableName -> Seconds -> IO [Only JobId]
 jobPollingIO pollerDbConn processName tname lockTimeout = do
   t <- getCurrentTime
-  PGS.query pollerDbConn (jobPollingSql defaultJobOrdering)
+  -- Use Nothing for filter (no filtering) - default behavior
+  PGS.query pollerDbConn (jobPollingSql Nothing defaultJobOrdering)
              ( tname
              , Locked
              , t

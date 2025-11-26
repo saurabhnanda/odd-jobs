@@ -119,6 +119,19 @@ data JobErrHandler = forall a e . (Exception e) => JobErrHandler (e -> Job -> Fa
 
 data RescheduleError = RescheduleJobNotFound | RescheduleJobLocked deriving (Eq, Show)
 
+-- | Filter which jobs a runner handles. Used to partition jobs across multiple
+-- runners polling the same table.
+data JobTypeFilter
+  -- | Only handle jobs whose type (extracted via @payload->>'tag'@) is in this list
+  = IncludeJobTypes ![Text]
+  -- | Handle all jobs EXCEPT those whose type is in this list
+  | ExcludeJobTypes ![Text]
+  -- | Raw SQL WHERE clause fragment. The query fragment should be a boolean
+  -- expression that can be ANDed into the job polling query. Values should be
+  -- baked directly into the SQL (this is an escape hatch for advanced users).
+  | RawJobFilter !PGS.Query
+  deriving (Show)
+
 type FunctionName = PGS.Identifier
 
 data ResourceCfg = ResourceCfg
@@ -430,6 +443,24 @@ data Config = Config
     -- @
     --
   , cfgJobOrdering :: Maybe Query
+
+    -- | Filter which jobs this runner handles. This allows multiple runners to
+    -- poll the same jobs table while each handling different job types.
+    --
+    -- __Examples:__
+    --
+    -- @
+    -- -- Only handle specific job types
+    -- cfgJobTypeFilter = Just $ IncludeJobTypes ["SendEmail", "ProcessPayment"]
+    --
+    -- -- Handle all jobs except certain types
+    -- cfgJobTypeFilter = Just $ ExcludeJobTypes ["SlowReportJob", "BatchExport"]
+    --
+    -- -- Custom SQL filter (escape hatch)
+    -- cfgJobTypeFilter = Just $ RawJobFilter "payload->'meta'->>'priority' = ?" [toField "high"]
+    -- @
+    --
+  , cfgJobTypeFilter :: !(Maybe JobTypeFilter)
   }
 
 

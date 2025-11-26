@@ -28,20 +28,28 @@ import Data.String
 defaultJobOrdering :: Query
 defaultJobOrdering = "attempts ASC, run_at ASC"
 
--- | Create job polling SQL with custom ordering.
+-- | Create job polling SQL with custom ordering and optional job type filter.
 -- The ordering parameter should be just the ORDER BY expression without "ORDER BY" keywords.
-jobPollingSql :: Query -> Query
-jobPollingSql ordering =
+-- The filter parameter is an optional WHERE clause fragment to filter jobs by type.
+jobPollingSql :: Maybe Query  -- ^ Optional filter clause (e.g., "payload->>'tag' IN (?, ?)")
+              -> Query        -- ^ ORDER BY expression
+              -> Query
+jobPollingSql mFilter ordering =
   "update ? set status = ?, locked_at = ?, locked_by = ?, attempts=attempts+1 \
-  \ WHERE id in (select id from ? where (run_at<=? AND ((status in ?) OR (status = ? and locked_at<?))) \
-  \ ORDER BY " <> ordering <> " LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING id"
+  \ WHERE id in (select id from ? where (run_at<=? AND ((status in ?) OR (status = ? and locked_at<?)))"
+  <> maybe "" (\f -> " AND (" <> f <> ")") mFilter
+  <> " ORDER BY " <> ordering <> " LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING id"
 
 -- | Create job polling SQL with resources and custom ordering.
-jobPollingWithResourceSql :: Query -> Query
-jobPollingWithResourceSql ordering =
+-- The filter parameter is an optional WHERE clause fragment to filter jobs by type.
+jobPollingWithResourceSql :: Maybe Query  -- ^ Optional filter clause
+                          -> Query        -- ^ ORDER BY expression
+                          -> Query
+jobPollingWithResourceSql mFilter ordering =
   " UPDATE ? SET status = ?, locked_at = ?, locked_by = ?, attempts = attempts + 1 \
-  \ WHERE id in (select id from ? where (run_at<=? AND ((status in ?) OR (status = ? and locked_at<?))) \
-  \ AND ?(id) \
+  \ WHERE id in (select id from ? where (run_at<=? AND ((status in ?) OR (status = ? and locked_at<?)))"
+  <> maybe "" (\f -> " AND (" <> f <> ")") mFilter
+  <> " AND ?(id) \
   \ ORDER BY " <> ordering <> " LIMIT 1) \
   \ RETURNING id"
 
