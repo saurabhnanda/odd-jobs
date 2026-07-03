@@ -115,7 +115,7 @@ import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.Types as Aeson (Parser, parseMaybe)
 import Data.String.Conv (StringConv(..), toS)
 import Data.Functor ((<&>), void)
-import Control.Monad (forever, forM_, join)
+import Control.Monad (forever, forM_, join, when)
 import Data.Maybe (isNothing, maybe, fromMaybe, listToMaybe, mapMaybe, maybeToList)
 import Data.Either (either)
 import Control.Monad.Reader
@@ -561,17 +561,27 @@ jobPoller = do
   pollerWakeup <- getPollerWakeup
 
   forever $ do
-    -- Wait for either: timeout (normal polling interval) OR immediate wakeup from NOTIFY
-    wakeupReason <- liftIO $ timeout (unSeconds pollingInterval * 1000000) (takeMVar pollerWakeup)
-    case wakeupReason of
-      Nothing -> log LevelDebug $ LogText "Polling (scheduled interval)"
-      Just () -> log LevelDebug $ LogText "Polling (woken by NOTIFY)"
-
+    -- Poll first. 'pollRunJob' picks (and forks) at most one ready job, honouring
+    -- 'jobPollingSql's ORDER BY, and returns 'Just' if it picked one, 'Nothing' if
+    -- the queue had nothing ready (or we're at the concurrency limit).
     concurencyPolicy <- withResource pool concurrencyControlFn
-    case concurencyPolicy of
-      DontPoll -> log LevelWarn $ LogText "NOT polling the job queue due to concurrency control"
-      PollAny -> void $ pollRunJob processName Nothing
-      PollWithResources resCfg -> void $ pollRunJob processName (Just resCfg)
+    picked <- case concurencyPolicy of
+      DontPoll -> do
+        log LevelWarn $ LogText "NOT polling the job queue due to concurrency control"
+        pure Nothing
+      PollAny -> pollRunJob processName Nothing
+      PollWithResources resCfg -> pollRunJob processName (Just resCfg)
+
+    -- Only sleep when there was nothing to do. A successful pick loops back and
+    -- re-polls immediately, so a backlog of ready jobs drains back-to-back instead
+    -- of one-per-pollingInterval. A NOTIFY wakes the poller before the interval
+    -- elapses; because selection still goes through 'jobPollingSql', waking on
+    -- NOTIFY does not let new jobs jump ahead of older ready ones.
+    when (isNothing picked) $ do
+      wakeupReason <- liftIO $ timeout (unSeconds pollingInterval * 1000000) (takeMVar pollerWakeup)
+      case wakeupReason of
+        Nothing -> log LevelDebug $ LogText "Polling (scheduled interval)"
+        Just () -> log LevelDebug $ LogText "Polling (woken by NOTIFY)"
 
 -- | Polls a job and runs it, or executes a delay action if no job was found
 --
@@ -591,7 +601,7 @@ pollRunJob processName mResCfg = do
         ordering = fromMaybe defaultJobOrdering mCustomOrdering
         -- Extract job type filter from config (values baked into SQL, no extra params)
         mFilterSql = jobTypeFilterToSql <$> cfgJobTypeFilter (envConfig env)
-    join $ withResource pool $ \pollerDbConn -> mask_ $ do
+    withResource pool $ \pollerDbConn -> mask_ $ do
       log LevelDebug $ LogText $ toS $ "[" <> processName <> "] Polling the job queue.."
       t <- liftIO getCurrentTime
       r <- case mResCfg of
@@ -622,18 +632,14 @@ pollRunJob processName mResCfg = do
              , resCfgCheckResourceFunction
              )
       case r of
-        -- When we don't have any jobs to run, we can relax a bit...
-        [] -> pure (Nothing <$ delayAction)
+        -- Nothing ready: report back to 'jobPoller', which decides whether to wait.
+        [] -> pure Nothing
 
-        -- When we find a job to run, fork and try to find the next job without any delay...
-        [Only (jid :: JobId)] -> do
-          x <- async $ runJob jid
-          pure $ Just x <$ noDelayAction
+        -- Found one: fork it and report the pick, so 'jobPoller' can re-poll
+        -- immediately (no delay) and keep draining a ready backlog.
+        [Only (jid :: JobId)] -> Just <$> async (runJob jid)
 
         x -> error $ "WTF just happened? I was supposed to get only a single row, but got: " ++ show x
-  where
-    delayAction = delaySeconds =<< getPollingInterval
-    noDelayAction = pure ()
 
 -- | Executes 'killJobPollingSql' every 'cfgPollingInterval' seconds to pick up jobs
 -- that are cancelled and need to be killed. Uses @UPDATE@ along with @SELECT...

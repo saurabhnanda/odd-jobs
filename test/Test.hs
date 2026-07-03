@@ -86,6 +86,7 @@ main = do
 tests appPool jobPool = testGroup "All tests"
   [
     testGroup "simple tests" [ testJobCreation appPool jobPool
+                             , testBacklogDrainRate appPool jobPool
                              , testJobScheduling appPool jobPool
                              , testJobFailure appPool jobPool
                              , testEnsureShutdown appPool jobPool
@@ -266,6 +267,7 @@ runSingleJobFromQueue :: Job.Config -> IO (Maybe (Async ()))
 runSingleJobFromQueue config' = do
   r <- liftIO $ newIORef mempty
   waitTillJobStart <- newEmptyMVar
+  pollerWakeup <- newEmptyMVar
   let config = config' {
         Job.cfgPollingInterval = 0
         , Job.cfgJobRunner = \job -> do
@@ -275,6 +277,7 @@ runSingleJobFromQueue config' = do
   let monitorEnv = Job.RunnerEnv
                    { Job.envConfig = config
                    , Job.envJobThreadsRef = r
+                   , Job.envPollerWakeup = pollerWakeup
                    }
   result <- runReaderT (Job.pollRunJob "runSingleJobFromQueue" $ readResourceConfig config) monitorEnv
   forM_ result $ const $ readMVar waitTillJobStart
@@ -340,6 +343,35 @@ testJobCreation appPool jobPool = testCase "job creation" $ do
       Job{jobId} <- Job.createJob conn tname (PayloadSucceed 0)
       delaySeconds $ Seconds 6
       assertJobIdStatus conn tname logRef "Expecting job to be successful by now" Job.Success jobId
+
+-- | Regression test for the NOTIFY-refactor poller (commit 964a527): a backlog of
+-- already-ready jobs must drain back-to-back, NOT one job per cfgPollingInterval.
+--
+-- We create N ready jobs BEFORE starting the monitor, so their NOTIFYs are emitted
+-- with no listener attached and are lost; the poller can only discover them by
+-- polling. We then set a deliberately LONG cfgPollingInterval and wait a much
+-- SHORTER window. A healthy poller drains a ready backlog back-to-back -- the
+-- interval only governs the idle wait once the queue is empty -- so all N finish
+-- within the window. The buggy "wait a full interval before every pick" loop can
+-- manage at most ~window/interval picks (zero here), so it fails. Keeping
+-- interval >> window >> startup makes this robust even on a loaded CI box.
+testBacklogDrainRate appPool jobPool =
+  testCase "ready backlog drains without per-job polling delay" $
+    withRandomTable jobPool $ \tname -> do
+      let n = 5 :: Int
+          interval = Seconds 30   -- long: a buggy poller would need ~n*30s to drain
+          window   = Seconds 20   -- short vs interval, but ample headroom for a healthy poller
+      -- Create N ready jobs while no monitor (hence no LISTEN) is running.
+      Pool.withResource appPool $ \conn ->
+        forM_ [1..n] $ \_ -> void $ Job.createJob conn tname (PayloadSucceed 0)
+      withNamedJobMonitor tname jobPool (\c -> c{Job.cfgPollingInterval = interval}) $ \logRef -> do
+        delaySeconds window
+        logs <- readIORef logRef
+        let succeeded = DL.nub [ Job.jobId j | Job.LogJobSuccess j _ <- logs ]
+        assertEqual
+          ("all " <> show n <> " ready jobs should drain within " <> show (unSeconds window)
+            <> "s despite a " <> show (unSeconds interval) <> "s poll interval; succeeded=" <> show succeeded)
+          n (DL.length succeeded)
 
 testEnsureShutdown appPool jobPool = testCase "ensure shutdown" $ do
   withRandomTable jobPool $ \tname -> do
